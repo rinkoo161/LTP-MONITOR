@@ -1,0 +1,11 @@
+fastapi>=0.110
+uvicorn>=0.29
+requests>=2.31
+curl_cffi>=0.7
+websocket-client>=1.9   # Kotak Neo HSM market-data websocket
+dhanhq>=2.2.0           # official Dhan Live Market Feed websocket (dhan_ws.py) —
+                        # pulls in pandas, pyOpenSSL, websockets (asyncio) as
+                        # transitive deps; the REST path (broker_adapter.py)
+                        # does NOT need this package, only dhan_ws.py does
+yfinance>=0.2.40        # News/Macro Agent fallback when Alpha Vantage / Twelve Data fail
+# AI runs locally via Ollama (install separately from https://ollama.com) — no Python package needed
