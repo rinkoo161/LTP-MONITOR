@@ -23,8 +23,40 @@ problem justifies. `reset()` exists so tests can clear it by name
 instead of poking globals — the leak that made
 test_authoritative_prev_close fail when the first cooldown was added.
 """
+import re
 import threading
 import time
+
+# 2026-07-31 — classification used to be `"401" in text` / `"429" in text`,
+# bare substring tests against the whole error string. A NIFTY spot of
+# 24015.75 contains "401"; a security id of 13401 contains "401"; a
+# quantity of 4290 contains "429". Any ordinary timeout or 500 whose
+# message happened to quote such a number was therefore filed as an
+# EXPIRED TOKEN, which takes a 30-minute backoff and drives the
+# `auth_expired` panel state — telling the operator to replace a
+# perfectly good token while every index panel goes blank.
+#
+# Word boundaries fix exactly that: \b401\b does not match inside 13401
+# or 24015. The named error codes are added because Dhan sends them
+# structurally (DH-901 = invalid auth) and they are unambiguous.
+_AUTH_RE = re.compile(
+    r"\b401\b|unauthorized|token (?:has )?expired|invalid_authentication"
+    r"|\bDH-901\b", re.I)
+_429_RE = re.compile(r"\b429\b|too many requests", re.I)
+
+
+def _status_of(exc):
+    """HTTP status carried by a requests exception, if there is one.
+
+    A real status beats any amount of string sniffing, so when the
+    caller hands us an exception that still has its response attached
+    we use it and ignore the text entirely.
+    """
+    resp = getattr(exc, "response", None)
+    if resp is None:
+        return None
+    status = getattr(resp, "status_code", None)
+    return status if isinstance(status, int) else None
 
 _lock = threading.Lock()
 _until = {}      # resource -> epoch when the cooldown expires
@@ -64,9 +96,13 @@ def note_failure(exc_or_msg, resource="quote", on_429=None, otherwise=None):
     one's shorter backoff undo the first one's longer pause.
     """
     text = str(exc_or_msg)
-    is_429 = "429" in text or "Too Many Requests" in text
-    is_auth = ("401" in text or "Unauthorized" in text
-               or "token has expired" in text or "token expired" in text)
+    status = _status_of(exc_or_msg)
+    if status is not None:
+        # Structured signal available — trust it over the message text.
+        is_auth, is_429 = status == 401, status == 429
+    else:
+        is_auth = bool(_AUTH_RE.search(text))
+        is_429 = bool(_429_RE.search(text))
     if is_auth:
         secs = BACKOFF_AUTH
     elif is_429:

@@ -4,6 +4,52 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v58.70 — "token expired" could be caused by a price (2026-07-31)
+
+`note_failure` classified failures with `"401" in text` and `"429" in
+text` — bare substring tests against the whole error string.
+
+    NIFTY spot 24015.75   contains "401"
+    securityId 13401      contains "401"
+    quantity 4290         contains "429"
+
+So an ordinary timeout or 500 whose message happened to quote such a
+number was filed as an EXPIRED TOKEN. That is not cosmetic: an AUTH
+verdict takes BACKOFF_AUTH (1800s) instead of 30s, and drives
+`is_auth_failure()`, which `bus_analysis_or_warming` turns into
+`warming_up: False, auth_expired: True`. One unlucky timeout therefore
+blanks every index panel for half an hour and tells the operator to
+replace a token that was never the problem.
+
+Now `\b401\b` (which does not match inside 13401 or 24015), the named
+codes Dhan actually sends (`DH-901`, `Invalid_Authentication`), and —
+where the caller passes a requests exception that still has its
+response attached — the REAL HTTP status, which beats any amount of
+string sniffing. Same fix applied to the 429 path, which had the
+identical flaw.
+
+### How it was found, which is the part worth keeping
+
+The operator said the Dhan token was still valid; the app said expired.
+Rather than believe either, both were tested directly: `GET /v2/profile`
+returned 401 DH-901, and the stored token turned out to be a 15-char
+placeholder, not a JWT — the app was right THAT time. But the
+classifier would have said "expired" for a timeout quoting the wrong
+price too, which is exactly why its verdict could not be used as
+evidence either way. **A diagnostic that cannot be wrong in an
+observable way is not a diagnostic.**
+
+(The fresh token pasted afterwards authenticates: HTTP 200,
+dataPlan Active, valid to 01/08/2026 00:49.)
+
+### Unrelated failure noticed while regression-testing
+
+`test_authoritative_prev_close.py` passed in the full-suite run earlier
+today and fails now, WITH THE CHANGE REVERTED TOO — so it is not this.
+The variable that moved in between is the credential state: it passed
+while the stored token was invalid. Same live-config coupling already
+seen with `fee_per_lot` 30 vs the hardcoded 40. Not yet diagnosed.
+
 ## v58.69 — the futures archive never ran either, and S10's first real numbers (2026-07-31)
 
 Asked to test S10 against TradingView. It cannot be, and saying so
