@@ -3049,7 +3049,15 @@ class RiskAgent(Agent):
              if k.startswith("oi_composite_")}
         if not p.get("enabled", True):
             return
-        for sym in self.symbols:
+        # 2026-07-31 — was `self.symbols`, which no agent has ever defined:
+        # the Agent base sets only bus/ctx/stop_evt/last_run/status/summary.
+        # Every cycle since v58.65 raised AttributeError here, so S10 -- the
+        # strategy shipped observe-only precisely so it would "show its
+        # working on real chains" -- observed nothing at all. Its 72 tests
+        # passed throughout because they call oi_composite.detect_setup()
+        # directly and never reach this call site. Same bus key the other
+        # agents read (Orchestrator.start sets it).
+        for sym in self.bus.get("symbols", ["NIFTY"]):
             analysis = self.bus.get(f"analysis:{sym}")
             if not analysis:
                 continue

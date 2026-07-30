@@ -4,6 +4,64 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v58.68 — S10 never ran at all, and 100 passing checks said otherwise (2026-07-31)
+
+Found by starting the app and reading its log, not by running the suite:
+
+    [risk] S10 observe cycle FAILED (AttributeError: 'RiskAgent'
+           object has no attribute 'symbols')
+
+Seven times in forty seconds -- once per cycle, since v58.65.
+
+`_oi_composite_observe` iterated `self.symbols`. **No agent has ever
+defined that attribute.** The `Agent` base sets bus, ctx, stop_evt,
+last_run, status and summary, and every other agent reads the symbol
+list as `self.bus.get("symbols", ["NIFTY"])`. So Strategy 10 -- shipped
+deliberately observe-only so that "the first thing it must do is show
+its working on real chains" -- raised on its first statement, every
+cycle, for three versions. It has observed nothing. Ever.
+
+Fixed to read the same bus key the Orchestrator writes.
+
+### Why the tests were no defence
+
+`test_oi_composite.py` has 100 checks and all of them passed
+throughout, because every one calls `oi_composite.detect_setup()
+DIRECTLY. A module exercised only through its own front door says
+nothing about whether anything actually calls it.
+
+This is the v58.66 lesson again, one level up. There the tests fed
+`"long"` by hand and so could not see that the producer published
+`long_buildup`; here they construct the analysis dict by hand and so
+cannot see that the caller never runs. **Testing a function is not
+testing the feature.** The call site is part of the feature.
+
+`test_s10_agent_wiring.py` (14 checks) drives
+`RiskAgent._oi_composite_observe` against a real `Bus` and asserts the
+observation reaches it -- for TWO symbols, since a hardcoded NIFTY
+would satisfy a one-symbol test. Verified by reverting the fix: 9 of
+its 14 checks fail on the old line. A regression test that has never
+been seen to fail is a guess.
+
+### The bare except that hid it, again
+
+`cycle()` wraps the call in `try/except Exception` and downgrades any
+failure to a log line. That is the third time this pattern appears in
+the ROADMAP (S9's `mcs` NameError in v58.47, the archiving call in
+v58.66, this). It did not cause the bug, but it is why a hard crash in
+a trading strategy looked like a quiet line in a busy log for three
+versions. The new test asserts on the ABSENCE of that line rather than
+on the method returning.
+
+### Not yet proven on real data
+
+The crash is gone and the wiring is proven, but S10 still observed
+nothing on restart: the market was closed AND the Dhan token has
+expired, so no `analysis:{sym}` reaches the bus and the loop skips
+every symbol. What to look for in the next live session is a
+`[risk] NIFTY: S10 ...` line -- which has never once appeared in
+production.
+
 ## v58.67 — zero setups was a bug, not a result (2026-07-30)
 
     2026-07-30  NIFTY  mode=chain_only  snapshots=595   setups=0
