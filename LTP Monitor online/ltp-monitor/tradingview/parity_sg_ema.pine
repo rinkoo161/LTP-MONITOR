@@ -1,0 +1,45 @@
+//@version=5
+indicator("LTP Monitor Webhook Test", overlay=true)
+
+secretKey = input.string("", "Webhook Secret")
+symOverride = input.string("", "Symbol Override (blank = chart ticker)")
+lots = input.int(1, "Lots", minval=1)
+fastLen = input.int(5, "Fast EMA", minval=1)
+slowLen = input.int(13, "Slow EMA", minval=1)
+fireTest = input.bool(false, "Fire test alert on every bar")
+
+sym = symOverride == "" ? syminfo.ticker : symOverride
+
+fastEma = ta.ema(close, fastLen)
+slowEma = ta.ema(close, slowLen)
+
+f_json(_action, _price) =>
+    '{"secret":"' + secretKey +
+      '","symbol":"' + sym +
+      '","action":"' + _action +
+      '","price":' + str.tostring(_price) +
+      ',"lots":' + str.tostring(lots) +
+      ',"ts":' + str.tostring(timenow) +
+      ',"tf":"' + timeframe.period +
+      '","src":"tv_test"}'
+
+goLong = ta.crossover(fastEma, slowEma)
+goShort = ta.crossunder(fastEma, slowEma)
+
+if goLong
+    alert(f_json("BUY_CE", close), alert.freq_once_per_bar_close)
+
+if goShort
+    alert(f_json("BUY_PE", close), alert.freq_once_per_bar_close)
+
+if fireTest
+    alert(f_json("TEST", close), alert.freq_once_per_bar_close)
+
+plot(fastEma, "Fast EMA", color.new(color.aqua, 0))
+plot(slowEma, "Slow EMA", color.new(color.orange, 0))
+plotshape(goLong, "Long", shape.triangleup, location.belowbar, color.new(color.green, 0), size=size.small)
+plotshape(goShort, "Short", shape.triangledown, location.abovebar, color.new(color.red, 0), size=size.small)
+
+var table dbg = table.new(position.top_right, 1, 1, border_width=1)
+if barstate.islast
+    table.cell(dbg, 0, 0, "payload len: " + str.tostring(str.length(f_json("TEST", close))), text_color=color.white, bgcolor=color.new(color.gray, 70), text_size=size.small)

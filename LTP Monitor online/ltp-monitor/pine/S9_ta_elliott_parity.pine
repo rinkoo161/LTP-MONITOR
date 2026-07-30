@@ -1,0 +1,250 @@
+// Strategy 9 (TA with Elliott) -- PARITY ORACLE, not a trading script.
+//
+// Same contract as the S8 oracle: every server-side S9 signal must have
+// a matching triangle here on the SAME BAR. No gates are applied -- no
+// daily cap, no auto-deploy, no risk-reward floor.
+//
+// This one is arguably MORE useful than S8's, because S9 has never
+// produced a signal. Plotting each of the seven confluence components
+// separately shows at a glance which ones are dead, on a chart, without
+// waiting for a calibration export. As of the 2026-07-29 session, five
+// of seven never fired across 211 real observations.
+//
+// TIMEFRAME NOTE -- this is where parity is easiest to lose
+// -------------------------------------------------------
+// The server computes the Bollinger phase, MACD, RSI, ADX and pivots on
+// FIVE-MINUTE candles, GMMA on ONE-MINUTE candles, and the Tide on 5m.
+// Run this script on a 5m chart. The GMMA plot then uses a 1m
+// request.security() so it matches the server rather than silently
+// computing a 5m ribbon that agrees with nothing.
+//
+// GMMA on 5m is not a style choice: max(GMMA_LONG) + 5 = 65 bars, which
+// on 5m is 325 minutes of a 375-minute session, so the ribbon does not
+// exist until roughly 14:40 IST. It returned "not computable" on 79.1%
+// of real observations before the server moved it to 1m.
+//
+// ASCII ONLY -- non-ASCII characters cause Pine lexer failures.
+
+//@version=5
+indicator("S9 TA-with-Elliott Parity Oracle", overlay=false)
+
+bbLen       = input.int(20,      "Bollinger length",        minval=5)
+bbMult      = input.float(2.0,   "Bollinger stdev",         minval=0.5, step=0.1)
+slopeEps    = input.float(0.00015, "Mid-slope eps (normalised)", step=0.00005)
+minWidthPct = input.float(0.15,  "Min band width %",        step=0.01)
+adxMin      = input.float(20.0,  "ADX dynamic threshold",   step=1.0)
+rsiLen      = input.int(14,      "RSI length",              minval=2)
+devPct      = input.float(0.5,   "ZigZag deviation %",      minval=0.05, step=0.05)
+gmmaComprPc = input.float(25.0,  "GMMA compression pctile", step=1.0)
+minSepPct   = input.float(0.05,  "GMMA min separation %",   step=0.01)
+minConf     = input.int(3,       "min_confluence",          minval=1, maxval=7)
+
+// ---------------------------------------------------------------- //
+// Bollinger phase -- the deck's impulse-vs-corrective classifier.      //
+// Slope is normalised by price so one eps works on NIFTY at 24k and    //
+// SENSEX at 80k, matching ta_elliott.bollinger_state().                //
+// The impulse test is price-tags-band AND band-turns-with-it. It does  //
+// NOT also require width expansion: that extra condition is not in the //
+// source deck and made a steady trend read NEUTRAL.                    //
+// ---------------------------------------------------------------- //
+mid   = ta.sma(close, bbLen)
+sd    = ta.stdev(close, bbLen)
+upper = mid + bbMult * sd
+lower = mid - bbMult * sd
+slopeN = (mid - mid[2]) / 2 / math.max(math.abs(close), 0.000001)
+widthPct = (upper - lower) / math.max(math.abs(close), 0.000001) * 100.0
+meaningful = widthPct >= minWidthPct
+tagUp = high >= upper
+tagDn = low  <= lower
+
+impulseUp   = meaningful and tagUp and slopeN >  slopeEps
+impulseDn   = meaningful and tagDn and slopeN < -slopeEps
+stallUp     = meaningful and tagDn and slopeN >= -slopeEps    // stall favours a LONG
+stallDn     = meaningful and tagUp and slopeN <=  slopeEps    // stall favours a SHORT
+correctFlat = (not meaningful) or (math.abs(slopeN) <= slopeEps and (upper - lower) <= (upper[2] - lower[2]))
+
+phaseImpulse    = impulseUp or impulseDn
+phaseCorrective = stallUp or stallDn or correctFlat
+
+// ---------------------------------------------------------------- //
+// Tide -- 5/13 EMA stack on 5m. A 65-minute horizon, NOT the 195-minute //
+// 15m version: EMA(13) on today-only 15m candles does not exist until  //
+// ~13:00 IST, which made the gate inert for most of every session.     //
+// ---------------------------------------------------------------- //
+// ta.ema() extracted from the ternary. A ta.* call inside a conditional
+// is only evaluated on some bars, so its internal state diverges from
+// the bar count and Pine warns CW10004. Assign first, compare after.
+tideFast = ta.ema(close, 5)
+tideSlow = ta.ema(close, 13)
+tide = tideFast > tideSlow ? 1 : tideFast < tideSlow ? -1 : 0
+
+// ---------------------------------------------------------------- //
+// GMMA on ONE-MINUTE data, matching the server.                       //
+// ---------------------------------------------------------------- //
+gmmaSpread() =>
+    // ONE ta.ema per line. Comma-chained on a single line, Pine treats
+    // all but the first as a separate scope and warns CW10004 -- the
+    // same rule that flagged the tide ternary above.
+    s1 = ta.ema(close, 3)
+    s2 = ta.ema(close, 5)
+    s3 = ta.ema(close, 8)
+    s4 = ta.ema(close, 10)
+    s5 = ta.ema(close, 12)
+    s6 = ta.ema(close, 15)
+    l1 = ta.ema(close, 30)
+    l2 = ta.ema(close, 35)
+    l3 = ta.ema(close, 40)
+    l4 = ta.ema(close, 45)
+    l5 = ta.ema(close, 50)
+    l6 = ta.ema(close, 60)
+    sMax = math.max(s1, s2, s3, s4, s5, s6)
+    sMin = math.min(s1, s2, s3, s4, s5, s6)
+    lMax = math.max(l1, l2, l3, l4, l5, l6)
+    lMin = math.min(l1, l2, l3, l4, l5, l6)
+    spread = (sMax - sMin) / math.max(math.abs(close), 0.000001)
+    gapUp  = (sMin - lMax) / math.max(math.abs(close), 0.000001)
+    gapDn  = (lMin - sMax) / math.max(math.abs(close), 0.000001)
+    [spread, gapUp, gapDn]
+
+[gSpread, gGapUp, gGapDn] = request.security(syminfo.tickerid, "1", gmmaSpread())
+gSep      = math.max(gGapUp, gGapDn) >= minSepPct / 100.0
+gWidening = gSpread > gSpread[5]
+gExpUp    = gSep and gWidening and gGapUp >= minSepPct / 100.0
+gExpDn    = gSep and gWidening and gGapDn >= minSepPct / 100.0
+
+// ---------------------------------------------------------------- //
+// MACD zero-line reversal, RSI, ADX                                   //
+// ---------------------------------------------------------------- //
+[mLine, mSig, mHist] = ta.macd(close, 12, 26, 9)
+zeroRevUp = ta.crossover(mLine, 0)
+zeroRevDn = ta.crossunder(mLine, 0)
+zeroUp5 = zeroRevUp or zeroRevUp[1] or zeroRevUp[2] or zeroRevUp[3]
+zeroDn5 = zeroRevDn or zeroRevDn[1] or zeroRevDn[2] or zeroRevDn[3]
+
+rsiV = ta.rsi(close, rsiLen)
+[dip, dim, adxV] = ta.dmi(14, 14)
+dynamic = adxV >= adxMin
+
+// ---------------------------------------------------------------- //
+// Divergences, on the SAME percentage zigzag the server uses. This is  //
+// the component most likely to disagree if a built-in pivot function   //
+// were substituted, and it is also the one the server has never seen   //
+// fire: measured, 0% of observations had two same-side pivots to        //
+// compare. This plot is how you check that on a chart.                 //
+// ---------------------------------------------------------------- //
+var float[] zPrice = array.new_float()
+var int[]   zBar   = array.new_int()
+var int[]   zType  = array.new_int()
+var float[] zOsc   = array.new_float()   // MACD hist AT the extreme
+var float   zExt   = na
+var int     zExtB  = na
+var float   zOscV  = na
+var int     zDir   = 0
+
+// The oscillator value is CAPTURED with the extreme, not looked up
+// later. `mHist[bar_index - pivotBar]` is an offset that grows without
+// bound, and Pine sizes its history buffer at compile time -- the S8
+// oracle died on bar 4395 with "requested historical offset (403) is
+// beyond the historical buffer's limit (402)". Same mistake, same fix.
+if na(zExt)
+    zExt  := high
+    zExtB := bar_index
+    zOscV := mHist
+else
+    if zDir >= 0
+        if high > zExt
+            zExt  := high
+            zExtB := bar_index
+            zOscV := mHist
+        else if (zExt - low) / zExt * 100.0 >= devPct
+            array.push(zPrice, zExt)
+            array.push(zBar, zExtB)
+            array.push(zType, 1)
+            array.push(zOsc, zOscV)
+            zExt  := low
+            zExtB := bar_index
+            zOscV := mHist
+            zDir  := -1
+    if zDir < 0
+        if low < zExt
+            zExt  := low
+            zExtB := bar_index
+            zOscV := mHist
+        else if (high - zExt) / zExt * 100.0 >= devPct
+            array.push(zPrice, zExt)
+            array.push(zBar, zExtB)
+            array.push(zType, -1)
+            array.push(zOsc, zOscV)
+            zExt  := high
+            zExtB := bar_index
+            zOscV := mHist
+            zDir  := 1
+
+// Returns the two most recent same-type pivots with their PRICE and the
+// oscillator value recorded at each, so no series history is indexed.
+lastTwo(int want) =>
+    // One declaration per line. `float pA = na, pB = na` applies the
+    // type keyword ONLY to pA -- pB is then declared without one and
+    // inherits na's untyped nature, which Pine rejects at the first
+    // assignment to it (CE10097, reported at the `pB :=` line rather
+    // than here, which is why the error location was misleading).
+    float pA = na
+    float pB = na
+    float oA = na
+    float oB = na
+    int found = 0
+    if array.size(zPrice) > 0 and array.size(zOsc) == array.size(zPrice)
+        for i = array.size(zPrice) - 1 to 0
+            if array.get(zType, i) == want and found < 2
+                if found == 0
+                    pB := array.get(zPrice, i)
+                    oB := array.get(zOsc, i)
+                else
+                    pA := array.get(zPrice, i)
+                    oA := array.get(zOsc, i)
+                found += 1
+    [pA, oA, pB, oB, found]
+
+[loA, loOa, loB, loOb, loN] = lastTwo(-1)
+[hiA, hiOa, hiB, hiOb, hiN] = lastTwo(1)
+
+regBull = loN == 2 and loB < loA and loOb > loOa
+hidBull = loN == 2 and loB > loA and loOb < loOa
+regBear = hiN == 2 and hiB > hiA and hiOb < hiOa
+hidBear = hiN == 2 and hiB < hiA and hiOb > hiOa
+
+// ---------------------------------------------------------------- //
+// Confluence. Entries are taken only when NOT in an impulse (the deck  //
+// buys the END of a correction), with the Tide.                        //
+// ---------------------------------------------------------------- //
+d = tide
+cBbStall  = (d > 0 and stallUp) or (d < 0 and stallDn)
+cGmma     = (d > 0 and gExpUp)  or (d < 0 and gExpDn)
+cZero     = (d > 0 and zeroUp5) or (d < 0 and zeroDn5)
+cHidden   = (d > 0 and hidBull) or (d < 0 and hidBear)
+cRegular  = (d > 0 and regBull) or (d < 0 and regBear)
+cRsi      = (d > 0 and rsiV < 45) or (d < 0 and rsiV > 55)
+cAdx      = dynamic
+
+hits = (cBbStall ? 1 : 0) + (cGmma ? 1 : 0) + (cZero ? 1 : 0) +
+       (cHidden ? 1 : 0) + (cRegular ? 1 : 0) + (cRsi ? 1 : 0) + (cAdx ? 1 : 0)
+eligible = d != 0 and not phaseImpulse and hits >= minConf
+
+// Per-component plots: this is the diagnostic. A flat line at zero for
+// a whole session means that component cannot fire, which is a
+// threshold or availability defect, not selectivity.
+plot(hits,                title="confluence hits", color=color.blue, linewidth=2)
+hline(minConf, "min_confluence", color=color.gray, linestyle=hline.style_dashed)
+plot(cBbStall ? 1 : 0,    title="bb_corrective_stall", color=color.teal)
+plot(cGmma    ? 1 : 0,    title="gmma_expansion",      color=color.olive)
+plot(cZero    ? 1 : 0,    title="macd_zero_reversal",  color=color.orange)
+plot(cHidden  ? 1 : 0,    title="hidden_divergence",   color=color.fuchsia)
+plot(cRegular ? 1 : 0,    title="regular_divergence",  color=color.maroon)
+plot(cRsi     ? 1 : 0,    title="rsi_divergence",      color=color.navy)
+plot(cAdx     ? 1 : 0,    title="adx_dynamic",         color=color.red)
+plot(na(gSpread) ? 0 : 1, title="gmma_computable",     color=color.gray)
+
+plotshape(eligible and d > 0, title="S9 long",  style=shape.triangleup,
+          location=location.bottom, color=color.green, size=size.small, text="S9")
+plotshape(eligible and d < 0, title="S9 short", style=shape.triangledown,
+          location=location.top,    color=color.red,   size=size.small, text="S9")

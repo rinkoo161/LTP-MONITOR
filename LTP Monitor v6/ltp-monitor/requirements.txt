@@ -1,7 +1,0 @@
-fastapi>=0.110
-uvicorn>=0.29
-requests>=2.31
-curl_cffi>=0.7
-websocket-client>=1.9   # Kotak Neo HSM market-data websocket
-yfinance>=0.2.40        # News/Macro Agent fallback when Alpha Vantage / Twelve Data fail
-# AI runs locally via Ollama (install separately from https://ollama.com) — no Python package needed

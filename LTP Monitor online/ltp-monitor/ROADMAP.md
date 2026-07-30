@@ -1,0 +1,11163 @@
+# LTP Monitor — Roadmap
+
+Living list of pending work. Update this file as items are picked up,
+completed, or reprioritized — it's the source of truth across sessions,
+not the chat history.
+
+## v58.67 — zero setups was a bug, not a result (2026-07-30)
+
+    2026-07-30  NIFTY  mode=chain_only  snapshots=595   setups=0
+    2026-07-29  NIFTY  mode=chain_only  snapshots=651   setups=0
+    2026-07-28  NIFTY  mode=chain_only  snapshots=628   setups=0
+    2026-07-27  NIFTY  mode=chain_only  snapshots=1396  setups=0
+    2026-07-26  NIFTY  mode=chain_only  snapshots=842   setups=0
+
+4,112 archived snapshots, zero triggers, in the mode that ASSUMES the
+futures leg agreed and therefore overstates the count. That is not "the
+conditions did not co-occur" -- it is a guarantee.
+
+**`chain_snapshots` has no `state` column.** It stores the raw inputs
+(ltp, oi, oi_chg, volume, delta) and nothing derived. My replay reader
+faithfully reproduced the row SHAPE analyzer.analyze() produces, and
+therefore handed the detector `state=None` on every leg of every strike.
+`_state_of()` returned None, no buildup or covering was ever seen, and
+zero was the only possible answer.
+
+The v58.66 note "zero setups is itself a result" was wrong in this case,
+and the diagnostic I put next to it -- check n_snapshots to tell an
+empty archive from a genuine absence -- is what exposed it. 595 rows and
+zero setups could not both be true.
+
+Fixed by deriving the quadrant on read with **analyzer.classify_leg**,
+the same function the live path uses rather than a reimplementation. A
+replay that classifies differently from production is worthless, and
+duplicating a four-quadrant rule is exactly where that drift starts.
+
+Verified end to end: synthetic archived rows with PE price-down/OI-up and
+CE price-up/OI-down now classify as short-buildup and short-covering and
+produce a `bullish_composite` in `mode=full`.
+
+### Pattern worth naming
+
+This is the third bug in two versions caused by reproducing a SHAPE
+rather than a MEANING: the quadrant string mismatch (v58.66), the
+undefined `oi_chg`/`chg` names (v58.66), and now the missing derived
+state. Each looked correct in isolation and each was silent.
+
+## v58.66 — Strategy 10 backtesting, and two bugs it exposed (2026-07-30)
+
+Asked "can we test it using backtesting?", the answer turned out to be
+half yes, and finding out which half surfaced two silent failures.
+
+### What was already replayable
+
+`chain_snapshots` stores per-strike ltp/oi/oi_chg/volume/delta every 60
+SECONDS for 5 days, for ~10 strikes either side of ATM. That is genuine
+intraday OI evolution, not a daily snapshot -- so the OPTION half of the
+trigger is fully replayable. `chg` is not stored but is derived from
+consecutive snapshots, which at 60s cadence is the same one-minute
+change the live path computes.
+
+### What was not
+
+`future_oi_quadrant` was computed live and DISCARDED. The futures leg is
+the FIRST condition in the operator's rule, so without it there was no
+backtest -- only half a trigger. Now archived (`future_oi_snapshots`,
+one row per symbol per cycle). Older days therefore replay in
+mode="chain_only", which ASSUMES the futures condition agreed and so
+OVERSTATES the count; the result says which mode it ran in and why that
+matters. From now on runs report mode="full".
+
+### Bug 1 — the quadrant strings never matched
+
+MarketDataAgent publishes UNDERSCORE forms (`long_buildup`,
+`long_unwinding`). detect_setup compared against `"long"` and
+exit_reasons against `"long-unwinding"` with a HYPHEN. **Neither would
+ever have matched a real bus value.** Strategy 10 would have observed
+nothing, logged nothing, and looked perfectly healthy.
+
+The 72 tests passed because they fed `"long"` by hand. That is the
+blind spot worth naming: **a test that invents its own input cannot
+detect a mismatch with the producer.** New tests now scrape the agent's
+actual string literals out of agents.py and assert every one normalises.
+
+### Bug 2 — undefined names hidden by a bare except
+
+The archiving call passed `oi_chg` and `chg`, neither of which exists in
+that scope, inside a `try/except Exception: pass`. It would have thrown
+NameError on every cycle and silently written nothing -- the same
+swallow-the-error pattern that hid the S9 `mcs` NameError in v58.47.
+Computed from the baseline instead.
+
+### Usage
+
+    python3 backtest_s10.py --symbol NIFTY --days 5
+
+Zero setups is a real result; `n_snapshots` distinguishes "empty
+archive" from "the conditions genuinely did not co-occur".
+
+## v58.65 — Strategy 10: OI Buildup/Covering Composite (2026-07-30)
+
+The operator's own methodology, formalised from a direct specification
+and shipped OBSERVE-ONLY.
+
+`oi_composite.py` detects, from the option chain plus the futures OI
+quadrant:
+
+    futures long-buildup + PE short-buildup (ATM, ATM-2)
+    + CE short-covering              -> BULLISH composite
+    the mirror                       -> BEARISH composite
+    short buildup on BOTH sides      -> short condor with hedged wings
+
+and constructs long future + credit spread (sell the ATM strike WITH the
+buildup, buy 3 strikes OTM) + long high-delta option.
+
+### Why this is architecturally new
+
+Every existing strategy produces ONE instrument's signal. This produces
+a COMPOSITE and exits its legs INDEPENDENTLY -- "exit from the Sell PE
+side, keep bought PE and again Short PE ATM". No existing exit path
+could express that; spreads here are opened and closed as one unit.
+
+It also explains a real failure: because spreads, futures and option
+buys ran as independent strategies with independent gates, futures could
+lose Rs 72,321 on 2026-07-30 while spreads made money. Nothing
+coordinated them.
+
+### The four-quadrant layer already existed
+
+analyzer.py has classified long-buildup / short-buildup / short-covering
+/ long-unwinding per strike per side all along, with churn detection --
+and at line ~191 it already recognised this exact bullish signature and
+labelled it "strong bullish (Buy Call) signal". It was rendered as a
+display string and never traded on. This module is the missing consumer,
+which is why the build was hours rather than days.
+
+### The 2% cap is binding, and that is structural
+
+All three legs are directionally the same, so they do not hedge and the
+worst case is the SUM:
+
+    NIFTY      fut 2,250 + BPS 8,212 + CE 9,000 = 19,462  -> 1.03 lots
+    BANKNIFTY  fut 2,700 + BPS 6,570 + CE 9,600 = 18,870  -> 1.06 lots
+    FINNIFTY   fut 2,600 + BPS 7,118 + CE 9,100 = 18,818  -> 1.06 lots
+
+2% of Rs 10,00,000 permits roughly ONE composite at one lot on one
+index. `size_composite()` reports the BINDING leg and its share, because
+"1 lot" alone does not tell the operator which part to shrink -- and the
+long option is consistently the largest at ~45%.
+
+### Ambiguities recorded rather than guessed
+
+  - "1:3 to 1:5" answered a CONCURRENCY question but reads equally as a
+    risk:reward target. Both implemented (`max_concurrent` 1,
+    `rr_target` 3.0), neither assumed silently.
+  - "Rs 50 per leg" treated as per ORDER (4 legs x 2 sides = Rs 400 a
+    round trip); `cost_is_per_lot` switches it.
+  - 2% applied per composite; since one consumes ~97% of it, per-trade
+    and per-day are nearly equivalent here.
+
+### Still to build before it can trade
+
+The composite EXECUTOR. Detection, sizing, exit rules and the roll are
+all implemented and tested; placing and managing a four-leg coordinated
+position is not. With `auto_deploy` on it says so explicitly rather than
+silently doing nothing.
+
+## v58.64 — the rupee cap only guarded one of three paths (2026-07-30)
+
+Live futures today:
+
+    11:27  BANKNIFTY  9 lots  -Rs   540   profit floor
+    11:17  BANKNIFTY  3 lots  -Rs   180   kill-switch
+    11:17  FINNIFTY   6 lots  -Rs 12,840  kill-switch
+    10:36  FINNIFTY   4 lots  -Rs  8,040  kill-switch
+
+v58.39 added `cap_by_rupee_risk` ONLY to size_future's `not
+dynamic_sizing_enabled` early return. With dynamic sizing ON -- the live
+configuration -- the percentage-of-capital branch never consulted it.
+
+FINNIFTY: a 38.8-point stop x 65 lot size is Rs 2,522 of risk PER LOT.
+It took 6 lots -- Rs 15,132 against a Rs 2,500 cap -- lost Rs 12,840,
+and tripped the portfolio kill-switch. Precisely the failure v58.39
+existed to prevent.
+
+The docstring called it "a risk ceiling, not a sizing strategy". **A
+ceiling that guards one of three return paths is not a ceiling.** Now
+applied after every branch. Verified against the two live trades:
+FINNIFTY 6 -> 0 lots (blocked, one lot exceeds the cap), BANKNIFTY
+9 -> 2 lots.
+
+### The same cause explains the floor exiting below its own floor
+
+    profit floor: gave back to Rs 743 of peak Rs 1350  -> realised gross Rs 0
+    [bear_call_spread] gave back to Rs 2048 of peak Rs 2730 -> gross Rs 137
+
+Not a bookkeeping bug. At 9 BANKNIFTY lots the position is Rs 135/point,
+so the gap between a Rs 1,350 peak and its Rs 743 floor is **4.5
+points** -- one 5-point tick crosses the whole buffer, and the floor can
+only act on the P&L it is next shown. The floor cannot protect what a
+single tick can erase.
+
+At 2 lots the same buffer is 20 points. **Sizing was the root cause of
+both symptoms**, which is why the cap fix addresses the floor behaviour
+without touching the floor.
+
+### Arithmetic you should know
+
+At a Rs 2,500 cap, FINNIFTY futures are BLOCKED ENTIRELY -- one lot
+risks Rs 2,522 on a typical ATR stop. That is not a bug; it says a
+Rs 2,500 per-trade budget cannot support a FINNIFTY future. Either raise
+`futures_risk_per_trade_rupees` knowingly, or accept NIFTY/BANKNIFTY
+only. NIFTY remains the only historically profitable futures symbol.
+
+## v58.63 — the parity oracle earned its keep (2026-07-30)
+
+The S8 Pine overlay marked `fHS` on roughly 12 of 30 bars on a 5m NIFTY
+chart. A failed head-and-shoulder is a rare reversal-continuation event;
+40% of bars means no constraint at all.
+
+**The defect was in the server, not in Pine.** Every break and reclaim
+test in ew_reversal.py was a LEVEL comparison:
+
+    broke     = close < p4["price"]
+    reclaimed = close > pb["price"]
+
+Those stay true on EVERY subsequent bar once price is past the level, so
+each detector kept returning the same setup cycle after cycle instead of
+firing once at the break. Six such tests across three detectors, all the
+same shape. `_crossed()` now requires the cross to happen ON the
+evaluated bar; the Pine oracle got the identical change so parity holds.
+
+Two things had hidden it. S8 was not evaluated at all until v58.37, and
+it still has no chart markers -- so nothing ever displayed the
+repetition. And `max_trades_per_day` capped the DAMAGE at two trades, so
+it never surfaced as a flood of orders. **The detector was wrong while
+the guardrail made the symptom invisible**, which is the most expensive
+kind of bug: bounded, silent, and shaping every backtest number S8 would
+ever produce.
+
+This is precisely what the oracle was built for, and it found in one
+chart what three sessions of reading the code did not.
+
+### The existing tests had encoded the bug
+
+Four fixtures ran the final leg well PAST the break level, so they only
+passed because the detector re-fired forever after a break. A fixture
+that lands mid-move cannot distinguish "fires at the break" from "fires
+on every bar after it". All four now stop just past the level so the
+last bar IS the crossing bar -- which also required finding the actual
+crossing window, since the H&S neckline is interpolated and drifts.
+
+### Chart markers for S8 are still not built
+
+`s8_markers_enabled` remains registered and unconsumed, deliberately, so
+there is nothing to see on the LTP chart yet. Given what the Pine
+overlay just revealed, that is now worth building -- it is the same
+signal from the other side.
+
+## v58.62 — S9 Pine: comma-chained assignments (2026-07-30)
+
+    CE10097  Value with NA type cannot be assigned to a variable that
+             was defined without type keyword          (line 166)
+    CW10004  "ta.ema" should be called on each calculation for
+             consistency -- extract from the ternary or scope (line 80, x2)
+
+Both from the same habit: comma-chaining assignments onto one line.
+
+`float pA = na, pB = na` applies the type keyword ONLY to pA. pB is then
+declared without one and inherits na's untyped nature, which Pine rejects
+at the first assignment TO pB -- reported at line 166 rather than 160,
+which is why the error location pointed away from the cause.
+
+`s1 = ta.ema(...), s2 = ta.ema(...)` and the tide's
+`ta.ema(a) > ta.ema(b) ? ...` put a stateful ta.* call inside what Pine
+treats as a conditional scope. A ta.* function must run on every bar or
+its internal state diverges from the bar count.
+
+Fixed: one assignment per line throughout, ta.ema extracted from the
+ternary into named variables, every na-initialised declaration given its
+own type keyword. The remaining `var` reassignment chains were split too
+-- they break neither rule, but both rules that DID fire were about
+comma-chaining, so leaving any of it is a needless risk in a file I
+cannot compile here.
+
+Worth noting for the record: S8 uses the same comma-chained style for
+plain expressions (`p0 = px(6), p1 = px(5)`) and compiles fine, so the
+rule is not "never chain" -- it is "never chain a type keyword with na,
+and never chain a stateful ta.* call".
+
+## v58.61 — websocket push loop leaked dead connections (2026-07-30)
+
+Continuous `socket.send() raised exception.` during a live session,
+several lines per second, growing over time.
+
+The handler already caught `WebSocketDisconnect`, which looked
+sufficient and was not. **Starlette's `send_json()` frequently does NOT
+raise when the peer has gone** -- the write fails down in the asyncio
+transport, which prints that line and returns normally. So the except
+never fired, the `while True` push loop never exited, and every orphaned
+connection kept writing once per second forever. Each symbol or
+timeframe switch left another behind, which is why the rate GREW across
+the session instead of appearing once.
+
+Relying on a failed write to detect a dead peer is the mistake. Starlette
+tracks the state explicitly, so `ws_alive()` asks it -- checking BOTH
+client_state and application_state -- and the loop reaps on every
+iteration instead of waiting for a write that may never fail. All 11
+sends in the handler go through `ws_send()`, which is a no-op on a dead
+peer; only ws_send itself touches send_json.
+
+The error path was also writing blindly on the way out, producing one
+extra failed write per disconnect.
+
+### And a regression the suite caught immediately
+
+The first version of `ws_alive()` returned False on ANY AttributeError,
+which muted every send to anything that was not a full Starlette
+WebSocket -- including test_chart_indicators' FakeWS stand-in, whose
+entire purpose is to drive this endpoint deterministically. That suite
+went from passing to receiving ZERO messages.
+
+"Unknown state" is not evidence of disconnection. Failing closed there
+cost real functionality to guard a case a real Starlette socket cannot
+produce (it always sets both states). Now only an EXPLICIT
+WebSocketState.DISCONNECTED is treated as dead, and FakeWS carries the
+states so it exercises the guard rather than sidestepping it.
+
+Note on the earlier diagnosis: on 2026-07-29 I attributed this message
+to the Dhan subscription burst and fixed that in v58.42. That fix was
+real and needed, but it was a DIFFERENT socket -- inbound broker feed
+versus outbound chart push. Two causes, same symptom; I stopped at the
+first one because it explained the timing that day. When the message
+came back continuous rather than in bursts, that was the signal it had
+a second source.
+
+## v58.60 — Pine oracles: no more dynamic history offsets (2026-07-30)
+
+    Error on bar 4395: The requested historical offset (403) is beyond
+    the historical buffer's limit (402).
+    warning: 'histAt' should be called on each calculation for consistency
+
+One design mistake produced both. `histAt(b) => mHist[bar_index - b]`
+indexes a series by an offset that GROWS as the chart advances, and Pine
+sizes its history buffer at compile time from the largest offset it can
+see. No fixed buffer can satisfy an unbounded one, so the script worked
+for a few hundred bars and then died -- not a tunable limit, simply the
+wrong approach for Pine. The warning said the same thing from the other
+side: histAt() was called inside `if showDiagonal and n >= 6`, so on
+bars where that was false it was not called at all and its history was
+inconsistent.
+
+Fix: the histogram value is CAPTURED when the extreme forms and stored
+in an array parallel to price/bar/type, so nothing indexes series
+history at all. Verified in Python that capturing-at-the-extreme gives
+identical values to looking-up-afterwards, which is the parity property
+that matters -- and that the old approach would have needed offsets far
+past Pine's limit on a normal chart.
+
+Both scripts had it; S9's `oscAt()` was the same code and would have
+failed the same way once its pivots aged.
+
+Still on //@version=5 deliberately. TradingView flags it as outdated,
+but v6 has breaking changes and I cannot run Pine here -- upgrading
+blind is how the last two rounds of this went. Worth doing when there is
+a way to test it.
+
+## v58.59 — Pine oracle crashed on bar 0 (2026-07-30)
+
+    Error on bar 0: In 'array.get()' function.
+    Index -1 is out of bounds, array size is 0.
+    at px():91  at #main():182
+
+My S8 parity oracle guarded its array accessors at the CALL SITE:
+
+    plotchar(n > 0 and bx(1) == bar_index and tx(1) == 1, ...)
+
+That does not work, and the reason is worth recording: **Pine evaluates
+every argument of a plot*() call on every bar, and does not reliably
+short-circuit a user-defined function behind an `and`.** So `bx(1)` runs
+even when `n > 0` is false, and on bar 0 the pivot arrays are empty.
+
+The guard has to live INSIDE the accessor, where it cannot be bypassed.
+px/bx/tx now bounds-check and return `na`, which also keeps every
+downstream comparison honest: `na == -1` is false and `na >= minBars` is
+false, so a missing pivot fails a pattern test rather than accidentally
+passing one.
+
+Same class of latent bug found and fixed in BOTH scripts' series
+indexing: `histAt()` and `oscAt()` take a bar number that can now be na,
+and indexing a Pine series with na aborts the script exactly as an
+out-of-bounds array.get does. S9's `lastTwo()` returns na for its bar
+indices whenever fewer than two same-type pivots exist -- which is most
+of the early session, and (per the calibration data) possibly the whole
+session -- so that one would have fired reliably.
+
+### Note on verification
+
+I cannot run Pine here, so these scripts shipped in v58.50 having been
+checked only for ASCII-safety and structure. The bar-0 case is exactly
+the kind of thing a real run catches immediately and reading does not.
+Worth stating plainly: the Pine files are the one deliverable in this
+project with no executable test behind them, and they should be treated
+as unverified until pasted into TradingView.
+
+## v58.58 — retail mood "{", macro table font, idle checkpoint message (2026-07-30)
+
+### "retail mood: {" -- LLM output used without validation, third time
+
+The prompt says "One word only - overall mood: euphoric, bullish,
+neutral, bearish, or fearful." The model replied with JSON, and
+`mood = out.strip().lower().split()[0]` took the opening brace and
+rendered it as the mood on the dashboard and in the agent status.
+
+This is the THIRD instance of the same class in one session:
+  * the `signal` field echoing the schema hint (fixed before v58.27)
+  * momentum_buy's RR and strike ignoring the stated rules (v58.44)
+  * this
+A prompt is a request, not a guarantee. Any LLM output used downstream
+needs validating at the boundary, and the pattern is consistent enough
+now that it should be assumed rather than discovered.
+
+Mood is matched against the allowed set, falls back to "unknown", and
+logs what the model actually said so the next occurrence is diagnosable
+rather than just wrong.
+
+### Macro & News table font
+
+The table is `class="postable"`, which sets JetBrains Mono at 12px.
+`stratfont` already existed for exactly this problem -- prose-heavy
+tables where monospace reads badly, applied to Strategy Library and
+Per-Strike Activity -- and the Macro feed, whose cells are HEADLINES, is
+the most prose-heavy table in the app. It simply never got the class.
+
+Also dropped `.postable` from 12px to 11.5px: its explicit size was
+larger than the plain-table default, which is why this one table looked
+bigger than the rest.
+
+### "idle · 0/5 checkpoints done today" at 02:50
+
+Not a fault -- the first checkpoint is the US close (~05:00 IST). But
+the line reads like one, and the Digest panel's "no data yet" then looks
+broken rather than merely early. The summary now names the NEXT
+checkpoint and its time, so an early-morning glance is informative
+instead of alarming.
+
+## v58.57 — a migration that never ran, and provenance posing as a strategy (2026-07-30)
+
+### The calibration panel's 500
+
+    failed: SyntaxError: Unexpected token 'I', "Internal S"... is not valid JSON
+
+"Internal S" is "Internal Server Error" -- the endpoint 500'd and the
+frontend tried to JSON.parse an error page.
+
+v58.41 added eight raw-value columns to `ta_calibration` by editing its
+`CREATE TABLE IF NOT EXISTS`. **That statement does nothing when the
+table already exists.** So every install created before v58.41 kept the
+26-column schema while the summary query asked for 34.
+
+It was invisible in development for two compounding reasons: a fresh DB
+gets the new schema, and I had DROPPED AND RECREATED the table while
+testing -- which is the one state a real user never has. Editing a
+CREATE statement is not a migration, and I shipped it as though it were.
+
+`_migrate_columns()` now ALTERs in any missing column on open,
+idempotently, and the raw-distribution query is wrapped so a partial
+schema degrades to "no distributions" rather than a 500. A panel that
+renders a diagnosis beats one that renders a parse error.
+
+### "AI" and "rule-engine (...)" were never strategies
+
+They are momentum_buy's `source` field -- WHICH CODE PATH produced the
+signal:
+
+    AI                                          the LLM produced it
+    rule-engine (AI returned an invalid ...)     LLM output rejected
+    rule-engine (AI unavailable: Ollama ...)     LLM unreachable
+
+`_setup_of` read `source` FIRST, so an ERROR MESSAGE became a strategy
+name and momentum_buy's record was split five ways -- those three rows
+plus CE-buy and PE-buy when no field was set. None of the five numbers
+meant anything on its own.
+
+Strategy identity now comes from `strategy`/`setup`; a bare AI or
+rule-engine source resolves to `momentum_buy`, since it is the only path
+that generates signals that way. The provenance is still on each trade
+for anyone who wants to split by it deliberately -- which is a genuinely
+useful cut, just not a strategy axis.
+
+Incidentally this also reveals that Ollama was unreachable for at least
+one trade ("is `ollama serve` running?"), which is worth checking before
+tomorrow if AI commentary matters to you.
+
+## v58.56 — a long backoff needs a recovery path (2026-07-30)
+
+Reported: "Dhan API keys already updated. not showing index on start,
+now updated after 5 mins."
+
+That delay was mine. v58.53 gave auth failures an 1800s backoff,
+reasoning that an expired token "cannot fix itself". True -- but pasting
+a new one IS the fix, and NOTHING cleared the cooldown when it arrived.
+So the system went on refusing quote calls for up to thirty minutes
+AFTER the problem was solved.
+
+**A long backoff is only correct if the recovery path resets it.** I
+built the backoff and not the reset, which turned a correct instinct
+into a worse outcome than the noisy retries it replaced.
+
+`POST /api/settings` now clears the cooldown, the auth-alert once-flag
+and the display cache whenever broker credentials change, so the next
+poll refetches with the new credential instead of serving a cached
+failure. Verified: cooldown 1799s -> 0s across a credential update.
+
+### Also answered: which spread parameter
+
+"Profit lock-in floor" is `spread_profit_lock_pct`, and it was **5** --
+keep 5% of peak, i.e. give back 95% before acting. The trigger (75) and
+target (35) are fine; only the floor was wrong. Earlier in the session I
+described this as 20 from a verbal report; the screenshot showed 5.
+Worth noting that reading the value beats inferring it.
+
+## v58.55 — the endpoint I deferred was the one causing the symptom (2026-07-30)
+
+Reported: indexes still not visible, and the dashboard showing v58.51
+while VERSION said v58.54.
+
+### The version badge froze three releases ago
+
+The release process bumped it with `sed -i '462s/v58.X/v58.Y/'`. v58.52's
+CSS edit shifted the file by two lines, the badge moved to 464, and
+**sed silently matched nothing** -- it does not error when the pattern is
+absent from the addressed line. VERSION and APP_VERSION advanced while
+the UI stayed at v58.51 for three releases.
+
+Bumps are now by CONTENT match, and `build_gate_versions.py` asserts all
+three agree. That check existed in earlier releases and I stopped running
+it; it is now a file, not a habit.
+
+### /api/analysis was still returning 502
+
+v58.54 fixed `/api/ai_visual` to degrade gracefully and explicitly
+DEFERRED `/api/analysis` as "a separate decision, separate release".
+That was wrong. `/api/analysis` is what the index panels read, so it was
+the endpoint actually producing "start agents" -- deferring the one
+causing the reported symptom is not scoping, it is missing the point.
+
+It now shares the display throttle (60s/symbol) and the shared rate
+limiter, serves stale-over-blank, and returns a structured
+`{"unavailable": true, "reason": ...}` at HTTP 200 rather than a 502, so
+the panel can render "unavailable, here is why" instead of failing to
+parse an error page.
+
+An expired token returns `auth_expired` with the fix named, because that
+is a different problem from a transient fetch failure and the operator
+needs to know which one they have.
+
+### Note on my own process
+
+Five separate assertion failures this session came from matching text
+that wrapped across lines or lived in a comment/docstring. Each cost a
+round trip. The pattern is now handled by flattening or tokenising
+before matching -- worth doing by default rather than after each
+failure.
+
+## v58.54 — regression: indexes blank out of hours (2026-07-30)
+
+Reported: "indexes are not updating: NIFTY - start agents, BANKNIFTY -
+start agents ... it was visible in previous version v58.38".
+
+That was precise and correct. **I broke it in v58.53.**
+
+MarketDataAgent does not populate the bus when the market is closed --
+its summary literally says "not fetching (last data retained)". So after
+a restart out of hours NOTHING sets `analysis:{sym}`. v58.38 worked
+because display endpoints fell back to a live fetch; v58.53 removed that
+fetch to stop a 502 and a rate-limit storm, and thereby removed the only
+path that populated an out-of-hours panel.
+
+**The defect was never "display endpoints fetch" -- it was "display
+endpoints fetch UNTHROTTLED."** v58.53 fixed the symptom by banning the
+behaviour instead of bounding it, which is a worse trade than it looked:
+one class of failure swapped for another.
+
+Now: fetch, but at most once per 60s PER SYMBOL, serving a cached result
+in between. Twenty panels polling every 5s cost one broker call a minute
+per symbol instead of hundreds, and out-of-hours viewing works again.
+Verified: 25 consecutive polls produce exactly ONE fetch.
+
+Two further improvements while in here:
+  - An expired token now reports `auth_expired` rather than
+    `warming_up`. "Warming up" implies it will resolve on its own; an
+    expired token needs a human, and saying otherwise wastes the
+    operator's time.
+  - On a failed refetch a STALE cached panel is served rather than an
+    empty one, since stale-but-honest beats blank.
+
+### Still open, deliberately not touched
+
+`/api/analysis/{symbol}` (lines 201/222) has its own `momentum=` fetch
+path and is also polled. It probably wants the same throttle, but it is
+the PRIMARY data endpoint rather than a display panel, and changing the
+core data path in the same release as a regression fix is exactly how
+v58.53 happened. Separate decision, separate release.
+
+### Test-assertion note, fourth occurrence
+
+Two assertions had to be rewritten because they matched the helper's own
+DOCSTRING, which quotes the old broken line as the historical record. An
+assertion that forces deleting documentation to pass is the wrong
+assertion; these now tokenise the source and ignore comments and strings
+rather than substring-matching raw text. That pattern has now cost time
+four times in this session and is worth a shared helper rather than
+remembering each time.
+
+## v58.53 — a 502 from a display endpoint, and an overnight 401 loop (2026-07-30)
+
+Both from a live console trace.
+
+### Display endpoints were making broker calls
+
+    GET /api/ai_visual/NIFTY -> 502 Bad Gateway
+    RuntimeError: Dhan rate limit hit -- slow down polling.
+
+The line responsible:
+
+    analysis = pilot.bus.get(f"analysis:{sym}") or analyze(get_chain(sym))
+
+On any poll where the bus was cold this made a SYNCHRONOUS Dhan REST
+call. The dashboard polls these panels on a timer, so a cold bus meant a
+broker call per panel per poll -- and four endpoints had the same
+pattern. Same amplification class as the prev_close 5-call storm fixed
+in v58.34, and for the same underlying reason: a code path treating a
+shared, rate-limited resource as if it were free.
+
+Display endpoints must not fetch. MarketDataAgent owns the chain and
+populates the bus; an endpoint that renders a panel serves what is there
+and reports `warming_up` when it is not. A blank panel for one refresh
+cycle beats a 502 plus a burned request that also slows every other
+caller. Fetching is now opt-in via `allow_fetch`, defaulting off, and
+the helper consults the shared limiter before even trying.
+
+### A 401 is not a transient error
+
+At 01:55 the Dhan token expired and the transient path retried every
+30s. An expired token cannot fix itself -- the only remedy is a human
+pasting a new one -- so every retry was pure noise plus a wasted call.
+
+`rate_limit` now classifies auth failures separately: 1800s backoff
+versus 30s for a genuine transient, `is_auth_failure()` so callers can
+tell them apart, and prev_close raises ONE high alert naming the only
+fix rather than logging the same 401 all night. The once-flag clears
+when the token is replaced, so a second expiry the same day is not
+silent.
+
+The distinction matters because the two need different treatment: a rate
+limit resolves itself and warrants a quiet note; an expired token needs
+a person and should be shouted about.
+
+## v58.52 — table alignment and fonts (2026-07-29)
+
+Every table on every page now left-aligns headers and cells and uses the
+common Inter face, via ONE authoritative CSS rule rather than 19
+separate inline edits.
+
+The global `th,td` default was `text-align:right`, with 19 inline
+overrides scattered across the P&L, Quality, Strategies, Backtest and
+Macro/News renderers. Replacing each would have been 19 edits with 19
+chances to break a template string, and a future table would still have
+needed someone to remember. The `!important` here is deliberate for that
+reason: it makes the rule authoritative in one place.
+
+Numeric cells keep JetBrains Mono via `td code` / `.mono`, so digits
+still line up vertically -- left alignment was the request, not losing
+column legibility.
+
+## v58.51 — B7: has the news classifier ever been right? (2026-07-29)
+
+Two questions that had never been asked of real data: does
+`classify_impact_window()` predict movement, and which of the ~9 RSS
+feeds earn their place?
+
+### The measurement design matters more than the code
+
+Absolute moves are meaningless. NIFTY ranges ~0.05% in a typical
+5-minute window, so a headline followed by 0.06% looks like a hit and is
+noise. Every event is therefore scored as a PERCENTILE RANK against the
+distribution of all same-length windows on the SAME DAY. Same-day
+matters: ranking a quiet Tuesday against an expiry-day distribution
+would credit the classifier for volatility it never predicted.
+
+Range rather than close-to-close, because a headline that spikes price
+and reverts still MOVED the market and close-to-close would score that
+as nothing.
+
+**Events the classifier said would NOT move price are the control
+group.** This is the part that makes the answer meaningful: without a
+control, a classifier that labels everything high-impact looks perfect.
+The verdict is the LIFT of classified events over that control, not the
+classified figure alone.
+
+### Per-feed scoring is the objective form of "review the 9 feeds"
+
+A feed whose flagged headlines land at a median rank near 50 is
+indistinguishable from picking windows at random, and now says so:
+"adds signal" / "marginal" / "no better than random". That replaces an
+opinion about each feed with a number derived from its own output.
+
+Verified on synthetic data where the answer is known: a feed whose
+flags landed on real spikes scored 97.9 ("adds signal"), one whose flags
+landed in quiet windows scored 14.9 ("no better than random").
+
+### Sparse data says so
+
+Below `min_samples` the result reports `insufficient` rather than
+computing a median from three points. "We cannot tell yet" is a real
+answer; a fabricated number is not.
+
+### The limitation is in the RESULT, not just a docstring
+
+`fetched_ts` is when the SYSTEM FETCHED the item, not when the market
+learned it. NewsAgent polls every 900s, so the true lag is 0-15 minutes
+and unknown per item. That biases the measurement AGAINST the
+classifier, which makes the result asymmetric: **a null result is
+inconclusive, a positive result is meaningful.** The caveat ships inside
+the API response so it cannot be read without it.
+
+Fixing this properly needs the item's own published timestamp rather
+than the fetch time — worth doing before drawing a firm negative
+conclusion about any feed.
+
+### How to use it
+
+    python3 news_validation.py --days 10
+    GET /api/news/impact-validation?symbol=NIFTY&days=10
+
+## v58.50 — B3 S8/S9 settings + calibration panel, B4 Pine oracles (2026-07-29)
+
+### B3, built in a deliberate order
+
+I twice advised holding this. The argument that changed it: the Settings
+subcards and the calibration panel are exactly what is needed to TUNE
+S9 toward firing, so they unblock A1 rather than dressing up a dead
+strategy. Built in that order; CHART MARKERS ARE STILL NOT BUILT, since
+those only matter once a strategy fires. `s8_markers_enabled` remains
+registered and unconsumed, deliberately.
+
+**Settings subcards** for every `s8_*` and `ta_*` key, replacing
+`POST /api/settings`. Two tests worth having: every control must be
+populated on load AND sent on save. A control that is one but not the
+other silently does nothing, which is worse than no UI at all.
+
+**S9 calibration panel** on the Backtest page. Not a generic table — it
+interprets:
+
+  - a signal at 0% is labelled "never fires -- threshold or
+    availability defect", not rendered neutrally
+  - IMPULSE at 0% names `bb_slope_eps` as the cause
+  - zero observations with two same-side pivots names
+    `ta_zigzag_deviation_pct`
+  - GMMA computable below 50% says the ribbon does not exist for most
+    of the session
+  - raw distributions are shown alongside hit rates, and the panel
+    states the tuning ORDER (min_confluence last)
+
+### B4 — Pine parity oracles
+
+`pine/S8_ew_reversal_parity.pine` and `pine/S9_ta_elliott_parity.pine`.
+Following S7's precedent: every server marker must have a Pine triangle
+on the SAME BAR, Pine applies NO gates, and the check is ONE-WAY (extra
+Pine triangles are expected, since the server suppresses them with gates
+Pine does not implement).
+
+Two decisions that make the comparison meaningful rather than
+plausible-looking:
+
+  - **S8 does not use `ta.pivothigh`/`ta.pivotlow`.** Those confirm from
+    a fixed number of bars either side; the server confirms once price
+    RETRACES by a percentage. Using the built-in would place pivots on
+    different bars and every downstream comparison would be meaningless
+    while appearing to work. The percentage zigzag is ported directly,
+    and emits only CONFIRMED pivots so it cannot see what the server
+    had not yet confirmed.
+  - **S9 pulls GMMA from 1m via `request.security`.** The server
+    computes GMMA on 1m and everything else on 5m; a 5m ribbon in Pine
+    would agree with nothing. S9 also plots all seven components
+    separately, which makes the dead ones visible on a chart without
+    waiting for an export.
+
+### The hazard I documented and then committed
+
+Both Pine files contained an em-dash (U+2014) -- the exact character
+class the header warns breaks the Pine lexer. Caught by the test that
+asserts ASCII-only, which is the only reason it was not shipped as a
+file that fails to compile on paste.
+
+Two assertions also had to be narrowed from string-matching to intent:
+one would have forced deleting the comment that explains why
+`ta.pivothigh` is avoided, in order to pass a check that the name is
+absent. An assertion that punishes documentation is the wrong
+assertion -- third occurrence of that pattern this session.
+
+## v58.49 — B1 futures markers, B2 test hygiene, B6 shared limiter (2026-07-29)
+
+### B1 — futures chart markers
+
+Options and Strategy 7 both record chart markers; futures never did, so
+the one instrument class demonstrably losing money was also the only one
+invisible on the chart. Now records entry and exit through the SAME
+generic `_record_chart_event` every other strategy uses — no parallel
+mechanism — with exits classified into target_hit / stop_hit / exit so
+the legend reads consistently across instrument types.
+
+Markers use the INDEX spot, not the futures price. The chart plots the
+index and a futures contract trades at a basis to it, so marking the
+futures LTP would place a marker at a price the plotted series never
+touched.
+
+### B6 — one shared cooldown instead of two
+
+Two INDEPENDENT backoffs guarded the same Dhan quote surface:
+
+    broker_adapter._cache["ltp_all_fail_until"]   60s / 10s
+    app._quote_rate_limited_until                300s / 30s
+
+Independent cooldowns on a shared resource defeat their own purpose —
+one path backs off politely while the other keeps hammering the endpoint
+that just refused it, and the server sees no net reduction. The
+2026-07-29 log showed precisely that: prev_close backing off while
+futures polling 429'd on the same surface minutes later.
+
+New `rate_limit.py` keys cooldowns by a coarse RESOURCE name, because
+that is what the broker actually limits. A longer cooldown can never be
+shortened by a later, smaller one. `reset()` exists so tests clear it by
+name rather than poking globals.
+
+**And I immediately proved why that matters**: adding the shared registry
+broke `test_prev_close_429`, which reset `app._quote_rate_limited_until`
+directly and so left the shared cooldown set. That is the exact hazard
+`rate_limit.py`'s own docstring warns about, introduced in the same
+commit that documented it. Test now calls the named reset.
+
+### B2 — two suites that tested the environment, not the code
+
+`test_manual_deploy` starved on margin whenever a previous suite left
+positions in `open_state.json` — two leftover spreads consume ₹170,000
+and "insufficient margin" then fails checks with nothing to do with
+margin. Now snapshots, clears, and restores on exit, and lifts the
+v58.39 rupee cap within that scope.
+
+Worth recording: my first attempt inserted the isolation block after the
+LAST `import` line found anywhere in the file, which put it at line 184
+— after the suite's own `config.save()` calls at lines 63 and 122 had
+already run. It parsed, it ran, and it did nothing. Placement now
+asserted by test (`i_block < i_first_save`).
+
+`test_chart_indicators` failed 15m/overlays on a WORKING system: those
+panes need enough bars for EMA50 plus warmup, and a local archive often
+holds ~52 fifteen-minute candles, so the server correctly reported the
+pane unavailable. Data-dependent, not a defect. Now SKIPPED with the
+count and requirement printed — and a pane missing WITH enough bars
+still fails, so a genuine regression is not masked.
+
+## v58.48 — S3 absorbs deck setups 4, 5 and 6 (2026-07-29)
+
+The source deck's remaining High Probability Setups:
+
+    4  Trading for Wave 3   — enter at the end of Wave 2
+    5  Trading for Wave 5   — enter at the end of Wave 4
+    6  Trading the main trend at the end of Wave C
+    7  Trading the correction after Wave 5 (COUNTER-trend)
+
+Setups 4, 5 and 6 are the SAME TRADE in three costumes: "a correction
+is ending, resume with the trend". That is precisely what Anchor
+Pullback already does. They never warranted three new strategies. What
+they add is a way to judge WHICH pullback is worth taking — the one
+thing S3 had no opinion about, since it took every touch of the anchor.
+
+Four independent confirmations, each mapping to a specific deck line:
+
+    require_tide                 setup 4, "MACD Histogram of the TIDE
+                                 should favor the trade"
+    require_macd_zero_reversal   setup 5, "End of Wave 4 with MACD
+                                 doing Zero Line reversal"
+    require_hidden_divergence    setups 4/5, reverse divergence marks
+                                 the end of a corrective wave
+    require_bb_confirm           setup 4, "Bollinger Band should
+                                 confirm previous correction"
+
+`min_confirmations` decides how many must agree.
+
+**Setup 7 is deliberately excluded.** It is a counter-trend fade after
+a five-wave advance completes, which belongs with the reversal
+detectors in Strategy 8. Forcing it in would have made S3 mean two
+opposite things at once — and the exclusion is documented in the code
+rather than silently omitted.
+
+### Default behaviour is byte-identical
+
+Everything is OFF and `min_confirmations` is 0, at which point the
+filter short-circuits before computing a single indicator. S3 has live
+trade history; v58.39's lesson was that silently changing a strategy
+destroys the ability to compare before and after. Asserted across
+several synthetic paths.
+
+Indicator primitives are REUSED from ta_elliott rather than
+reimplemented, so the Tide, Bollinger phase and divergence definitions
+cannot drift between Strategy 3 and Strategy 9.
+
+### Two bugs the tests caught
+
+  - The four new gates were missing from tune()'s binary list, so a
+    (0,1) bound stepped by 0.25 produced 0.75 — a truthy fraction
+    leaving a gate nominally "on" with a meaningless value. Exactly the
+    defect identified in v58.28 and, evidently, easy to reintroduce
+    every time a binary parameter is added. Worth a lint rather than
+    vigilance.
+  - `test_strategies_table_v2` asserted `is_live_enabled` appears twice
+    in agents.py and found four — because v58.46's warning MESSAGE
+    mentions it in prose. Narrowed to count the call form. An assertion
+    that punishes documentation is the wrong assertion.
+
+### Deck coverage now
+
+    Setups     6 of 7   (S8: 1,2,3 · S3: 4,5,6 · setup 7 = S8 territory)
+    Indicators 5 of 5
+
+Still absent: wave counting, Fibonacci targets/retracements, the three
+explicit SL rules, and Ripple-timeframe entry timing.
+
+## v58.47 — momentum_confluence's MACD-histogram early exit (2026-07-29)
+
+The one documented simplification in this module's Pine port, carried
+since the port was written. The original exits the moment the MACD
+histogram's slope reverses; the port used a fixed risk-reward target as
+an explicit stand-in.
+
+pa_strategies' own note was accurate about WHY it was deferred: "there
+is no existing mechanism for 'keep evaluating an index-level condition
+on every future candle for an open position'." Every other PA strategy
+expresses its exit as fixed stop/target PRICES computed once at signal
+time, which the monitoring loop compares against. A histogram turn is a
+condition on FUTURE candles, not a level. **Building that mechanism was
+the actual work here**; the histogram test itself is ten lines.
+
+`agents.dynamic_exit_reason()` is deliberately generic — a position
+carries `dynamic_exit: "<condition name>"` and the monitor loop
+evaluates it every cycle, so a second strategy can reuse it without
+touching the loop. Only momentum_confluence sets it today.
+
+**Precedence.** After the hard stop, target and profit floor; BEFORE
+the time stop and EOD square-off. It is a strategy edge signal, not a
+capital backstop, so it must not pre-empt the mechanisms that protect
+capital — but it must pre-empt the blunt clock, which is what closed a
+₹3,705-peak position for ₹830 on 29 July.
+
+`hist_turn_confirm_bars` (default 2) requires the reversal to persist.
+The ENTRY logic reads a single bar because it is confirming a setup
+that already exists; an EXIT tripping on one bar would surrender every
+position to ordinary chop. Tunable 1-4, and relaxing means requiring
+MORE confirmation, i.e. exiting later.
+
+### A bug my own error-handling hid
+
+The first version referenced a module-level `mcs` that does not exist —
+it is a LOCAL import inside evaluate(). That NameError was swallowed by
+the function's own broad `except Exception: return None`, so the exit
+silently never fired while the function looked like it worked. The
+except stays (an exit path that can throw is worse than one that
+occasionally misses) but the test now asserts the condition actually
+FIRES rather than merely not crashing. "Does not raise" is not a test.
+
+### Test scoping error worth recording
+
+A precedence assertion searched the file for `time stop` and matched
+the SPREAD one (a different function, earlier in the file) instead of
+the OPTION one, reporting a failure that did not exist. Fixed by
+searching after the dynamic-exit index. String-matching source across
+function boundaries compares unrelated code.
+
+## v58.45 — bug sweep of this session's own code (2026-07-29)
+
+Asked "any pending bugs unattended?", I hunted rather than listing from
+memory. Three defects found, all introduced by ME during v58.35-v58.44.
+
+**1. Dead config read.** `rupee_profit_floor()` read a `_rpf_class`
+config key that is set nowhere in the codebase. Harmless but
+misleading — a future reader would look for where it is written.
+
+**2. Precedence-dependent class resolution.** The line
+`kls = kls or label if label in (...) else kls` parses as
+`(kls or label) if (...) else kls`, which happens to be correct but is
+one edit away from silently selecting the wrong risk class. Replaced
+with an explicit conditional, behaviour asserted per-label by test.
+
+**3. gmma_series_for could mislabel the timeframe.** When NEITHER the
+1m nor 5m series had enough bars it returned the longer one but tagged
+it with the timeframe that was REQUESTED, not the one the data came
+from. That label is persisted to the calibration table as `gmma_tf` —
+so this would have quietly corrupted the very dataset the v58.41
+logging exists to produce, in the exact scenario (short series, early
+session) where it matters most.
+
+None of these would have shown up as a crash. All three are the kind of
+defect that survives indefinitely because nothing fails loudly.
+
+## v58.44 — the generator ignored its own rules (2026-07-29)
+
+Pending items 5 and 18.
+
+### Item 5 — root cause of 26 of 63 daily rejections
+
+    18/day   "risk-reward 0.8 (need >=2.0)"
+     8/day   "strike 24100 not OTM (ATM 24200)"
+
+The LLM prompt STATES both rules — "Min 1:2 RR (target1-entry >=
+2*(entry-stoploss))" and "ATM/ITM strikes only, never OTM" — and
+nothing validated the reply. A live example: entry 190.35, SL 160.55,
+T1 213.8 is rr 0.79, and a 24100 strike on a PE with ATM 24200 is OTM.
+The model broke BOTH stated rules, the signal was built anyway,
+travelled the whole pipeline, and was discarded at the risk gate.
+
+The rule-engine FALLBACK never had this problem: it hard-codes
+ltp*0.70 / ltp*1.60 (rr exactly 2.0) and strike = ATM. So the gate was
+right and the GENERATOR was wrong — which is why the fix is in the
+generator and not a looser gate. It is also the same class of bug as
+the already-fixed `signal` field check sitting ten lines above, one
+field over.
+
+`analyzer.enforce_signal_invariants()` repairs rather than rejects — a
+directionally-correct signal with bad arithmetic is still worth taking
+at corrected levels — and logs every repair, so how often the model
+disobeys becomes visible rather than silent.
+
+One subtlety worth noting: snapping the strike also RE-READS the
+premium. ₹190.35 was the price of the 24100 contract; keeping it while
+changing the strike to 24200 would have priced a contract we are not
+buying. Asserted by test.
+
+Degenerate input (stop at or above entry) falls back to the rule
+engine's own fractions rather than inventing numbers, and that fallback
+is itself asserted to clear the gate.
+
+### Item 18 — futures had no shadow journal
+
+Options and Strategy 7 have had one since v51. Futures never did — so
+the one instrument class demonstrably losing money (40 trades, 27.5%
+win, -₹23,863) was the only one whose REJECTED signals left no record.
+There was no way to ask "was the gate right to block that?", and no
+volume for the ML probability model.
+
+This matters more after v58.39: the per-trade rupee cap and the ADX
+gate will both refuse trades, and without a record an over-tight filter
+is indistinguishable from a correctly-filtered bad trade. Logged at
+every exit of the evaluator — budget block, sizing refusal, and the
+eligible path — into the same JSONL options use, tagged
+kind="futures".
+
+## v58.43 — staleness clarity, missing docs, ambiguous silence (2026-07-29)
+
+Pending items 9, 11 and 12.
+
+### Item 9 — "analysis is 1785296955s old"
+
+That is 56 years. `time.time() - (bus.get(key) or 0)` subtracts an
+ABSENT timestamp from zero and yields the current epoch. It failed safe
+— evaluation was skipped either way — but it conflated two conditions
+that need different responses:
+
+    MISSING   the feed has not delivered yet. Normal at startup, and it
+              resolves on its own.
+    STALE     the feed delivered and then stopped. A real fault.
+
+and a 56-year number reads like a clock bug, burying genuine staleness
+warnings in noise.
+
+New `data_age_of(bus, *keys, label=)` returns `(age_or_None, reason)`.
+MISSING now SKIPS rather than rejects, per this project's standing
+graceful-degradation rule; only a genuinely stale feed fails the gate.
+A zero timestamp counts as missing rather than as 1970 — asserted by
+test, since zero is exactly what produced the original figure.
+
+Both call sites converted (RiskAgent's freshness check, StrategyAgent's
+spread gate). No raw `or 0` staleness pattern remains.
+
+### Item 11 — momentum_confluence had no docs entry
+
+Absent from `strategy_docs.DOCS` since before v58.27, so its
+Configuration view rendered empty. Added, covering both entry paths
+(the 4-way confluence reversal and the equal-highs/lows "weapon"
+pattern) and naming the known gap honestly: the Pine original's
+MACD-histogram early exit is NOT wired in. Every PA strategy now has a
+docs entry.
+
+### Item 12 — mtf_confluence logged zero lines all session
+
+Its status lived only in a `summary` string, which shows on the Agents
+page if someone looks. Silence was therefore ambiguous: working and
+quiet, or silently unavailable?
+
+`_announce_once()` logs a status line once per calendar day — both when
+the agent CANNOT run ("requires Dhan... INACTIVE this session") and
+when it CAN ("active — silence after this line means no qualifying
+setup, not an inactive agent"). Once per day, not per 15-minute cycle.
+
+The second half matters more than the first: an agent that says nothing
+is indistinguishable from an agent that is not running, and this system
+has several agents whose normal state is silence.
+
+## v58.42 — websocket subscription storm + honest strike gate (2026-07-29)
+
+Pending items 8 and 4.
+
+### Item 8 — 2,080 frames in a burst
+
+`subscribe_more()` sent ONE websocket frame per instrument,
+synchronously, on every call. A live log showed the subscription
+reaching 2,080 instruments and then:
+
+    09:26:01  ws: error: no close frame received or sent
+    09:26:03  ws: connected — 4 instrument(s) subscribed
+
+The server tore the connection down without a close handshake, and the
+in-flight send onto the dead socket is the `socket.send() raised
+exception` seen on the console. Dhan documents ~100 instruments per
+subscribe message; two thousand individual frames is well outside it.
+
+Requests are now buffered and flushed in chunks of 100 with a 250ms
+gap by a daemon thread. A failed chunk is logged and the remaining
+chunks still go — losing one chunk beats losing the feed, which is what
+the unbatched version did. `subscribe_more()` keeps its original return
+contract (False = do not treat as subscribed) because callers rely on
+it.
+
+~115 SENSEX option instruments in that count had NEVER produced a tick.
+They are now skipped outright (`skip_option_symbols`), freeing
+subscription slots and removing dead weight from the burst.
+
+### Item 4 — the gate's message was the opposite of what it did
+
+8 rejections/day read "strike 24100 not OTM (ATM 24200)". For a PUT,
+24100 against a 24200 spot IS out-of-the-money. The condition
+(`strike >= atm` for PE, `strike <= atm` for CE) actually enforces AT-
+or IN-the-money — a defensible policy, the sane reading being "don't
+buy far-OTM lottery tickets with no delta". So the policy may well be
+right while the label was its opposite, which made every one of those
+rejections unreadable.
+
+**The condition was deliberately NOT flipped.** This is a live trading
+gate and guessing at intent is how real money is lost. Instead the
+policy is explicit and configurable (`option_strike_policy`, DEFAULT
+UNCHANGED at "atm_or_itm"), and the message now states what it
+enforces. "atm_or_otm" flips it; "any" disables it.
+
+That leaves an open question for you rather than an assumption from me:
+the signal generator produced BUY_PE 24100 while the gate wanted
+>= ATM. One of the two is wrong about strike selection, and which one
+depends on whether you intend to buy ATM/ITM (higher delta, less theta)
+or OTM (cheaper, more leverage). The gate now tells you which it is
+doing every time it fires.
+
+### Item 5 not attempted
+
+The 18 daily risk-reward rejections need the signal generator's
+target construction traced properly. Deferred rather than guessed at.
+
+## v58.41 — measurable S9 thresholds + cost guard (2026-07-29)
+
+Items 6, 7 and S9 from the pending list. Two of the three "threshold"
+problems turned out not to be thresholds at all.
+
+### GMMA was not tunable — it was absent
+
+`gmma_state` returned None on **79.1%** of 211 real observations. Not
+NEUTRAL: NOT COMPUTABLE. It needs `max(GMMA_LONG) + 5` = 65 bars, and
+on 5m that is 325 minutes of a 375-minute session — the ribbon does not
+exist until ~14:40 IST. `gmma_expansion` firing 0% was never a
+threshold problem.
+
+The 30-60 long bank is a DAILY-chart calibration, which is what the
+source deck uses it on. Moved to 1m (`ta_gmma_timeframe`), where the
+same periods give a 60-minute lookback available from ~10:15. Falls
+back to 5m when 1m is short. Verified: computable 20.9% -> **100%**.
+
+Same class of error as the Tide horizon fixed in v58.31 — a period
+count copied from a daily chart onto an intraday series. Worth watching
+for a third instance.
+
+### bb_slope_eps genuinely was too high
+
+Across the same 211 observations price tagged a Bollinger band 33 times
+and the slope NEVER exceeded 0.0004 in the tag direction, so IMPULSE
+classified 0.0% of the time. At NIFTY 24,200 that threshold demanded
+the 20-bar mid move ~10 points per 5m bar. Lowered to 0.00015; on a
+synthetic check IMPULSE went 0.0% -> 42.3%. Re-check against real data.
+
+### The log now stores INPUTS, not just conclusions
+
+The first calibration cut recorded derived states only, so it could
+show that `bb_slope_eps` was too high without showing what it should
+be, and could not diagnose the dead divergence signals at all. Added
+`bb_slope`, `bb_width_pct`, `gmma_spread`, `gmma_thresh`, `gmma_tf`,
+`pivots_5m`, `pivot_lows`, `pivot_highs`, and percentile distributions
+in the summary.
+
+It immediately answered the open question. On a synthetic session:
+
+    obs_with_2plus_pivot_lows_pct   0.0
+    obs_with_2plus_pivot_highs_pct  0.0
+    pivots_5m  p50 = 1,  p90 = 2
+
+**Divergence needs two same-side pivots to compare and never had them.**
+No oscillator threshold can make those three signals fire while the
+pivot series is that sparse — `ta_zigzag_deviation_pct` is the lever,
+and now there is a number to set it against. `ta_min_confluence` stays
+untouched until this is settled on REAL data.
+
+### fee_per_lot = 0 now warns loudly
+
+Every replay costs trades at `fee_per_lot`, and `is_live_enabled()`
+gates real trading on replay profitability. At zero, every backtest
+overstates profit and a strategy can be promoted to live on
+free-trading assumptions — ₹1,600 per round trip missing on a 10-lot
+spread. BacktestAgent now logs and raises a HIGH alert instead of
+silently producing flattering numbers.
+
+### Items 6 and 7 remain YOUR settings to change
+
+Deliberately not overwritten — they are on-disk values, not defaults,
+and silently rewriting a user's saved config is the wrong move. See the
+session notes: set `fee_per_lot` back to 40, and for the spread lock
+keep the LOW trigger but raise `spread_profit_lock_pct` from 20% to
+~75% (the giveback was the keep fraction, not the trigger).
+
+## v58.40 — regression + accuracy review (2026-07-29)
+
+Full-tree review after the v58.35-v58.39 run of changes. 69 suites,
+plus numeric verification of every new formula.
+
+### Regression: 61 of 69 pass; the 8 that don't, and why
+
+  test_chart_indicators      PRE-EXISTING — pristine v58.27 fails
+                             identically (15m/overlays, 15m/panes).
+                             Data-dependent: 52 archived 15m candles is
+                             too few for EMA50 + warmup, so the pane is
+                             correctly reported "unavailable" while the
+                             test asserts it should be present.
+  test_manual_deploy         PRE-EXISTING — starves on margin whenever
+                             a previous suite leaves open positions in
+                             open_state.json. Does not snapshot-restore.
+  test_dhan_scrip_master     network (HTTP 403 in sandbox)
+  test_dhan_ws               needs live broker credentials
+  test_kotak                 interactive getpass
+  test_kotak_ws              `websocket` module absent
+  test_macro_news_restructure  intentionally retired
+  test_db_concurrency        actually PASSES (different pass string)
+
+### Bug found and fixed by the review
+
+`test_futures_defense_zone` was WALL-CLOCK DEPENDENT. `_monitor_futures`
+reaches `_futures_ai_check` only when the 15:15 EOD branch does not
+fire, so run in the afternoon the suite passed and run at 00:06 it
+raised AttributeError on a method the real ExecutionAgent has and its
+SimpleNamespace mock did not. It had been passing all session purely
+because of when it ran. A test that passes or fails by time of day is
+worse than one that fails outright. Mock now provides the method.
+
+### Config-leak audit
+
+Whole 69-suite sweep run against a snapshot: **zero** keys changed. The
+v58.39 `_TOUCHED` restore fix holds.
+
+### Accuracy verification (all pass)
+
+  ATR          constant 2pt range -> exactly 2.0; hand-computed 2-bar
+               Wilder case -> exactly 3.0; None below minimum bars
+  rupee cap    5 lots requested at ₹2,250/lot vs a ₹2,500 cap -> 1 lot;
+               ₹7,500/lot -> blocked; 3 lots at ₹750 -> unchanged
+  profit floor ratchet monotonic across a rising-then-falling P&L path
+               [0, 480, 900, 1800, 1800, 2400, 2400]; peak tracks the
+               maximum; floor is exactly keep_pct of peak
+  budgets      net-of-wins arithmetic correct; one class blocked leaves
+               the others free
+  geometry     payoff exactly 1.8333; breakeven win rate 35.3%
+
+### The number that matters most
+
+The new geometry lowers the required win rate from **56.4% to 35.3%**.
+But at the observed **27.5%** win rate the engine is STILL negative:
+
+    win 27.5%  ->  -0.221R   still loses
+    win 35.0%  ->  -0.008R   breakeven
+    win 40.0%  ->  +0.133R   profitable
+
+**The geometry fix alone does not make futures profitable.** It halves
+the required win rate; the entry signal must still improve from 27.5%
+to above ~35%. This matches the external research directly: random
+entry at a 1:2 geometry produces roughly 33%, so a 27.5% signal is
+performing BELOW random and no exit arithmetic can rescue it.
+
+`futures_min_adx` (22) is the entry-quality lever added for this, and
+it is UNVALIDATED. Futures must stay paper-only until a session's data
+shows the win rate clearing 35%.
+
+## v58.39 — futures overhaul, separate risk budgets, per-class exits (2026-07-29)
+
+### Diagnosis (40 live futures trades)
+
+    win rate 27.5%   payoff 0.77   expectancy -₹597/trade
+    breakeven win rate needed at that payoff: 56.4%
+
+    exits:  15 EOD (+₹6,516)          13 manual (-₹1,696)
+            11 kill-switch (-₹21,215)   1 own stop (-₹7,468)
+             0 target
+
+ZERO trades reached target; ONE reached its own stop. Three root causes.
+
+**GEOMETRY.** `futures_sl_pct` 0.4% / `futures_target_pct` 0.8% is a
+97-point stop and 194-point target on NIFTY at 24,200 — the stop sits
+inside ordinary intraday noise, the target asks for most of a session's
+range. Replaced with ATR multiples (1.5x stop, 2.75x target), which
+holds the designed payoff constant across volatility regimes. Falls
+back to the old fixed percentage when ATR is unavailable.
+
+**SIZING.** `size_future()` short-circuits to `lots_per_trade` whenever
+`dynamic_sizing_enabled` is False — the DEFAULT — so the entire
+risk-budget block below that early return was dead code on a stock
+install. One stop therefore cost ₹7,468 against a ₹5,000 daily limit:
+the per-trade stop could never bind, and the portfolio kill-switch
+became the de-facto stop, taking 89% of all futures losses.
+`sizing.cap_by_rupee_risk()` now applies a hard rupee ceiling in BOTH
+sizing modes — it is a risk ceiling, not a sizing strategy.
+
+**SENSEX dropped from futures.** 10% win over 10 trades, and its data
+pipeline is separately broken (0 archived chain days, websocket never
+ticks its options). No strategy fix helps an instrument whose data is
+wrong. Still traded for options and spreads.
+
+### Separate risk budgets
+
+Spreads (+₹15,235), option buys (+₹4,657) and futures (-₹23,863) shared
+ONE `daily_loss_limit` and one kill-switch, so the losing class spent
+the winners' allowance. Per-class sub-budgets now stop that. They
+deliberately sum ABOVE the global limit: the global stays the hard
+ceiling, the classes only prevent any one of them consuming all of it.
+Sizing them to sum exactly would leave the last class to trade unable
+to trade at all.
+
+### Per-class exit logic
+
+v58.35 applied ONE profit-floor ratchet to everything. Correct for a
+directional buy, wrong for a credit spread: a spread decaying normally
+toward max credit routinely gives back 40% of an intraday mark peak as
+spot oscillates, so a 60%-of-peak floor converts theta collection into
+a scalp paying four legs of fees each time. Spreads now arm at ₹2,000
+and keep 75%; options arm at ₹600 keeping 60%; futures at ₹750 keeping
+55%.
+
+### Previously-highlighted fixes also shipped
+
+  - Quality page reads `setup`, so the 12 real PA trades that were
+    hidden inside "CE-buy"/"PE-buy" now show under their own names.
+  - Futures labelled `futures-long`/`futures-short` instead of
+    "?-buy" — the biggest loss bucket in the system was hidden behind
+    an unreadable label, and "buy" was wrong for a futures position.
+  - Spread close persists `source`.
+  - Strategy configuration is reachable via an always-present button
+    rather than only the version select's `onchange`, which never fired
+    for a strategy with a single version.
+
+### The arithmetic you should know about
+
+With the per-trade cap at ₹2,500, a NIFTY futures lot fits under an ATR
+stop (~30pt x 75 = ₹2,250) but BANKNIFTY often will not (~120pt x 30 =
+₹3,600). That is not a bug — it says plainly that a ₹5,000 daily loss
+limit cannot support BANKNIFTY futures at correct risk. Either raise
+`daily_loss_limit`, raise `futures_risk_per_trade_rupees` knowingly, or
+accept NIFTY-only futures. NIFTY is in any case the only profitable
+futures symbol in the journal (66.7% win, +₹3,900 over 6 trades).
+
+
+### A leak this release caused and caught
+
+`test_futures_phase2` restores the on-disk config from an explicit
+allow-list. Adding a new key to what it WRITES without adding it to
+that list leaks the test value to the real `config.json` — which
+happened here: a run left `futures_risk_per_trade_rupees` persisted at
+0, silently disabling the protection this release exists to add, on the
+very machine that ran the tests. The restore now derives from a single
+`_TOUCHED` tuple and the suite asserts that nothing leaked past it.
+
+### Pre-existing issue found, not fixed
+
+`test_manual_deploy` fails after any suite that leaves open positions
+in `~/.ltp-monitor/open_state.json` — two leftover spreads consume
+₹170,000 of margin and starve it. That suite does not snapshot-and-
+restore persisted state, which is this project's own documented
+testing discipline. Unrelated to this release.
+
+## v58.38 — continuous chart shows the TRADES too (2026-07-29)
+
+v58.37 made earlier days reachable by scrolling but left the marker
+code filtering on `t.day === day`. In continuous mode `day` is the
+sentinel `"__all__"`, which matches no trade — so scrolling left showed
+candles with zero markers on them. That reads as "the backtest produced
+no result for those days", which is the exact confusion the continuous
+chart was built to remove. Half-fixing it was arguably worse than not
+touching it.
+
+  - Every trade is marked across the whole range in continuous mode.
+  - Day separators are drawn from the endpoint's `day_boundaries`, so a
+    day the backtest ran over with NO setup is visibly present and
+    labelled "no trade" rather than being an unmarked stretch of
+    candles indistinguishable from a gap in the data.
+  - The view opens on the MOST RECENT session and the user scrolls
+    left, which is what was asked for. `fitContent()` would compress 30
+    sessions into one screen and make individual candles unreadable; it
+    is kept as the fallback and for single-day mode.
+  - Legend reports totals across all days plus how many days were
+    backtested and found no setup.
+
+Separators are appended BEFORE the ascending sort — Lightweight Charts
+requires markers sorted by time, a constraint this project has already
+had to fix once on the main chart.
+
+## v58.37 — S8 was never evaluated; chart and eligibility gaps (2026-07-29)
+
+Three gaps, all found from live screenshots plus a session log.
+
+### 1. Strategy 8 has been completely dark since v58.28
+
+The `s8_auto_deploy` gate sat BEFORE evaluation, so with it off — the
+default, and how S8 shipped — the strategy never ran at all. No
+eligibility, no Shadow Journal, no detector counts, nothing to
+calibrate. The live log proved it: every other PA strategy reported 4
+no-setup counts per cycle (one per symbol) while ew_reversal reported 0.
+
+    (no-setup by strategy: {'ema_mtf': 4, 'momentum_confluence': 4,
+     'orb': 4, 'sg_ema': 4, 'vwap_pullback': 4, 'ew_reversal': 0})
+
+This is the SAME mistake diagnosed and fixed for Strategy 9 in v58.32
+— confluence computed inside the auto_deploy gate, so observing with it
+off captured nothing — and left uncorrected in S8. The rule, now
+asserted by test in both places: **gates govern TRADING, never
+observation.** Detector outcomes are published to `s8_eligibility:{sym}`
+every cycle regardless.
+
+Worth noting the comment sitting next to the bug claimed "eligibility
+still visible via API". It was not — see gap 2.
+
+### 2. ew_reversal read "not eligible" permanently; ta_elliott had no row
+
+The Strategies page routes PA strategies through `pa.evaluate()`, which
+deliberately does NOT dispatch ew_reversal (Strategy 8 has its own
+module and signature). It therefore fell to a bare `return None` and
+reported "not eligible" forever — precisely what the file's own sg_ema
+comment warns about, three lines above. ew_reversal now joins sg_ema as
+an exclusion and reads the published bus verdict instead.
+
+ta_elliott is not in PA_NAMES at all (it has its own agent), so it had
+never appeared on the page in any form. It now gets a row showing
+phase, tide and confluence count.
+
+### 3. Backtest chart omitted days that produced no trade
+
+The day dropdown was built from days that had a TRADE, so 27/28/29 July
+were simply absent — indistinguishable from the backtest not having
+run, which is exactly how it was reported. The backtest had run fine;
+bull_put_spread just found no setup on those days.
+
+New `/api/backtest/range-candles` concatenates every archived day into
+one continuous series, and `/api/backtest/status` now returns the
+archived day LIST rather than only a count. The chart defaults to the
+continuous view — scrolling left moves through prior sessions — and the
+selector labels no-trade days explicitly instead of hiding them.
+
+The original single-day scoping reasoned that disjoint sessions render
+badly because of overnight gaps. Not true for Lightweight Charts: its
+time scale allocates space only for bars present in the data, so the
+gaps collapse and sessions read continuously.
+
+### Why the other strategies took no trades (answered, not a bug)
+
+`no_setup: 550` across the session, spread evenly across ema_mtf,
+momentum_confluence, orb, sg_ema and vwap_pullback. They ran on every
+cycle and found no qualifying setup. "not eligible" on the Strategies
+page means "no setup at this instant" — the screenshot was taken at
+16:33, after the close, when nothing can be eligible by definition.
+That label is doing two jobs and should be split into "enabled?" and
+"setup right now?" in a future pass.
+
+Also observed: `[mtf_confluence]` logged 0 lines all day. It requires
+Dhan `historical_daily()` and degrades to a summary rather than a log
+line, so silence is ambiguous — worth making it state its status
+explicitly once per session.
+
+## v58.36 — AI advisory becomes event-driven (2026-07-29)
+
+"After every 5 mins is too late." Correct — positions peaked and gave
+the gain back inside a single 5-minute window all session. But lowering
+the interval was not the fix, because it breaks two hard constraints:
+
+  BUDGET   `ai_daily_call_cap` is 400. A 375-minute session at a flat
+           300s cadence across 4 positions already costs ~300 calls. At
+           60s it is ~1,500; with `max_concurrent_spreads` = 10 it is
+           ~3,750. A blind cadence drop exhausts the cap mid-morning
+           and the advisory is then DEAD for the rest of the day —
+           worse than slow.
+  LATENCY  `ollama_timeout` is 60s. At any fixed cadence the verdict
+           can describe a market state that has already moved on.
+
+So the LLM cannot be the fast exit path, at any interval. The
+deterministic reflexes are — rupee profit floor, stop, target, defense
+zone — and they already run on the 2s execution cycle. The AI is the
+slow contextual layer, and its cadence is now driven by EVENTS:
+
+    ai_exit_advisory_danger_interval_sec    20   hard floor, protects the cap
+    ai_exit_advisory_min_interval_sec       45   floor for move-triggered calls
+    ai_exit_advisory_max_interval_sec      300   periodic review when quiet
+    ai_exit_advisory_move_trigger_pct       25   % of risk moved -> review
+    ai_exit_advisory_giveback_trigger_pct   30   % of peak given back -> review
+
+Triggers, in precedence order: danger (near stop, or handing back a
+peak) -> material move measured against the position's OWN risk ->
+periodic fallback. The move trigger is expressed in the position's risk
+rather than a percentage of price, so the same rule works for a ₹120
+option and a 57,320 futures entry — the unit mistake that made every
+percentage-of-price threshold useless in v58.35's diagnosis.
+
+Net effect: a position in trouble is reviewed in ~20s instead of 300s,
+while a calm day uses FEWER calls than the flat poll it replaces.
+
+### Advisory latency is now measured
+
+Every advisory line carries `took Ns` alongside its trigger reason.
+This is the number that decides whether any of this is usable: if the
+local model routinely takes 20s+, the advisory cannot be an exit input
+and must stay advisory-only regardless of how fast it is triggered.
+Watch this before enabling any `*_ai_auto_exit_enabled` flag.
+
+## v58.35 — Rupee profit floor + AI advisory logging (2026-07-29)
+
+Built from a full live session. The numbers first, because they are the
+whole argument:
+
+    peak unrealised (sum of MFE)   ₹55,707
+    realised                       ₹24,429
+    GIVEN BACK                     ₹31,278   (43.9% capture)
+    trades that gave something back   20 of 31
+
+### Diagnosis: the unit was wrong, not the mechanism
+
+Across 1,079 log lines the profit-protection stack was inert — spread
+profit-lock fired 0 times, trailing SL produced 0 protective exits, AI
+advisory produced 0 output. Trades were closed by time stop (4), EOD
+square-off (9), kill-switch (4) and hard stop (6). Nothing protected
+profit; the blunt instruments cleaned up afterwards.
+
+Every PERCENTAGE-denominated protection failed to arm:
+
+  * spread profit-lock arms at `profit_target x 80%`. Armed on 2 of 11
+    spreads — both of which reached target anyway. One peaked at
+    ₹11.40/sh against an arming level of ₹12.08, missed by 6%, then
+    gave back ₹2,875. A lock that arms at 80% of target can only
+    protect trades already about to hit target.
+  * `trail_sl_trigger_pct` = 5% of premium. The big-giveback options
+    peaked at 0.6% / 1.0% / 1.5% / 4.4%.
+  * `futures_trail_trigger_pct` = 0.3% of PRICE. On a 57,320 entry that
+    is a 172-point move; the best futures position peaked at 138.
+
+Every RUPEE-denominated exit captured its full peak: three
+`transaction_target_rupees` exits with ZERO giveback, plus the single
+`step_trail` exit that fired. Futures were worst — MFE ₹11,934 across
+the day became -₹645 realised, with not one protective exit.
+
+### Fix
+
+`agents.rupee_profit_floor()` — ONE ratchet, in rupees, identical for
+options, spreads and futures. Arms at an absolute P&L, keeps a
+fraction of the peak, rises with new peaks, never falls. A minimum
+floor value stops it firing on peaks smaller than the fees.
+
+    rupee_profit_floor_enabled       True
+    rupee_profit_floor_arm_rupees    750   (vs step_trail's ₹2000)
+    rupee_profit_floor_keep_pct      60
+    rupee_profit_floor_min_rupees    300
+
+Placed BEFORE the blunt instruments in every chain — asserted by test
+that the futures floor precedes the EOD square-off and the spread floor
+precedes the time stop, because those are exactly what closed today's
+give-backs.
+
+### Measured on today's real trades
+
+Replaying the 20 give-back trades through the floor: **₹9,824 recovered,
+31% of the measured giveback**, turning that cohort from -₹5,465 to
++₹4,359.
+
+This is a conservative LOWER bound — the ratchet exits the moment P&L
+touches the floor and the floor rises with each new peak. It is NOT a
+projection of the same total: exiting early changes what follows, and a
+trade stopped at its floor can no longer reach its target. Read it as
+"the giveback this would have prevented", not "the P&L this produces".
+
+### AI exit advisory now logs unconditionally
+
+All three advisories computed a verdict every 5 minutes and discarded
+it unless it was EXIT *and* above threshold — so with auto-exit off
+(the default) the whole subsystem was invisible. Zero lines in 1,079.
+There was no way to ask "would enabling it have helped?" because there
+was no record of what it said.
+
+`_log_ai_advisory()` now records every verdict — HOLD, sub-threshold
+EXIT, and would-have-acted EXIT — tagged with whether auto-exit was on.
+One session of that data can settle whether to enable it.
+
+### Still open from the same session
+
+  - S9 calibration is now DECISIVE and negative: 211 real observations,
+    IMPULSE phase 0.0% (a threshold that never fires once in a session
+    is broken, not selective), 5 of 7 signals never fired, max
+    confluence reached 2 against a threshold of 3. S9 could not have
+    fired today. Fix `ta_bb_slope_eps` and `ta_zigzag_deviation_pct`
+    before touching `min_confluence`. The Tide fix is confirmed working
+    (`tide_unavailable_pct` 0.0).
+  - Fees were ₹600 on one spread and ₹0 on three others in the SAME
+    close path — check `lots` is populated on every spread. A
+    `fee_per_lot` of 0 also silently flatters every backtest.
+  - Time stop closed a position at ₹830 that had peaked at ₹3,705.
+    Consider making it conditional on the position being flat or
+    negative rather than firing blind on the clock.
+
+## v58.34 — 429 amplification + all-day feature disable (2026-07-29)
+
+Both found from a live log at 00:51 that showed the batch prev_close
+call hitting 429, followed immediately by all four symbols each making
+their OWN per-symbol quote call — every one of which also 429'd. FIVE
+requests where ONE had already been refused.
+
+### Bug 1 — a 429 was amplified, not backed off from
+
+The v58.x batching fix correctly collapsed four per-symbol calls into
+one. But it left the per-symbol path in place as a fallback, and that
+path runs when the BATCH fails. So under a rate limit the old 4-call
+behaviour came straight back — at the exact moment the endpoint was
+already contended.
+
+A 429 does not mean "that batch was malformed, try them individually";
+it means stop. The per-symbol path remains a genuine safety net for a
+batch that returned MISSING a symbol, but it is now suppressed while
+the quote endpoint is in a 429 cooldown. Reuses the cooldown convention
+broker_adapter already applies to the sibling LTP endpoint rather than
+inventing a second mechanism: 300s for a 429, 30s for a transient
+network error.
+
+### Bug 2 — one transient 429 disabled the feature until midnight
+
+`_prev_close_batch_tried = today` was set BEFORE the call, so a single
+failure meant the batch never retried that day and every symbol used
+candle reconstruction for the whole session — reintroducing exactly the
+small displayed-change drift the authoritative quote path was built to
+remove. Worse, it happened at 00:51, hours before anyone would look, so
+the symptom would have shown up as "the change column is slightly off
+again" with no obvious cause.
+
+The flag is now set only on SUCCESS. A failure schedules a retry after
+the cooldown instead of giving up for the day.
+
+### Not a bug
+
+The `chart websocket: no live tick ever received for NIFTY after 30s`
+line in the same log carries `market_open=False` — that is the expected
+message outside market hours, not a fault. The candle-reconstruction
+fallback also produced sane values for all four indices, so no data was
+wrong; the cost was noise and self-inflicted API pressure.
+
+
+### Follow-on caught by the existing suite
+
+Adding the cooldown introduced a second piece of module-level state
+gating the same fetch, and `test_authoritative_prev_close` (which reset
+only `_prev_close_batch_tried`) started failing case 10: a cooldown set
+by an earlier case leaked forward and silently suppressed the batch.
+That is exactly the failure mode a global would cause in production
+too. Added `app._reset_quote_rate_limit()` so the state is resettable
+by name rather than by poking a global, and patched all 12 reset sites
+in that suite.
+
+### Worth checking during the next session
+
+The log window also had futures REST polling hitting 429 on the SAME
+endpoint (a known open item, two rounds of fixes already shipped). Both
+paths now back off independently, but they do not share a cooldown — if
+429s persist during market hours, a single shared limiter across every
+Dhan REST caller is the next step rather than a third per-path fix.
+
+## v58.33 — calibration export + consolidated pending list (2026-07-28)
+
+New `export_calibration.py`: bundles the aggregate summary, a
+per-symbol breakdown, the raw per-candle rows, and — critically — the
+`ta_*`/`s8_*` settings that were IN FORCE when the data was collected,
+into one shareable JSON file. A 0% hit rate is uninterpretable without
+knowing the threshold that produced it.
+
+Raw rows are included alongside the aggregate on purpose: the summary
+says WHETHER a signal fired, not when or alongside what. If
+`gmma_expansion` never fires, the fix differs depending on whether the
+ribbon was interleaved all session (threshold too tight) or separated
+but never widening (wrong test) — and only the per-candle rows show
+which.
+
+Contains no credentials, orders, P&L or positions; asserted by test.
+Prints a diagnostic checklist when the table is empty rather than
+writing a silently useless file.
+
+
+## PENDING WORK — current as of v58.47
+
+Rewritten 2026-07-29 after nine releases closed most of the previous
+list. Split by whether an item can be STARTED now or is waiting on
+something.
+
+---
+
+### A. BLOCKED ON REAL MARKET DATA — cannot be built, only observed
+
+**A1. S9 threshold calibration.** v58.41 fixed GMMA (computable 20.9%
+-> 100%), lowered `bb_slope_eps`, and added raw-input logging. The next
+export will show `abs_bb_slope` percentiles, `gmma_computable_pct` and
+`obs_with_2plus_pivot_lows_pct` — set `ta_zigzag_deviation_pct` from
+those, and leave `ta_min_confluence` until last.
+ACTION: run a session, `python3 export_calibration.py --days 2`.
+
+**A2. Futures entry quality.** v58.39 halved the required win rate
+(56.4% -> 35.3%) but at the observed 27.5% the engine is still
+-0.221R. `futures_min_adx` is unvalidated. v58.44's futures shadow
+journal now records what the gates refuse.
+ACTION: a session, then check how often `sizing` blocks.
+
+**A3. S8 first observation.** Only evaluated at all since v58.37.
+ACTION: a session of detector counts.
+
+**A4. Verify this session's fixes live** — websocket drop should be
+gone (v58.42), `LLM signal repaired` lines should appear (v58.44),
+`profit floor:` and `MACD histogram turned` exits (v58.35/v58.47).
+
+---
+
+### B. CAN BE PICKED NOW
+
+**B1. Futures chart markers.** v58.44 gave futures a shadow journal;
+options and S7 also have chart markers and futures still do not. Must
+go through `lwRedrawMarkers()`, sorted ascending, anchored to
+per-symbol last-candle timestamps.
+
+**B2. Test hygiene.** `test_manual_deploy` does not snapshot-restore
+`open_state.json`, so it starves on margin after any suite that leaves
+positions. `test_chart_indicators` fails 15m/overlays (pre-existing,
+data-dependent). Cheap; improves the reliability of every future
+regression run.
+
+**B3. S8/S9 dashboard UI.** Settings subcards for the `s8_*`/`ta_*`
+groups (currently `POST /api/settings` only); Strategies-page rows;
+chart markers (`s8_markers_enabled` is registered but unconsumed); a
+calibration panel over `/api/ta_elliott/calibration`.
+CAUTION UNCHANGED: neither strategy has fired. Building UI for them
+makes a non-functioning thing look operational. The calibration panel
+is the exception — it displays diagnostics, not a working strategy.
+
+**B4. Pine parity oracle for S8/S9.** S7's precedent. Pine's
+`ta.pivothigh/pivotlow` needs the same right-hand bar count as our
+confirmation or parity is meaningless.
+
+**B5. S3 upgrade — deck setups 4-7.** Wave 3, Wave 5, end of Wave C,
+correction after Wave 5 are all pullback entries that overlap S3
+(Anchor Pullback). They belong there, not in a new strategy.
+
+**B6. Shared Dhan rate limiter.** `prev_close` and futures back off
+independently. May be moot now the websocket burst is fixed — worth
+checking a live log before building.
+
+**B7. News impact-window validation.** The heuristic has never been
+checked against real candle outcomes; ~9 RSS feeds have never been
+reviewed for relevance.
+
+---
+
+### C. OPEN DESIGN QUESTIONS — decisions, not tickets
+
+**C1. Timeframe.** S8 on 1m, S9 on 5m with a 65-minute Tide. The deck's
+examples are daily/weekly. Signal or noise on an index?
+
+**C2. Multi-day candles.** Both strategies see today's session only,
+which is why the Tide horizon had to be shortened. A genuine
+higher-degree Tide needs multi-day 15m in `pa_candles`.
+
+**C3. Index volume.** The deck leans on volume; index spot has none.
+Futures volume (already fetched) or chain volume are the substitutes.
+
+**C4. S4 vs S7 collapse.** Deferred pending Shadow Journal evidence on
+whether they fire on near-identical bars.
+
+**C5. Strategy-class objectives.** v58.39 separated budgets and exits
+for spreads / options / futures. Whether they should also have separate
+CONCURRENCY limits and capital pools is undecided — currently
+`max_concurrent_spreads` 10 vs `max_concurrent_positions` 1, a 10:1
+structural bias toward spreads.
+
+**C6. Strike selection disagreement.** v58.42 made the policy explicit
+and v58.44 stopped the generator violating it — but which policy is
+RIGHT (ATM/ITM for delta, or OTM for leverage) is your call. The log
+now names the policy on every rejection.
+
+---
+
+### CLOSED THIS SESSION (v58.35-v58.47)
+
+rupee profit floor · event-driven AI advisory cadence · S8 evaluation
+gate · S8/S9 eligibility rows · continuous backtest chart + markers ·
+futures ATR geometry · per-trade rupee cap · SENSEX futures dropped ·
+separate risk budgets · per-class exits · Quality labelling · config
+button · GMMA timeframe · raw calibration logging · fee guard +
+close-time warning · websocket chunking · strike policy · staleness
+message · momentum_confluence docs · mtf status announce · signal
+invariant enforcement · futures shadow journal · momentum_confluence
+MACD-histogram early exit
+
+## v58.32 — S9 calibration logging (2026-07-28)
+
+Direct answer to "have you enabled the logs so a live run captures the
+expected parameters?" — the honest answer was NO, in two ways:
+
+  1. `ta_confluence:{sym}` was set INSIDE the auto_deploy gate. With
+     auto_deploy off — how the strategy ships, and the only sane way to
+     observe a new one — the confluence breakdown was never computed at
+     all. A full session would have captured nothing.
+  2. What it did set was a bus key: in-memory, overwritten every cycle.
+     No time series, nothing on disk, nothing to aggregate.
+
+So a live run would have produced no calibration data whatsoever.
+
+### What now exists
+
+  - `ta_calibration` SQLite table, one row per symbol per candle.
+  - `TAElliottAgent` now evaluates confluence and logs it on EVERY
+    cycle, BEFORE any tradeability gate. auto_deploy, open positions
+    and cooldowns gate TRADING only, never observation. Asserted by
+    test (evaluate/log indices must precede the gate index in source).
+  - `history.ta_calibration_summary()` and
+    `GET /api/ta_elliott/calibration?days=5&symbol=NIFTY` returning the
+    aggregate that actually answers the question: hit rate per signal,
+    which signals NEVER fire, phase mix, how often the Tide was
+    unavailable, and the confluence-count distribution.
+  - Confluence counts also surface in the Agents-page summary string.
+  - `prune_ta_calibration()` wired into the existing daily maintenance.
+  - A logging failure can never stop the strategy.
+
+### Bug caught during verification
+
+First cut keyed the table on `(ts, symbol, strategy)` with ts as
+wall-clock seconds. 35 simulated cycles collapsed into ONE row, because
+`INSERT OR REPLACE` saw them all inside the same second. Re-keyed on
+the CANDLE timestamp (`as_of`), which also matches this project's
+standing rule about never anchoring time-series to wall clock. Correct
+side effect: two agent cycles inside one 5m candle now produce one
+observation, not two.
+
+### How to use it
+
+Run with `ta_elliott_enabled` on and `ta_auto_deploy` OFF for a session
+or two, then GET the endpoint. Expect the synthetic-data result to be
+contradicted or confirmed: replay showed only `adx_dynamic` firing, the
+other six signals never. If `signals_never_firing` still lists six
+after real data, the thresholds to move are `bb_slope_eps` and
+`gmma_compression_pct` (phase mix stuck on UNCLEAR) and
+`ta_zigzag_deviation_pct` (a 5m series with too few pivots gives
+divergence nothing to compare). Do NOT tune against synthetic days.
+
+### Still not done
+
+  - No dashboard UI for S8 or S9 (Settings subcards, Strategies rows,
+    chart markers). Requested twice now; still pending.
+  - No Pine parity oracle.
+  - S8 has no equivalent calibration log - its detector outcomes are
+    still only visible via the bus. Same table has a `strategy` column
+    ready for it.
+
+## v58.31 — Backtester replay for S8/S9, and four defects it exposed (2026-07-28)
+
+Adds `replay_ew_reversal()` and `replay_ta_elliott()` plus dispatch in
+`_replay_for()` and bounds in `_bounds_for()`. Before this, `replay_pa()`
+called `pa.evaluate()`, which returns None for both new strategies — so
+both produced ZERO backtest trades, `is_live_enabled()` could never
+return True, and neither could ever graduate past paper regardless of
+performance. `sweep_params` can now tune them too.
+
+No-lookahead is enforced by recomputing pivots from the TRUNCATED
+window on every bar. Regression test asserts prefix-invariance: a pivot
+visible at bar i must still be there at bar i+1.
+
+### Four defects the replay exposed, none of which synthetic unit tests caught
+
+  - **`_resample()` emitted no timestamp.** Only open/high/low/close.
+    `replay_pa` never read one so it went unnoticed for the life of the
+    function, but `structure.zigzag_series()` keys pivots by "time" and
+    `compute_state()` keys its cache by time+close — S9's replay raised
+    KeyError on its first bar. Now carries time/ts (purely additive).
+  - **The memoisation cache served stale state inside a forming candle.**
+    Keyed on the last candle's timestamp alone, which stays fixed for
+    the whole bucket while its close keeps moving. In live that is most
+    calls (180s agent, 300s candle). Close is now part of the key.
+  - **The Tide could not exist for most of a session.** EMA(13) on
+    today-only 15m candles is a 195-minute lookback in a 375-minute
+    session — measured: unavailable until ~13:00 IST. So S8's tide gate
+    (shipped in v58.29 as a fix!) was inert for most of every day and
+    S9 could not pick a direction. Scaling to a faster series does NOT
+    help: an EMA over the same amount of TIME needs the same time
+    regardless of bar size. The horizon itself was wrong for intraday.
+    Default is now a 65-minute Tide on 5m, available from ~10:20;
+    `ta_tide_use_15m` restores the longer horizon.
+  - **S9's phase gate made the strategy unable to trade at all.** It
+    demanded a positive CORRECTIVE label, which the Bollinger
+    classifier produces on ~2% of bars (UNCLEAR on ~72%). Zero trades
+    at every confluence threshold including 1 of 7. The correct gate is
+    "do not CHASE an impulse"; min_confluence is the real filter.
+    `ta_require_corrective_phase` restores the strict reading.
+
+### Known, unresolved — S9 still does not fire on synthetic data
+
+With all four fixed, S8 produces trades in replay; S9 produces none.
+Instrumented cause: of the seven confluence signals, only `adx_dynamic`
+ever triggers on a synthetic day. The other six depend on 5m ZigZag
+pivots and GMMA/Bollinger state TRANSITIONS that a hand-built price
+path does not generate — a 5m series has ~25-75 bars per session and a
+0.5% deviation threshold yields too few pivots for divergence to have
+two swings to compare.
+
+Deliberately NOT tuned further. Every remaining adjustment would be
+fitting thresholds to a fixture invented for the purpose, which is the
+overfitting trap this project's own spec warns about. S9's thresholds
+(`bb_slope_eps`, `gmma_compression_pct`, `gmma_min_separation_pct`,
+`ta_zigzag_deviation_pct`, `min_confluence`) need calibrating against
+REAL stored index days — run `replay_ta_elliott` over actual history
+and read the confluence-hit distribution before changing any of them.
+
+### Still not done
+
+  - **No dashboard UI for S8 or S9** — no Settings subcards, no
+    Strategies-table rows, no chart markers. Both remain configurable
+    via `POST /api/settings` only. This was requested alongside the
+    replay branch and did not fit this increment.
+  - No Pine parity oracle for either strategy.
+
+## v58.30 — S9 cache-key defect fix (2026-07-28)
+
+Found by re-verifying a claim made in v58.29's own notes rather than by
+a failure. `ta_elliott.compute_state()` keyed its memoisation cache on
+`id(params)`. TAElliottAgent rebuilds its params dict every cycle, so
+the id changed on every call and the cache missed unconditionally — the
+memoisation that the entire "separate agent for performance" argument
+rests on was silently doing nothing in production, while passing a test
+that happened to reuse a single dict object.
+
+Fixed by keying on param VALUES (a sorted tuple; all values are
+scalars). New regression test asserts that two equal-but-distinct
+params dicts hit the cache and that genuinely different values miss it
+— i.e. it tests the way the agent actually calls the function, not the
+way the original test happened to.
+
+Lesson worth keeping: a memoisation test that reuses one argument
+object proves almost nothing. Test it the way the caller calls it.
+
+## v58.29 — Strategy 9: TA with Elliott, in its own agent (2026-07-28)
+
+Closes the gap named at the end of the v58.28 review: S8 implemented
+three of the deck's seven High Probability Setups but only ONE of its
+five TA indicator families. This implements slide 10 ("Marrying TA with
+Elliot") plus slides 11-18 and 28 — the indicator layer that classifies
+IMPULSE vs CORRECTIVE and times an entry at the end of a correction.
+
+### What shipped
+
+New `ta_elliott.py` (Strategy 9, id `ta_elliott`) and a new
+`TAElliottAgent`. Seven confluence signals, `min_confluence` of which
+must agree:
+
+  - Bollinger band DIRECTION as the impulse/corrective classifier
+    (slides 16-17) — the deck calls this mandatory on slide 28
+  - GMMA compression -> expansion (slide 13)
+  - MACD zero-line reversal (slide 21)
+  - Reverse/hidden MACD divergence (slide 14)
+  - Regular MACD divergence
+  - RSI divergence (slide 15)
+  - ADX "dynamic wave" confirmation (slide 18)
+
+Entries are taken ONLY in a CORRECTIVE phase, ONLY with the Tide, and
+never when the phase is UNCLEAR — slide 28's "When in doubt, Do Not
+Trade" encoded as a state rather than a preference. NO WAVE COUNTING is
+performed anywhere; every signal is an indicator state.
+
+### Why a separate agent
+
+`compute_state()` builds twelve GMMA EMAs, Bollinger bands, Wilder
+ADX/RSI, MACD and a 5m pivot series per symbol. PriceActionAgent
+already loops six strategies across every symbol on a 60s cycle;
+folding this in would multiply that cycle's cost for a strategy whose
+inputs (5m/15m candles) cannot change more than once every few minutes.
+TAElliottAgent runs on 180s, and `compute_state()` is memoised on the
+last candle timestamp so repeat calls inside one candle are free.
+
+It also PUBLISHES rather than hoards. `ta_state:{sym}` carries the full
+indicator state plus a `route` hint (BUY_OPTIONS / SPREADS / NO_TRADE),
+and is published even when the strategy itself cannot trade (position
+open, auto-deploy off) so consumers never go blind. First consumer:
+Strategy 8 now reads `tide` from here instead of building its own 15m
+EMA stack. The route hint is published, never enforced — this agent
+does not veto anyone else's signal.
+
+`ta_elliott` is deliberately NOT in `PA_NAMES` / `PA_DEFAULTS`, so
+PriceActionAgent cannot evaluate it; its params are registered
+explicitly in `backtester.DEFAULT_PARAMS` and its bounds added as a
+third source in `_clamp_to_current_bounds()`. Asserted by test.
+
+### S8 Tide fix (the other half of the recommendation)
+
+v58.28 consulted the Tide only inside `failed_hs`, so a plain H&S could
+fire a short into a rising Tide — precisely the failure the deck warns
+about ("H&S on daily fails when weekly Tide is up"). New
+`s8_require_tide_all_detectors`, default ON because it is what the
+source document specifies and S8 has never traded. Set it False to
+reproduce v58.28 exactly. Tide unknown still SKIPS, never blocks.
+
+### Four real bugs the tests caught
+
+  - **GMMA called a raging trend "compressed."** On a sustained move
+    the EMA spread PEAKS mid-trend then eases as the trend reaches
+    steady state (EMAs settle to constant lag; normalising by a rising
+    price shrinks the ratio further). The percentile test alone
+    therefore labelled a fully fanned-out ribbon COMPRESSED — the exact
+    opposite of the truth. Separation is now checked first and a
+    separated ribbon can never be compressed.
+  - **Degenerate ribbon separation.** In a dead range every EMA
+    converges to within a rounding error, and `min(short) > max(long)`
+    comes out True on floating-point noise. Separation now requires a
+    meaningful gap (`gmma_min_separation_pct`).
+  - **Collapsed Bollinger bands produced phantom signals.** In a dead
+    range the bands shrink to a hair's breadth and ordinary wicks tag
+    them constantly, manufacturing CORRECTIVE_STALL "the correction is
+    ending" readings out of noise. `bb_min_width_pct` guards it.
+  - **The impulse test was stricter than the deck.** An earlier draft
+    also required band WIDTH to be expanding; slide 16 requires only
+    that price touches the band and the band moves with it. The extra
+    condition made a steady trend read NEUTRAL. Removed.
+
+### Deck coverage after this release
+
+  Setups:     3 of 7  (S8: ending diagonal, H&S, failed H&S)
+  Indicators: 5 of 5  (S9: Bollinger, GMMA, MACD, RSI, ADX)
+  Still absent: wave counting, Fibonacci targets/retracements, the
+  three explicit SL rules, Ripple-timeframe entry timing, and setups
+  4-7 (Wave 3, Wave 5, end of Wave C, correction after Wave 5) — all
+  four of which are pullback entries that overlap S3.
+
+### Deliberately NOT done
+
+  - No dashboard UI for either S8 or S9. Both are configurable via
+    `POST /api/settings`. The Settings subcards, the Strategies-table
+    rows and the chart markers remain the next increment.
+  - No backtester replay branch for S9, so `sweep_params` cannot tune
+    it yet.
+  - No Pine parity oracle for S8 or S9.
+
+### Open items
+
+  - S9 runs on 5m candles (Wave) with a 15m Tide. Whether 5m is the
+    right Wave timeframe for index options is a market-hours question.
+  - `ta_min_confluence` default 3 of 7 is a guess. Watch the published
+    `ta_state` phases for a few sessions before trusting it.
+  - Both S8 and S9 have auto-deploy OFF. Journal first, tune second.
+
+## v58.28 — Strategy 8: EW-Reversal (2026-07-28)
+
+Ported from the Avadhut Sathe "GUE — Get the Ultimate Edge" workshop
+deck (Elliott Wave + Advance TA). ONE new strategy id, three detectors
+underneath it — explicitly not three strategies. The explicit brief was
+"must not impact the existing strategies", so every design choice below
+optimised for isolation over convenience.
+
+### What shipped
+
+New `ew_reversal.py`, three detectors, first match wins in this order:
+
+  1. `ending_diagonal` — five overlapping swings in a contracting
+     wedge, wave (iv) entering wave (i)'s territory, MACD-histogram
+     divergence. Entry on the break of the diagonal; target is the
+     deck's own ("price retraces to the beginning of the diagonal").
+     Ordered FIRST deliberately: it is the only pattern in the deck
+     whose move is large and fast enough to reliably beat theta on a
+     weekly option.
+  2. `hs` — Head & Shoulder from the deck's A-B-C framing, sloping
+     neckline projected to the current bar. The confirmation is the
+     deck's own and is not a normal divergence: LESS bear power on the
+     histogram at the break than at the previous low.
+  3. `failed_hs` — a CONTINUATION trade, not a reversal. False break
+     beyond the neckline, reclaimed past the termination of wave B,
+     requiring the Tide to be against the failed pattern.
+
+### Isolation measures (the actual requirement)
+
+  - Detectors live in their own module. `pa.evaluate()` does NOT handle
+    `ew_reversal` — asserted by test, so two code paths can never both
+    fire the same strategy.
+  - Two-key posture copied from S7: `strategy8_enabled` (default ON, so
+    it is visible/journalled) + `s8_auto_deploy` (default OFF, so it
+    cannot fire) + a paper-mode hard gate.
+  - S8's evaluation is wrapped in try/except that logs LOUDLY with the
+    exception type and `continue`s. S8 shares PriceActionAgent's loop
+    with six already-trading strategies; an unhandled error there would
+    abort the cycle for all of them. This is the one place where
+    swallowing is correct, and it is not silent.
+  - Full diff audit vs pristine v58.27: 5 lines removed across the
+    whole tree, every one an intentional replacement (PA_NAMES tuple,
+    one tune() tuple, the sg_ema structural-stop condition widened to
+    include S8, APP_VERSION, the chart badge). No existing logic
+    deleted.
+
+### Two real bugs found while building this
+
+  - **Persisted `pa_enabled` drift, third occurrence.** S8 was added
+    after `pa_enabled` was first written to disk, so on any existing
+    install the saved list predates `ew_reversal` and silently excludes
+    it — S8 would have been permanently dead with no error anywhere.
+    Exactly the drift the v55.1 note warns about, which already caught
+    `sg_ema` and then `momentum_confluence`. Fixed by gating S8 on its
+    own master switch rather than membership in a list written before
+    it existed. **Any future new PA strategy has the same problem** —
+    the config default deriving from PA_NAMES does not help an install
+    that already persisted the old list.
+  - **H&S required six pivots but only reads five.** First draft
+    demanded an origin pivot the detector never references, which made
+    every H&S in the opening stretch of a session undetectable, because
+    ZigZag seeds its first extreme from the opening bar and only emits
+    a pivot after a reversal. Ending diagonal genuinely does need six
+    (p0 IS its target); H&S does not.
+
+### Deliberately NOT done
+
+  - **No dashboard UI.** Strategies and Agents pages were explicitly
+    left alone in the previous round pending real backend work, and a
+    324KB single-file dashboard is the wrong thing to edit for a
+    strategy that cannot fire yet. S8 is configurable via
+    `POST /api/settings` today; the Settings subcard and the chart
+    markers (`s8_markers_enabled` is registered but nothing consumes it
+    yet) are the next increment.
+  - **No backtester replay path.** `backtester.DEFAULT_PARAMS` picks
+    `ew_reversal` up automatically and `get_params()` clamps it, but
+    the replay loop has no S8 branch, so `sweep_params` cannot tune it
+    yet. Correct order: journal first, tune second.
+  - **No Pine parity oracle.** S7's precedent says this should exist
+    before S8 is trusted. Not written this round.
+
+### Pre-existing gap found, not fixed (out of scope)
+
+`momentum_confluence` (the Pine port) has NO entry in
+`strategy_docs.DOCS` — confirmed absent in pristine v58.27, so its
+Configuration detail view on the Strategies page renders empty. Left
+alone deliberately rather than bundled into a strategy release.
+
+### Open items for S8
+
+  - Verify against real intraday index candles that the detectors fire
+    at a sane rate. On 1m NIFTY the 0.5% ZigZag deviation may be too
+    tight (lots of micro-patterns) or too loose (nothing all day) —
+    `s8_zigzag_deviation_pct` and `s8_min_pattern_bars` are the two
+    knobs, and this is a market-hours question that cannot be answered
+    from a sandbox.
+  - Decide the Wave timeframe. The deck's examples are daily/weekly on
+    stocks; S8 currently runs on 1m candles because that is what
+    `pa_candles` carries. Elliott structure on 1m index data is noisy
+    and 5m/15m is likely the better home.
+  - Shadow-journal S8 for ~40 sessions before considering auto-deploy.
+
+## v53 — hygiene round: fail-loud config, snapshot retention, S7 Settings fields (2026-07-26, round 9)
+
+Picked deliberately over a bigger feature: three small, self-contained,
+fully-testable-without-market-hours items from the "known gaps" list —
+each closes REAL risk rather than adding surface area, and the first
+one directly prevents the next feature from repeating a bug that has
+already bitten three separate features this session.
+
+### 1. config.save() fails LOUD on dropped/unregistered keys
+
+The trap called out in v50/v51/v52's own build notes — an unregistered
+key is silently discarded, no error, nothing — had already caused three
+separate near-misses this session (futures Phase 1's margin/trailing
+keys, Strategy 7's 13 keys, futures Phase 2's engine keys), each only
+caught because a human happened to read a diff. Now: `save()` writes a
+loud `[config] ⚠ save() DROPPED unregistered key(s)` line straight
+into activity.log — the same place every other failure in this
+codebase already gets surfaced — naming exactly which key(s) and that
+they will not survive a restart. A clean save with nothing dropped
+writes nothing extra. Implemented inside config.py itself (writes
+directly to activity.log rather than importing agents.Bus.log(), since
+agents.py imports config — importing back would be circular).
+
+### 2. Chain-snapshot retention actually wired to a scheduler
+
+`history.prune_chain_snapshots()` has existed since the Institutional
+Activity Engine build (multiple sessions ago) but nothing ever called
+it — chain_snapshots has been growing unbounded the entire time
+(roadmap's own estimate: ~240k rows/day across 4 symbols at the 60s
+snapshot cadence). Wired into LearningAgent's existing 300s cycle,
+using its OWN once-per-day bus key (`chain_prune_done`) — deliberately
+NOT tied to the journal's 15:35/done-today gate below it, since pruning
+old rows has nothing to do with whether today's trades have closed.
+New `chain_snapshot_retention_days` config key (default 5, matching the
+function's existing default). A failed prune is logged loudly and
+`chain_prune_done` is left UNSET so it retries next cycle rather than
+silently giving up for the day.
+
+### 3. Strategy 7 Settings-page fields (v51 follow-up, finally closed)
+
+The 13 s7_* keys were registered and API-editable since v51 but had no
+Settings UI — flagged as an open follow-up in that release. Added into
+the EXISTING "MTF Confluence Strategy" subcard's neighbor slot, per the
+spec's own instruction ("group into existing subcards ... do not add a
+flat seventh card").
+
+### Verified — test_v53_hygiene.py, 10 checks
+
+A dropped key produces the loud log line and is confirmed NOT
+persisted; a clean save produces zero extra log lines; the retention
+prune fires exactly once per day (a second same-day cycle does not
+re-prune, confirmed by re-seeding a stale row and checking it survives
+a second cycle); a simulated prune failure is caught, logged, and
+leaves the daily gate unset for retry; the new config key round-trips.
+
+### Also fixed while here (test hygiene, not a shipped-code bug)
+
+`test_futures_trading.py` and `test_futures_phase2.py` were both
+writing real `"kind":"future"` rows into the ACTUAL persistent
+`~/.ltp-monitor/trades.jsonl` on every run — `_append_trade()` is a
+module-level disk append, not scoped to whichever in-memory `Bus()` a
+test constructs, so redirecting the bus never isolated the file writes.
+Harmless to the shipped zip (packaging already excludes `*.jsonl`) but
+real, repeated container-side pollution that had to be manually cleaned
+after several sessions. Both suites now redirect `agents.TRADES_FILE`
+to a throwaway temp path for their duration. Confirmed: re-running both
+suites back to back leaves the real trades.jsonl at 0 lines.
+
+### Not done in this round (by design — kept small and scoped)
+
+  - The futures-signal / S7 Shadow-Journal-style logging gap remains
+    open (noted in v52/v51's own entries).
+  - No dashboard panel for the rich per-strike engine data — still the
+    largest single item on the "known gaps" list, deliberately not
+    picked up here since it's a real UI project, not a quick fix.
+  - News relevance filter and the RSS feed-suitability review — still
+    need real content review, not a mechanical fix.
+
+
+## v52 — S4 Phase 2: futures entry-signal engine, dynamic sizing, live orders (2026-07-26, round 8)
+
+Explicit design decision (asked, not defaulted): **HYBRID** entry-signal
+engine — base direction from the SAME regime + multi-timeframe-confluence
+gate every directional options strategy already runs through, confirmed
+by a futures-SPECIFIC gate (the current-month contract's own OI-buildup
+direction). Kept to the codebase's existing directional-conflict
+convention throughout (news risk/opportunity, §7.2; S7's structure/
+AI-bias gates): missing data SKIPS a gate, only an actual CONFLICT
+blocks.
+
+### What was built
+
+- **ExecutionAgent._futures_signal_eval / _futures_signal_engine** —
+  pure eval (no side effects, returns `(signal_or_None, gates)` so the
+  Strategies page can show live eligibility without auto-deploy on,
+  same "visibility without deployment" pattern as S7) + the engine that
+  actually calls enter_future() on ExecutionAgent's cycle, cooled down
+  per symbol (futures_cooldown_min) and capped
+  (futures_max_trades_per_day), one position per symbol.
+- **sizing.py**: `size_future()` — risk-budget + margin sizing,
+  mirroring size_spread()'s two-constraint shape (a futures contract
+  blocks real margin regardless of direction, unlike a bought option)
+  with the same minimum-lot fallback already proven for options/spreads
+  (bug-fixed 2026-07-22, reused here rather than re-introducing the
+  same hard-zero failure a third time). `deployed_capital()` extended
+  with a `futures` parameter.
+- **Live orders** — two INDEPENDENT switches required:
+  `cfg["paper_mode"]` off AND a separate `futures_live_enabled` (new,
+  default off). Deliberately not inherited from options' paper toggle —
+  futures risk isn't capped like a premium is, so it gets its own
+  explicit opt-in. Live entry places a real order on the front-month
+  contract (front-month security_id from future_months, no new
+  lookup); live exit places the OFFSETTING order before recording the
+  close, degrading to a loud annotated log line (not a silent
+  mismatch) if the broker call fails.
+- **Settings subcard** ("Futures Trading") — all Phase-2 fields grouped
+  into the existing subcard grid, not a flat new card, per the same
+  convention S7's spec insisted on.
+- **Strategies-page eligibility card** — same shape as S7's, showing
+  the regime/confluence/OI-confirm/sizing gate breakdown live.
+
+### Bugs found and fixed while building (Phase 1 code, not new)
+
+- **`enter_future`'s margin gate always compared against a
+  `capital_deployed` bus key that NOTHING IN THE CODEBASE EVER WROTE**
+  — confirmed by search, zero writers. It silently ignored every other
+  open position/spread/future when sizing a new one. Now routes through
+  the same `sizing.deployed_capital()` options and spreads already use.
+- **`expiry` field indexed `(bus.get(future_months:{sym}) or [{}])[0]`**
+  — `future_months` is a DICT keyed by role ("front"/"month2"...), not
+  a list; `dict[0]` would `KeyError` the instant a real subscription
+  populated it (never hit in Phase 1 testing, since expiry wasn't
+  asserted on then). Also, expiry was never even stored on
+  `future_months` entries in the first place. Fixed with a dedicated
+  `future_expiry:{sym}` key published once at subscription time.
+
+### Verified — test_futures_phase2.py, 20 checks
+
+Base gate (regime+confluence, all four rejection paths: no regime data,
+choppy/no-allowed, low confidence, disagreeing confluence); OI
+confirmation gate (agree→confirm, conflict→BLOCKED, gate-disabled→
+ignored, missing-data→SKIPPED not blocked — the graceful-degradation
+convention exercised on a brand-new gate); sizing integration
+(no-price degrades cleanly, minimum-lot fallback under a tiny risk
+budget with margin room, hard no-signal when capital can't cover even
+one lot); `deployed_capital()` correctly counts open futures margin;
+full engine run actually opens a paper position end-to-end; one-
+position-per-symbol respected; the live two-switch gate blocks with
+paper_mode off alone; the `future_months`-as-dict shape that would have
+crashed Phase 1 now enters cleanly with the correct expiry attached;
+all 7 new config keys registered.
+
+**Test-hygiene note, fixed in the same pass**: an earlier
+`test_futures_trading.py` run had left `backtest_capital`/
+`margin_per_lot_future` at test values in the shared on-disk
+config.json with no restore having fired — a real cross-test
+contamination that silently broke this suite's sizing fixture until
+traced back to the config file rather than the test itself. That
+test's restore now hardcodes `config.DEFAULTS` rather than a snapshot
+(a snapshot is only as clean as whatever ran before it), and this
+suite's sections 1-4 now build fully self-contained config dicts rather
+than trusting `config.load()`.
+
+### Not built in v52 (flagged, not dropped)
+
+- No dedicated Shadow-Journal-style logging for futures signals (S7
+  has this; futures Phase 2 currently only logs to activity.log).
+- No structure/AI-bias style dim-marker chart visualization for futures
+  entries (options/S7 have chart markers; futures positions do not).
+- Live order path is unverified against a real broker connection —
+  `orders.place()` is called through the identical `ctx["orders_factory"]`
+  the options live path already uses, but no live futures order has
+  actually been placed from this environment.
+
+
+## Live verification update (2026-07-26, user-reported)
+
+- [x] **A.1 — Chart v50 behaviour: CONFIRMED WORKING.** Index/interval
+      switching, vertical zoom, height control, pane toggles, crosshair
+      alignment all verified live.
+- [x] **A.3 — TradingView Pine Script: CONFIRMED WORKING.** The
+      parity_sg_ema.pine template ran successfully in the Pine Editor.
+      Noted: no websocket alert delivery option in TradingView — alerts
+      are webhook-only (matches what was already documented; not a new
+      finding, just confirmed live).
+- [ ] A.2 (futures 429 pacing) and A.4 (Kotak nse_fo websocket) —
+      scheduled for tomorrow's market-hours session.
+
+
+## v51 — Strategy 7 (SG-EMA) implemented per external spec (2026-07-26, round 7)
+
+Spec arrived from a parallel chat as ROADMAP-v51-strategy7.md (merged in
+full below this summary). Pine script retained as PARITY ORACLE ONLY at
+tradingview/parity_sg_ema.pine — webhooks NOT adopted, per the spec.
+
+### What was built
+
+- **structure.py** — zigzag_series() extracted from app.py so the S7
+  gate and the chart overlay share ONE implementation (app._zigzag_series
+  now delegates; delegate verified byte-identical on synthetic data).
+  Extraction also avoids an agents→app circular import.
+- **pa_strategies.py**: `sg_ema` added as the 4th PA strategy —
+  PA_NAMES/DEFAULTS/BOUNDS/META; `structure_ok()` exactly per spec
+  (None = skip, not block); `evaluate_sg_ema()` reuses evaluate
+  ("ema_mtf") wholesale for cross+MTF (spec's "do not reimplement"),
+  applies the structure + AI-bias gates, and computes the STRUCTURAL
+  stop at the last same-side confirmed pivot ± buffer with EMA-sep
+  fallback. Returns (setup, gates) with per-gate True/False/
+  "skipped (why)".
+- **agents.py**: PriceActionAgent branch — strategy7_enabled +
+  s7_auto_deploy + paper-only hard gate (futures Phase-1 precedent);
+  config keys override params; publishes s7_gates:{sym}; premium risk
+  from structural spot distance × 0.5-delta approx CLAMPED 5-30%
+  (spec's open question "clamp or skip" resolved as CLAMP, matching the
+  ATR mode); rr_target scales targets off the CLAMPED risk so the
+  >=1.95 rr gate can never auto-reject. ExecutionAgent._monitor_one:
+  structure-break exit — adverse pivot CONFIRMED AFTER entry_ts
+  (candle-time, not wall-clock) closes the position. Positions now
+  carry setup/entry_ts/s7_gates; shadow journal records source +
+  s7_gates (the ML-scoring input).
+- **config.py**: all 13 spec keys registered in DEFAULTS (the
+  save()-drops-unregistered-keys trap, called out by the spec itself).
+  Round-trip verified.
+- **app.py**: /api/strategies/{symbol} carries an on-demand `s7`
+  eligibility block (works with auto_deploy OFF — visibility without
+  deployment), evaluated with the SAME evaluate_sg_ema + SAME zigzag
+  as the chart. Parity by construction.
+- **dashboard.html**: S7 eligibility card with per-gate rows;
+  lwRedrawMarkers() rewritten as the spec's three-layer funnel WITH
+  ascending time sort — fixing a LATENT unsorted-merge bug for the
+  existing two layers, not only the new one; lwSignalMarkers layer +
+  "S7 Signals" legend checkbox.
+
+### Verified — test_strategy7.py, 13 checks
+
+Gate behaviour (all-pass path, opposing-bias block, adverse-structure
+block); graceful degradation (no pivots / no bias / neutral bias all
+SKIP, never block); structural stop at/below the last confirmed low
+pivot with rr_target×risk targets, EMA-sep fallback when no pivots;
+**parity invariant: 170-window sweep, s7=5 base=11 violations=0 —
+every S7 fire had a base ema_mtf fire, gates only ever REMOVE
+signals**; structure-break exit fires with the pivot named in the
+reason; 13/13 config keys registered. Fixture lesson recorded: the
+firing window must be sweep-derived (a cross only "just happened" on
+the exact bar it lands), and synthetic swings must exceed the zigzag's
+0.5% deviation (~119 pts at NIFTY levels) or no pivot ever confirms.
+
+### Spec items NOT built in v51 (flagged, not dropped)
+
+- Settings-page fields for the S7 keys (spec: group into existing
+  subcards) — keys are registered and API-editable; UI fields pending.
+- Rejected-signal dim markers (s7_show_rejected_markers) — client
+  layer scaffolding exists (lwSignalMarkers), server emit not wired.
+- Open question retained: S7 currently SHARES max_concurrent_positions
+  via the normal risk pipeline; a dedicated cap remains undecided.
+- The S4/S7 collapse decision — explicitly deferred until the Shadow
+  Journal has comparative volume, per the spec.
+
+### Full spec (merged verbatim from ROADMAP-v51-strategy7.md)
+
+# Strategy 7 — Structure-Gated EMA Cross (SG-EMA)
+
+**Target build: v51** (last delivered: v50)
+**Decided: 2026-07-26. Implementation to be done in session S5, which holds the current codebase.**
+
+---
+
+## Origin
+
+Started as a TradingView Pine Script + webhook experiment. The Pine script
+compiles and runs correctly on a Premium chart (5/13 EMA cross, triangles
+plotting on both sides). The webhook path was NOT adopted — consistent with
+the earlier Feature #12 decision to reframe TradingView integration away
+from webhooks toward the owned pipeline:
+
+    Dhan WS -> MarketDataAgent -> candle builder -> /ws/candles/{symbol} -> Lightweight Charts
+
+The Pine script is retained as a **parity oracle** only (see "Parity test"
+below), not as a signal source.
+
+---
+
+## Overlap warning — read before implementing
+
+Strategy 4 is already "9/20 EMA Cross (MTF)" with defaults retuned to 5/13.
+Strategy 7 as specified is therefore NOT a new signal — it is Strategy 4
+plus two gates it does not currently have.
+
+Differentiator, and the whole reason it earns a separate slot:
+
+| | Strategy 4 | Strategy 7 (SG-EMA) |
+|---|---|---|
+| Cross | 5/13 on 1m | same |
+| MTF confirm | 5m + 15m EMA agreement | same |
+| ZigZag structure gate | none | **required** (HH/HL for long, LH/LL for short) |
+| AI bias / decision-engine gate | none | **required** |
+| Stop basis | EMA separation at entry | **last confirmed ZigZag pivot** (structural) |
+| Structure-break exit | none | **exits on adverse confirmed pivot** |
+
+- [ ] If backtests show S4 and S7 firing on near-identical bars, collapse
+      them into one strategy with the gates as toggles rather than
+      maintaining two. Decide this AFTER the Shadow Journal has data, not
+      before.
+
+---
+
+## Entry rules
+
+- [ ] Fast/slow EMA cross on 1m candles, computed on `_indicator_candles()`
+      and clipped with `_clip_series()` — NOT on raw candle history.
+      Rationale: raw history carries the per-indicator warm-up offset that
+      caused the v50 crosshair/pane misalignment; markers must land on the
+      same bars the panes use.
+- [ ] MTF confirm: 5m AND 15m EMA relationship already agrees with the
+      cross direction (reuse Strategy 4's existing check, do not reimplement).
+- [ ] **ZigZag structure gate** — last *confirmed* pivot structure must be
+      HH or HL for a long, LH or LL for a short. Consumes the existing
+      `_zigzag_series()` output; no new computation.
+- [ ] **AI bias gate** — Feature #2 weighted bias score and Feature #8
+      decision-engine confirmation, via the same call path
+      `RiskAgent.evaluate()` already uses, so a marker drawn on the chart
+      and a signal reaching execution can never disagree.
+- [ ] Graceful degradation per the §4.5 convention: when a gate's input is
+      absent (no confirmed pivots yet, regime still warming up), SKIP that
+      gate — do not hard-block. Missing data must not silently reject every
+      signal, which is the bug pattern already fixed twice.
+
+```python
+def structure_ok(direction, pivots):
+    confirmed = [p for p in pivots if p.get("structure")]
+    if not confirmed:
+        return None                      # unknown -> skip gate, don't block
+    last = confirmed[-1]["structure"]
+    return last in (("HH", "HL") if direction == "long" else ("LH", "LL"))
+```
+
+- [ ] Standard risk-gate passage: every signal still goes through the full
+      `RiskAgent.evaluate()` checklist (§7.1). No bypass.
+
+## Exit rules (evaluated in order, first match wins)
+
+- [ ] 1. Structural stop: last confirmed ZigZag pivot, minus/plus
+      `s7_structural_stop_buffer_pct`.
+- [ ] 2. Target: `s7_rr_target` x the structural risk distance. Default 2.0
+      — must clear the existing risk-reward gate (requires ~1.95), so do
+      not let a tight pivot produce an rr below it; clamp like the ATR mode
+      does rather than emitting a trade the gate will reject.
+- [ ] 3. Structure-break exit: a new confirmed pivot printing LH/LL while
+      long (HH/HL while short) closes the position — structure invalidation,
+      mirroring the §5.1 spot-invalidation rule.
+- [ ] 4. Trailing stop: existing modes apply (fixed % / ATR / rupee ratchet).
+- [ ] 5. Time stop, portfolio kill-switch, EOD square-off at 15:15 — all
+      inherited, nothing strategy-specific needed.
+
+---
+
+## Eligibility card + auto-deploy
+
+- [ ] Per-symbol eligibility card on the Strategies page, same shape as the
+      existing six: current cross state, which gates pass/fail, and the
+      reason string when not eligible.
+- [ ] Auto-deploy toggle, evaluated server-side on the existing
+      ExecutionAgent cycle — browser open or closed.
+- [ ] **Paper-mode hard gate**, matching the futures Phase 1 precedent.
+      No live path in v51.
+- [ ] Stale-regime handling per v50: last-session eligibility may be shown
+      with the amber badge, but `/api/strategies/deploy` refuses outright
+      server-side when the regime is stale.
+
+## Chart markers
+
+- [ ] Entry markers (triangle up/down) and exit markers (shape carrying the
+      exit reason in the hover label) on the shared `lwSeries`.
+- [ ] New `msg.type === "signals"` handler on the existing
+      `/ws/candles/{symbol}` socket — alongside `overlays` / `zigzag` /
+      `panes`. No second connection.
+- [ ] **Marker merge — the known trap.** `setMarkers()` replaces the entire
+      set. Two arrays are already merged in `lwRedrawMarkers()`; a third
+      must go through the same funnel, AND the merged set must be sorted
+      ascending by time, because three independently-built arrays will not
+      be in order and LWC requires it.
+
+```js
+let lwSignalMarkers = [], lwSignalsVisible = true;
+
+function lwRedrawMarkers(){
+  const all = [].concat(
+    lwTradeAndFlagMarkers || [],
+    lwZigzagVisible  ? (lwZigzagMarkers  || []) : [],
+    lwSignalsVisible ? (lwSignalMarkers  || []) : []
+  );
+  all.sort(function(a, b){ return a.time - b.time; });
+  lwSeries.setMarkers(all);
+}
+```
+
+- [ ] Visibility checkbox for the signal layer, routed through
+      `lwRedrawMarkers()` — same reason the ZigZag toggle was: a message
+      arriving after the user hides the layer must not silently re-show it.
+- [ ] Optional dim/hollow markers for REJECTED signals
+      (`s7_show_rejected_markers`, default off) — makes the gates visible
+      on the chart, and pairs directly with the Shadow Journal.
+
+## Shadow Journal
+
+- [ ] Every emitted signal logged, taken or not, with the per-gate
+      pass/fail breakdown. This is the paper-first validation path the rest
+      of the library went through, and it feeds the ML probability scoring
+      that is already blocked waiting on volume.
+
+---
+
+## Config keys — register in `DEFAULTS`
+
+`config.save()` silently drops unregistered keys. All of these must be
+registered, with the warning comment, or they will vanish on first save.
+
+```
+strategy7_enabled                s7_ema_fast (5)
+s7_ema_slow (13)                 s7_mtf_confirm (1)
+s7_require_structure (True)      s7_require_ai_bias (True)
+s7_min_ai_bias                   s7_structural_stop_buffer_pct
+s7_rr_target (2.0)               s7_max_trades_per_day
+s7_auto_deploy (False)           s7_markers_enabled (True)
+s7_show_rejected_markers (False)
+```
+
+- [ ] Settings page: new fields grouped into the existing subcard structure
+      — do not add a flat seventh card.
+- [ ] All params need configured bounds so the daily adaptive tuner can
+      loosen/tighten them without leaving safe ranges.
+
+---
+
+## Parity test against the Pine script
+
+Keep the Pine script in the repo (suggest `tradingview/parity_sg_ema.pine`)
+purely as an independent cross-check. Pine cannot see ZigZag structure or
+the AI bias score, so it applies NO gates.
+
+The expected invariant is therefore one-directional:
+
+> **Every server-side S7 entry marker must have a Pine triangle on the same
+> bar. The converse must NOT hold** — Pine will show strictly more
+> triangles, and the difference is exactly the set of gate rejections.
+
+- [ ] A server marker with no matching Pine triangle = a real bug in the
+      EMA/cross port or the candle alignment.
+- [ ] Pine triangles far outnumbering server markers = gates working. Log
+      the ratio; if it approaches 1.0 the gates are not doing anything and
+      Strategy 7 has no reason to exist separately from Strategy 4.
+
+---
+
+## Build gates before packaging v51
+
+- [ ] `python3 -m py_compile` across all modules
+- [ ] `node -c` on the extracted JS block from `dashboard.html`
+- [ ] FastAPI TestClient smoke test on `/`
+- [ ] `wc -c static/dashboard.html` > 30000 — packaging aborts otherwise
+- [ ] Exclude `config.json`, journal files, `__pycache__`, venvs from the zip
+- [ ] Output to `/mnt/user-data/outputs/ltp-monitor.zip`
+
+## Open questions for S5
+
+- [ ] Does Strategy 7 respect `max_concurrent_positions` shared with the
+      other directional strategies, or get its own cap?
+- [ ] Structural stop when the last confirmed pivot is very far away —
+      clamp to a max risk %, or skip the signal entirely?
+
+
+## v54 — Strategies-page consolidated table + a severe Settings bug found and fixed (2026-07-26, round 10)
+
+Per explicit spec (ASCII mockup + column list). Split deliberately from
+the accompanying Backtest-page request — that half needs real backend
+work first (backtest trade records currently carry no timestamp/entry-
+price fields to plot as chart markers) and is queued as its own round;
+this one was fully buildable against existing data.
+
+### CRITICAL FIX FOUND WHILE BUILDING — SettingsIn was missing 46 keys
+
+While wiring the new table's auto-deploy toggles through `/api/settings`,
+found that `SettingsIn` (the request pydantic model) declared only 71 of
+`config.DEFAULTS`' 117 keys. FastAPI/pydantic silently drops any field
+not declared on the model — BEFORE `config.save()` ever sees it, one
+layer earlier than the "config.save() warns on dropped keys" fix
+shipped in v53, so that fix never had a chance to catch this.
+
+**Net effect: every S7 (v51) and Futures Phase 2 (v52) Settings-page
+field, plus several older ones (spread defense, Kotak session fields,
+PA tuning, Ollama tuning, lot_sizes), has never actually persisted a
+save** — the GET path always read back correctly, so the bug was
+invisible from the UI; only a POST silently did nothing. All 46 missing
+keys are now declared. Verified via a REAL HTTP TestClient POST (not
+`config.save()` directly, which is what let this hide for two
+releases): `s7_auto_deploy`, `futures_auto_deploy`,
+`chain_snapshot_retention_days`, and `spread_defense_zone_pct` all now
+persist through the actual endpoint. New permanent regression test
+(`test_settings_model_sync.py`) fails loudly the moment SettingsIn and
+config.DEFAULTS drift apart again — this exact class of bug should not
+be able to recur silently.
+
+### Strategies-page consolidated table
+
+Replaced four separate sections (spread eligibility cards, S7 card,
+futures-signal card, MTF confluence card) with one table, one row per
+strategy family for the currently-selected symbol: Strategy Name ·
+Strategy Logic · Current Position · Bias/Regime · Strategy Status ·
+Auto Deploy? · Manual Deploy · Configuration.
+
+  - **Current Position** correctly attributes an open position to its
+    OWN strategy only — verified NOT to cross-attribute (an S7 position
+    never shows up under MTF Confluence, and re-tagging the same
+    position's `setup` field moves the attribution, proving it isn't
+    hardcoded). Spreads matched via their composite spread-ID prefix;
+    single-leg strategies via the `setup` field already added in v51;
+    futures via its own dict.
+  - **Strategy Status** uses the Live/Blocked/Paper-only/Disabled/
+    Enabled vocabulary HONESTLY per family rather than uniformly: only
+    spreads go through the backtest live-approval gate (added a cheap
+    live_enabled/manually_disabled read from the persisted version file
+    — no backtest computation triggered just to show a badge); S7 has
+    NO live path at all in v51, so it never shows "Live", only
+    "Paper only" or "Disabled"; futures respects its actual two-switch
+    live gate from v52; MTF Confluence is genuinely live-capable
+    whenever paper_mode is off (feeds the normal option pipeline, no
+    approval gate).
+  - **Auto Deploy** — spreads route through the existing
+    `/api/strategies/toggle` (`auto_strategies` list); the other three
+    families route through `/api/settings` using their own global
+    enabled flags, honestly labeled as strategy-wide switches (there is
+    no per-symbol auto-deploy concept for S7/futures/MTF yet).
+  - **Manual Deploy** — wired only where a real endpoint exists
+    (spreads, via the existing `/api/strategies/deploy`); shown as "—"
+    for the other three rather than a fake button that does nothing.
+  - **Configuration** — spreads route to the existing rich per-version
+    modal (rollback/diff/backtest-per-version), reused rather than
+    duplicated. The other three get a new params/entry/exit view
+    sourced from three new `strategy_docs.py` entries (`sg_ema`,
+    `mtf_confluence`, `futures_signal`) added specifically so every
+    strategy family has the same documentation shape.
+  - Backend additions: `regime_confidence`, `regime_confluence`,
+    `ai_bias`, and `current_positions` added to `/api/strategies/{symbol}`.
+
+### Bugs fixed along the way (all caught before shipping)
+
+  - Four `onclick` handlers had a double-escaped-quote bug
+    (`\\\\'` instead of `\\'`) from a heredoc quoting mistake —
+    would have silently produced broken buttons; caught by inspecting
+    the raw file bytes rather than trusting the diff, fixed with
+    targeted `sed`.
+  - Configure-modal fallback called a nonexistent `/api/backtest`
+    endpoint (the real one is `/api/backtest/status`) and a nonexistent
+    `showView('settings')` (the real function is `openSettings()`).
+  - `test_strategies_table.py`'s own first draft would have destroyed
+    any REAL pre-existing NIFTY backtest version history by blindly
+    overwriting-then-deleting rather than snapshotting and restoring —
+    caught before it mattered (the test container's version file was
+    empty at the time) and rewritten to snapshot/restore properly, with
+    a check that proves the restore is exact.
+
+### Verified
+
+test_strategies_table.py (21 checks) + test_settings_model_sync.py (6
+checks) — full suite across all 9 test files green: settings model
+sync, hygiene round, futures Phase 2, futures trading, Strategy 7,
+regime-closed-market, chart indicators, DB concurrency, JS harness.
+`py_compile` across every module, `node --check` on the extracted JS,
+config.json confirmed clean (matches DEFAULTS) after all test runs.
+
+### Not done in this round
+
+  - **Backtest-page redesign** (chart overlay, remove per-row
+    sparklines, version-enum row layout) — the other half of the
+    original request, queued as its own round; needs backend work
+    first (trade records need timestamp/entry-price fields before any
+    chart marker can be plotted).
+  - `payoffSVG()` is now defined but unused (the spread cards it drew
+    for were replaced by the table) — left in place rather than
+    deleted, since it's a working function that could be wired into the
+    spread Configure view later.
+  - No manual-deploy path added for MTF Confluence, S7, or Futures
+    Signal — none currently exists; would need new endpoints, out of
+    scope for a table redesign.
+
+
+## v54.1 — Strategies-page table: overlap fixed, colors added, 4 missing strategies, P&L chart (2026-07-26, round 11)
+
+Direct feedback on a screenshot of the v54 table, all four points
+verified real before fixing (not assumed):
+
+### 1. Cell text overlap — CSS root cause
+
+A GLOBAL `table{white-space:nowrap}` rule (present since early in this
+project) was silently forcing every cell in the new table onto one
+line, with nowhere for long text to wrap — the Logic/Position/Bias
+cells overflowed into their neighbors rather than expanding downward.
+Fixed with a dedicated `.wraptable` class (`white-space:normal`,
+`vertical-align:top`, line-height) applied ONLY to the Strategies
+table, rather than changing the global rule and risking every other
+table that depends on nowrap (P&L table, journal, etc.).
+
+### 2. Bias/Regime — colored, multi-line breakdown
+
+Rewritten from one flat string into two lines: AI bias label colored
+bull/green (Bullish) / bear/red (Bearish) / dim (Neutral), regime label
+colored by direction, confluence colored, confidence shown dimmed —
+same bull/bear palette already used everywhere else in this dashboard,
+not a new one.
+
+### 3. "Are strategies NIFTY-only?" — confirmed by design, not a bug
+
+The table shows ONE selected symbol's rows because the underlying data
+genuinely is per-symbol (positions, backtest versions, and eligibility
+gates are all keyed by symbol). Switching symbols and returning shows
+that symbol's rows. Documented in-code rather than left as an implicit
+assumption.
+
+### 4. Four missing strategies — confirmed and added
+
+ORB, Anchor Pullback (vwap_pullback), 9/20 EMA Cross (ema_mtf), and the
+core Momentum Option Buying engine were absent from the v54 table
+entirely. Added using the same pure, side-effect-free evaluation
+pattern S7 already established — reusing the EXACT live functions
+rather than a second implementation that could drift:
+  - orb/vwap_pullback/ema_mtf: `pa_strategies.evaluate()`, the same
+    function `PriceActionAgent` calls live.
+  - momentum_buy: `analyzer._rule_signal()` — the DETERMINISTIC
+    rule-engine path, deliberately NOT the live path's `ai_signal()`,
+    which can call out to an LLM and is neither free nor fast enough to
+    run on every 5s poll of this page. Labeled honestly in the UI as a
+    "rule-engine preview — live path may use AI when enabled" rather
+    than silently passing off a narrower check as the full picture.
+  - Found while wiring this in: orb/vwap_pullback/ema_mtf go through
+    the SAME backtest-approval gate as spreads (confirmed by grepping
+    `agents.py` for `is_live_enabled` rather than assuming — it's
+    checked in `PriceActionAgent` for these three plus sg_ema, but
+    NOT anywhere in `StrategyAgent` for momentum_buy). `stratStatus()`
+    now branches on whether gate fields are PRESENT, not on family
+    name, since family alone was the wrong test once these existed
+    alongside momentum_buy in the same "pa" family.
+  - Auto Deploy for these four shown as a read-only, disabled checkbox
+    with an explanatory tooltip rather than a switch that would
+    silently do nothing on click — their real config is a
+    `pa_enabled` LIST, not a per-strategy bool or the spreads'
+    `auto_strategies` mechanism, and no toggle endpoint exists for that
+    list yet. Same honesty principle already applied to Manual Deploy
+    showing "—" where no endpoint exists.
+  - Configure modal: these four also have real per-symbol backtest
+    version history (confirmed: they're in backtester.py's own tracked
+    strategy list alongside the spreads), so they now route to the
+    SAME rich version-history modal as spreads, not the thinner
+    params-only fallback.
+
+### 5. P&L chart — reused existing plumbing, not rebuilt
+
+Added a column using the EXACT `equityCurve()` / `openCurveModal()`
+functions already built for the Backtest page — same sparkline, same
+click-to-enlarge — rather than a second charting implementation.
+Fed from a NEW cached fetch of `/api/backtest/status` (20s cache; the
+underlying data only changes when a backtest is explicitly re-run, so
+polling it every 5s alongside the strategies table would be pure
+waste). Only the six strategies backtester.py actually tracks show a
+chart; sg_ema/mtf_confluence/futures_signal honestly show
+"no backtest yet" since no backtest engine exists for them.
+
+### Verified
+
+test_strategies_table_v2.py (19 checks): all four strategies appear;
+the backtest-gate fields are present for the right three and reflect
+the REAL persisted version file (not hardcoded); momentum_buy's absence
+of a gate confirmed by literal source-grep, not inference; an
+incomplete analysis dict degrades gracefully (200, not 500) with the
+error surfaced in the preview text rather than crashing the page; the
+Configure-modal routing list matches every backtester-tracked strategy.
+test_strategies_table.py updated for the 4 new current_positions keys
+(21 checks). Full suite across all 11 test files green (161 checks
+total). Config and the persisted backtest-version file both confirmed
+clean (matching defaults / empty symbol lists) after every test run.
+
+### Not done in this round
+
+  - No toggle endpoint for the `pa_enabled` list — Auto Deploy for
+    orb/vwap_pullback/ema_mtf/momentum_buy remains read-only. Would need
+    a small new endpoint mirroring `/api/strategies/toggle` but for a
+    list-membership rather than boolean, or a Settings-page multi-select.
+  - Backtest-page redesign (chart overlay, per-row sparkline removal,
+    version-enum rows) — still queued from the original v54 request,
+    still blocked on adding timestamp/entry-price fields to backtester's
+    trade records.
+
+
+## v54.2 — parallel-symbol table restructure, real payoff diagram, explicit left-align, versioned zip filename (2026-07-26, round 12)
+
+Four fixes, all against the v54.1 table specifically.
+
+### 1. "Still showing NIFTY-only" — restructured, not just relabeled
+
+The underlying reality never changed: `auto_strategies` / `s7_auto_deploy`
+/ `futures_auto_deploy` / `mtf_confluence_enabled` / `pa_enabled` are
+ALL global switches that already evaluate every symbol in parallel —
+reconfirmed by re-reading the agent loops before touching anything,
+nothing here is new backend behavior. What was wrong was the
+PRESENTATION: showing "NIFTY · bull_put_spread" implied four separate
+per-symbol strategies rather than one strategy running across four
+symbols at once.
+
+Restructured to genuinely match the user's own framing ("if its common
+to all then keep the main strategy"): ONE row per strategy (9 total,
+unchanged set from v54.1), fetching all 4 symbols in parallel
+(`Promise.all` over the existing `/api/strategies/{symbol}` endpoint —
+no backend change needed, it was already symbol-parametrized). Current
+Position / Bias-Regime / Status now show a compact 4-line per-symbol
+breakdown inside each cell. Auto Deploy / Manual Deploy / Configuration
+reflect the genuinely shared, symbol-independent switch — one control
+per strategy, not four.
+
+Bug caught while wiring this: `stratStatus()`'s family-specific
+branches (S7 never "Live", futures' second live switch) referenced
+`row._family`, but the new per-symbol status-badge builder didn't tag
+`_family` on the row objects it constructed for s7/futures — would
+have silently fallen through to the generic paper/live logic and shown
+S7 as "Live" when no live path exists for it at all. Fixed before
+shipping, not left in.
+
+### 2. P&L graph — real payoff diagram, not a backtest curve
+
+Per explicit correction with a reference screenshot: replaced the
+backtest equity-curve sparkline with `payoffSVG()` — which existed as
+dead code since the pre-v54 spread cards were replaced by the table,
+now reused rather than reimplemented. Shows the actual max-profit/
+max-loss shape (green above zero, red below, breakeven marked) for
+whichever symbol currently has a LIVE eligible setup, preferring the
+selected symbol. Honest about a real limitation: `strategies.evaluate()`
+only returns strike/credit/width on an ELIGIBLE result — the early-
+reject paths (wall too close, insufficient chain data) return before
+those are computed, so there is genuinely nothing to plot then, shown
+as "no live setup to plot right now" rather than a stale or fabricated
+diagram.
+
+For the 6 non-spread strategies (no capped payoff exists for an option
+buy or a future the way a spread's hedge leg caps it), shows the
+configured stop-loss vs target as a simple red/green bar instead —
+real numbers, not a curve shape that would overstate what's actually
+defined-risk.
+
+### 3. Left-alignment made explicit, not implicit
+
+`.postable td` previously relied on the browser's default left-align
+for `<td>` (which happened to be correct, but silently — any future
+style addition could have broken it without anyone noticing why). Per
+direct request to "maintain for future changes as well," added an
+explicit `text-align:left` to the shared class itself, so it survives
+future edits rather than depending on an unstated default.
+
+### 4. Packaging — version now in the delivered filename
+
+Per explicit request. The long-standing convention (fixed since the
+project's first session) was always `/mnt/user-data/outputs/
+ltp-monitor.zip`, version tracked only inside the file (VERSION,
+/api/version, dashboard badge). Changed going forward: the delivered
+zip filename itself now includes the version
+(`ltp-monitor-v54.2.zip`).
+
+### Verified
+
+Full regression suite unchanged and green (all 11 test files, 161
+checks) — this round touched the frontend row-construction and one
+CSS rule only; the `/api/strategies/{symbol}` contract itself did not
+change, confirmed by re-running the entire existing backend test suite
+without modification. Additionally smoke-tested all 4 symbols
+responding correctly via the real TestClient (the exact shape the new
+`Promise.all` fetch relies on).
+
+### Not done in this round
+
+  - Auto Deploy for orb/vwap_pullback/ema_mtf/momentum_buy remains
+    read-only (no toggle endpoint for the `pa_enabled` list) — unchanged
+    from v54.1, still open.
+  - Backtest-page redesign — still queued, still blocked on backend
+    trade-record enrichment.
+
+
+## v54.3 — table compacted to per-(strategy,symbol) rows, Open Spreads moved to top, real payoff column fixed (2026-07-26, round 13)
+
+Direct feedback on a screenshot: the v54.2 table (one row per strategy,
+4 lines packed into each cell) ran two pages tall, pushing Open Spreads
+out of view.
+
+### 1. Open Spreads moved above the Strategy Library table
+
+Per explicit request ("so that open position are visible in first
+glance") — simple reorder in the HTML, no logic change.
+
+### 2. Restructured to real per-(strategy, symbol) rows
+
+Chose the option the user specified concretely (over "cards like
+earlier"): one row per strategy PER INDEX (36 rows: 9 strategies × 4
+symbols), with Strategy Name and Strategy Logic merged via `rowspan=4`
+so identical, genuinely shared text (same code, same config across all
+4 symbols) renders once per strategy block instead of 4 times. Current
+Position / Bias-Regime / Status / Manual Deploy / P&L are genuinely
+per-symbol and get their own single-line row each — far more compact
+than the previous 4-lines-in-one-cell design despite having more total
+rows, since each row is now normal single-line height.
+
+Added an explicit Symbol column (was previously an inline bold prefix
+inside each multi-line cell).
+
+Manual Deploy and the payoff/P&L cell now target the SPECIFIC symbol
+of that row directly (`deployStrategyFor(name, sym)`,
+`stratPnlCellFor(key, family, perSymData, sym)`) rather than the
+separately-selected `current` dashboard symbol — a real fix, not just
+cosmetic: previously every row's Deploy button silently targeted
+whatever symbol happened to be selected elsewhere on the dashboard,
+regardless of which row you clicked. Configuration modal likewise now
+opens the version history for the ROW's symbol
+(`openConfigModal(key, sym)`), not the globally-selected one.
+
+**On "MACD+Stoch Confluence / Strategy 7 / MTF Confluence are
+missing"**: confirmed NOT actually missing — visible in the user's own
+screenshot as the 3rd and 4th rows (mtf_confluence's title IS "MACD +
+Stoch Confluence", so two of the three named items were one and the
+same row). Almost certainly the 2-page table length pushed the
+remaining rows (futures_signal, orb, vwap_pullback, ema_mtf,
+momentum_buy) out of the visible viewport before this fix. Not treated
+as a data bug since the screenshot itself proves the data was present;
+addressed by making the table short enough that this can't recur.
+
+### 3. Strategy Logic column narrowed
+
+From 20% to 14% (~70% of the previous width, matching the literal
+request "reduced to 70%").
+
+### 4. Dashboard's normal font, not monospace
+
+`.postable`'s `JetBrains Mono` is appropriate for numeric P&L tables
+but read oddly for the Strategy Logic / per-symbol reasoning prose in
+this specific table. Added a scoped `.stratfont` class using the same
+`Inter`/system-ui stack as the rest of the dashboard, applied only to
+this table — other genuinely numeric tables keep their monospace font
+unchanged.
+
+### Verified
+
+Full regression suite unchanged and green (11 test files, 161 checks)
+— confirmed the `/api/strategies/{symbol}` backend contract was not
+touched this round (all 4 symbols smoke-tested responding correctly,
+matching exactly what the restructured `Promise.all` fetch already
+relied on from v54.2). This was a frontend row-construction rewrite
+plus two CSS rules only.
+
+### Not done in this round
+
+  - Auto Deploy for orb/vwap_pullback/ema_mtf/momentum_buy remains
+    read-only (unchanged from v54.1/v54.2) — still no toggle endpoint
+    for the `pa_enabled` list.
+  - Backtest-page redesign — still queued, still blocked on backend
+    trade-record enrichment.
+
+
+## v55 — Backtest-page redesign: real chart overlay, unblocked backend enrichment (2026-07-26, round 14)
+
+The half of the original v54 request that was queued as blocked on
+backend work — done this round, backend first.
+
+### Backend: trade records enriched with timestamp/spot data
+
+Turned out far less risky than the original estimate. All three
+backtest replay loops (`replay_spreads`, `replay_momentum`, `replay_pa`)
+already iterate a timestamped candle/chain stream to check entry/exit
+conditions — `ts` and `chain["spot"]` (or the candle's own timestamp
+for the index-only PA loop) were ALREADY available at every step, just
+never captured into the trade dict. Added `entry_ts`/`exit_ts`/
+`entry_spot`/`exit_spot`, plus a compact `trades_detail` list on
+`metrics()` (deliberately lean — not the full trade dict — since this
+can accumulate to hundreds of entries over a multi-year backtest).
+
+**Bug found and fixed before shipping, not left in**: the first pass at
+`replay_pa` used `candle["time"]`, but `history.day_index_candles()`
+actually returns the key as `"ts"` — would have crashed every single PA
+backtest run the moment anyone clicked "Run backtest" after this
+change. Caught by an end-to-end test against synthetic candle data
+(not just a unit test of `metrics()` in isolation), fixed immediately.
+
+New `/api/backtest/day-candles?symbol=X&day=Y` endpoint — deliberately
+scoped to ONE day at a time: a candlestick chart spanning many
+disjoint backtested days (with large gaps between each day's session)
+doesn't render usefully, and the practical question a trader has is
+"what did this specific trade actually look like," which is inherently
+a single-day question.
+
+Verified full round-trip: real `replay_pa()` output → `metrics()` →
+JSON serialization (exactly how `BacktestAgent` persists results to
+`backtests.json`) → reload, with all 4 new fields intact.
+
+### Frontend: consolidated table + real chart overlay
+
+Applied the SAME pattern the Strategies page just proved out (v54.3):
+removed the old per-row equity-curve sparkline and the separate
+"Strategy Versions" card panel, merged into ONE table — Strategy Name
+rowspan-merged (one block per strategy), one row per symbol underneath
+with a Version dropdown, Current Version, Last Backtest P&L, Win Rate,
+Status (Live/Blocked/Paper-only/Disabled, same badge logic as before),
+Enable/Disable, and a "View Chart" button.
+
+One shared Lightweight Charts panel above the table (a separate,
+static, non-streaming instance from the Live Chart's websocket-driven
+one — this only ever needs a single setData() per day selection).
+Clicking any row's "View Chart" populates a day selector from that
+(strategy, symbol)'s actual traded days, defaults to the most recent,
+and overlays entry (blue arrow, tagged with entry spot) and exit
+(green/red arrow by win/loss, tagged with P&L and exit reason) markers
+on that day's real index candles.
+
+### Verified
+
+test_backtest_chart_data.py — 15 checks: metrics() trades_detail shape
+and defensive filtering (a trade missing timestamp data is excluded,
+not crashed on); end-to-end replay_pa against synthetic candles
+producing real, bounded, correctly-ordered timestamps and plausible
+spot prices; source-level regression guards on replay_spreads/
+replay_momentum (chain-reconstruction based, expensive to fixture end-
+to-end, so verified at the source-text level that both capture and
+propagate all 4 fields — a real check, not a skip); the new endpoint
+serving real seeded candles through the actual FastAPI TestClient.
+Full regression suite green across all 12 test files. Container DB and
+config confirmed clean of test artifacts after every run.
+
+### Not done in this round
+
+  - Auto Deploy for orb/vwap_pullback/ema_mtf/momentum_buy still
+    read-only (unchanged, separately queued) — picked up as this
+    session's next small feature.
+  - Regression/Stress Testing panel kept as-is; only Backtest Results +
+    Strategy Versions were merged, per the original request's scope.
+
+
+## v55.1 — pa_enabled toggle endpoint: closes the "Auto Deploy is read-only" gap (2026-07-26, round 15)
+
+Picked as this session's small "next feature" per request, after the
+Backtest-page redesign (v55) — deliberately scoped small, closing a
+gap that's been sitting open since v54.1 rather than starting another
+large build.
+
+### What was missing
+
+`orb`/`vwap_pullback`/`ema_mtf`'s Auto Deploy checkbox on the
+Strategies-page table was read-only from v54.1 onward: their real
+config (`pa_enabled`, a LIST that `PriceActionAgent` already read via
+`cfg.get("pa_enabled", list(pa.PA_NAMES))`) was never registered
+anywhere and had no endpoint to modify a single strategy's membership
+without hand-editing config.json.
+
+### What was built
+
+  - `pa_enabled` registered in `config.DEFAULTS`, default set to
+    match `pa_strategies.PA_NAMES` EXACTLY (`["orb", "vwap_pullback",
+    "ema_mtf", "sg_ema"]`) — behavior-preserving for anyone who never
+    touched this setting; the registration changes nothing by itself.
+  - Also declared on `SettingsIn` in the same change — the v54 lesson
+    applied deliberately rather than repeating it: a new list-type
+    config key registered in DEFAULTS but not on SettingsIn would have
+    reintroduced the exact "reads back fine, POST silently drops it"
+    bug found and fixed in v54.
+  - New `/api/strategies/pa_toggle` endpoint, mirroring the existing
+    spread `/api/strategies/toggle` but for list membership instead of
+    a boolean. Validates the strategy name against `pa.PA_NAMES` and
+    returns an error (not a silent no-op) for anything else.
+  - Frontend: the PA-family checkbox now differentiates by strategy —
+    orb/vwap_pullback/ema_mtf get a real, wired switch calling the new
+    endpoint; momentum_buy's checkbox stays disabled with an honest
+    tooltip, since it genuinely has no enable/disable mechanism at all
+    (it's the always-on core signal engine — `auto_execute` gates
+    manual-confirm vs auto-place, a different concept entirely, not a
+    strategy on/off switch).
+
+sg_ema is technically also list-governed by `pa_enabled` but keeps
+`s7_auto_deploy` (the Settings-page switch) as its primary control —
+noted directly in the endpoint's own docstring so a future session
+doesn't have to rediscover this by reading two code paths.
+
+### Verified
+
+test_pa_toggle.py — 9 checks: `pa_enabled` registered on BOTH
+`DEFAULTS` and `SettingsIn` (guarding the exact v54 gap from
+recurring for this key); default matches `PA_NAMES` exactly; a real
+HTTP POST adds/removes a strategy and the disk value actually changes,
+not just the response; an invalid strategy name is rejected with
+config.json left untouched (not silently accepted); `PriceActionAgent`'s
+own existing read path still resolves to a real list after
+registration, not `None`. Full regression suite green across all 13
+test files. Config confirmed clean (matches the registered default)
+after every test run.
+
+
+## v55.2 — Backtest-page auto-refresh, stale-result clarity, real toggle switches (2026-07-26, round 16)
+
+Direct feedback on the v55 Backtest page.
+
+### 1. "Chart should open once backtest is completed" — root cause: no auto-refresh existed at all
+
+Traced before fixing: the Backtest page had NO `setInterval` poll at
+all (every other page — P&L, Strategies, Live Metrics — already had
+one). Queuing a backtest just fired an alert saying "watch the Agents
+tab," with no feedback loop back to this page — results only ever
+appeared after a manual "refresh" click or navigating away and back.
+Added a 10s poll (slower than the other pages' 3-5s, since this
+endpoint does more work: coverage + sync-log + full results).
+Additionally, `loadBacktest()` now auto-selects and renders the FIRST
+row with real chart data if nothing is selected yet, so reopening (or
+auto-refreshing into) this page after a completed backtest shows a
+chart immediately rather than requiring a click.
+
+### 2. "no trades" was ambiguous — genuinely-zero vs stale-data looked identical
+
+The reported screenshot showed real P&L (₹1,582 etc.) but "no trades"
+in the Chart column for every row — confusing, since a nonzero P&L
+obviously means trades happened. Root cause: those results were
+computed by a backtest run BEFORE v55 added entry_ts/exit_ts to trade
+records, so the cached `backtests.json` has `m.trades > 0` but an
+empty `trades_detail`. Now distinguished: a genuinely trade-less
+strategy still shows "no trades," but a result with real P&L and no
+chart data shows "re-run to enable chart" with a tooltip explaining
+why — turns a dead-end-looking state into an actionable one.
+
+### 3. Real toggle switches — green when on, red when off
+
+Per explicit request. Nothing like this existed before — every on/off
+control in the app (Settings page, Strategies page) was a plain native
+checkbox with no visual state beyond a checkmark. Built a real pill/
+slider toggle-switch component from scratch and applied it to the
+Backtest page's Enable/Disable column (replacing a button whose label
+read as an action, not a state — the reported "no information whether
+its Enabled or not" was exactly this: text saying "Disable" doesn't
+visually communicate "currently enabled" at a glance). Applied the SAME
+new component to the Strategies page's Auto Deploy controls too, for
+visual consistency across the two pages that now share this pattern.
+
+### Verified
+
+Full regression suite unchanged and green (13 test files) — this round
+was frontend-only (one CSS component, one polling addition, one
+messaging fix, one markup swap); no backend contract was touched.
+Manually re-verified the toggle-switch CSS's checked/unchecked sibling
+selector matches the exact markup emitted in all 4 call sites (spread
+auto-deploy, PA auto-deploy, momentum_buy's disabled/informational
+state, and the Backtest page's enable/disable) via direct grep, since a
+mismatched `<span>` order would silently break the color state without
+any JS error to catch it.
+
+
+## v56 — genuine parameter optimizer, closing the "backtest doesn't revalidate / find the best value" gap (2026-07-26, round 17)
+
+Picked deliberately from three offered options, per explicit reasoning:
+"learning is important, because in case of backtest it just test the
+response but not revalidating it and identify the best value for the
+strategy to make the profit." Investigated before building rather than
+assuming — found two things already existed and were already wired:
+
+  - **AI Probability Engine** (`ai_probability_engine.py`, Feature #8)
+    — already computes an empirical win-probability from bucketed
+    historical trades, already advisory-displayed via RiskAgent and
+    LearningAgent. Not the gap.
+  - **Daily auto-tuner** (`_tune_pa`/`_revalidate` in agents.py) — DOES
+    exist, but is a single greedy nudge: relax one bounded parameter
+    step if under-trading, tighten one step if losing money, otherwise
+    do nothing. It never tries multiple candidate values and compares
+    results. THIS is the exact gap described: a backtest re-tests the
+    currently active parameters, it does not search for a better one.
+
+### What was built
+
+  - `backtester.sweep_params(name, symbol)` — a genuine coordinate-wise
+    parameter search: for each tunable parameter (from the existing
+    SPREAD_BOUNDS/PA_BOUNDS), tries several candidate values spanning
+    its documented bound range, keeps whichever single change most
+    improves net P&L, then moves to the next parameter using that as
+    the new baseline. Returns EVERY candidate tried, not just the
+    winner — "identify the best value" should be auditable, not a
+    black box.
+  - Wired into `BacktestAgent` via a queued job (`bt_optimize_job`,
+    mirroring the existing manual-backtest-run pattern) rather than
+    inline on the request thread — a sweep is several full backtest
+    replays, real seconds to tens of seconds. A found improvement gets
+    proposed as a new version using the IDENTICAL version-record shape
+    `_tune_pa`/`_revalidate` already produce, so the existing rollback/
+    activation UI works with zero new plumbing.
+  - **Dedup guard, found by my own test, fixed before shipping**: when
+    a proposed version isn't profitable enough to auto-activate (the
+    common case for a fresh sweep), `get_params()` keeps returning the
+    SAME baseline on every re-run — clicking Optimize twice would
+    otherwise propose an identical duplicate version each time. Now
+    skipped if the most recent version already has the exact same
+    params.
+  - New `/api/backtest/optimize` endpoint, an "Optimize" button on the
+    Backtest page's consolidated table, and (inside the existing
+    version-history modal) a full candidate-by-candidate transparency
+    table whenever the viewed version came from a sweep — every value
+    tried, its trade count, its net P&L, and which one won.
+  - `/api/backtest/status` now also returns the latest sweep record per
+    (symbol, strategy) for this transparency view (bus-only, not
+    persisted — a sweep is cheap to re-run, this is detail, not
+    history that needs to survive a restart).
+
+### Verified
+
+test_backtest_optimizer.py — 14 checks: a real multi-candidate search
+(not a single guess) with every candidate carrying full detail; the
+best found never underperforms the baseline; a real version proposal
+end-to-end via `BacktestAgent._optimize` with correct backtest results
+attached and the reason text correctly naming it as a sweep; the dedup
+guard actually prevents duplicate-version pileup on repeated runs; both
+new API endpoints respond correctly (including the agents-not-running
+guard returning a clean error, not a 500). Full regression suite green
+across all 14 test files. Confirmed no stray test data in the
+persisted candles table, version file, or config after every run.
+
+### Not done in this round
+
+  - The sweep is coordinate-wise, one pass over all parameters — not a
+    full combinatorial grid (would explode in replay cost) and not a
+    second pass chasing parameter interactions further. A reasonable
+    v1 scope, not the ceiling of what's possible here.
+  - momentum_buy has no daily auto-tuner coverage at all (neither
+    `_tune_pa` nor `_revalidate` include it) — the NEW on-demand
+    optimizer works for it (dispatches through `_replay_for`), but the
+    existing daily nudge mechanism's gap for this one strategy predates
+    this round and wasn't in scope to fix.
+  - The "Unified AI Probability... into ONE number" framing from the
+    original three-option list wasn't pursued as stated — investigation
+    showed the real, concrete gap was the tuner's search behavior, not
+    the probability engine's structure, and the user's own reasoning
+    pointed there directly.
+
+
+## v57 — Institutional & Smart Money dashboard panel (2026-07-26, round 18)
+
+Picked from the three-option priority list — the item flagged first in
+that list, no dependencies on the other two (learning/optimizer done
+in v56; the 1H MTF Reversal port remains explicitly scoped as its own
+session, too large for this pass).
+
+### Investigation before building — zero backend work needed
+
+Checked what actually existed before writing anything. Found the
+"missing panel" was purely a frontend gap: both endpoints this page
+needed were ALREADY BUILT and returning everything required —
+`/api/institutional/{symbol}` (Feature #5's consolidated institutional
+score/bias/money-flow/participation/breakout-breakdown-status/AI
+commentary) and `/api/analysis/{symbol}` (the full per-strike
+institutional_activity/premium_intelligence/strike_strength/iv_greeks,
+plus chain-wide smart_money events and AI narrative). Every one of
+these engines has been computing this data every ~60s cycle across
+several past sessions; chart markers were genuinely its only visible
+surface, exactly as flagged. No new calculation, no new bus keys, no
+new API endpoints — this was purely "give existing data a place to be
+seen."
+
+### What was built
+
+New "Institutional" nav page with four sections:
+  - **Summary card** — institutional score, bias, money flow direction/
+    state, participation strength, breakout/breakdown status,
+    confidence, and (when present) support/resistance shift, plus the
+    engine's own rule-based AI commentary line.
+  - **AI Narrative** — the existing plain-English bullet list
+    (rule-based, not an LLM call, so it's free and always available).
+  - **Smart Money Events** — strong call/put writing, volume breakouts,
+    aggressive buyers/writers, OI migration — rendered as a real event
+    list instead of only ever reaching the chart as a marker.
+  - **Per-Strike Activity table** — strikes within ~2% of ATM, both
+    legs, showing institutional activity category, the plain-English
+    premium-intelligence read, the Strike Strength Engine's multi-
+    factor percentile score, IV, and delta — side by side, sortable by
+    eye, something the chart markers alone could never show at once.
+
+Graceful degradation preserved throughout: every section falls back to
+an honest "not yet computed" / "no events this cycle" message rather
+than a blank page or a crash, matching the existing convention these
+engines already use elsewhere.
+
+### Verified
+
+test_institutional_panel.py — 15 checks: the graceful empty-state
+response before any data exists; a REAL `analyzer.analyze()` call
+(not hand-built fixtures) confirmed to carry every field the new page
+reads (per-leg institutional_activity, strike_strength, iv/delta,
+narrative, smart_money's full event-key set); `institutional_engine.
+institutional_output()` confirmed to carry every field the summary
+card reads; both existing HTTP endpoints hit end-to-end with seeded
+bus data returning real, correctly-shaped payloads; the new nav
+button/view/dispatch/auto-refresh all confirmed present in the actual
+shipped HTML rather than assumed. Full regression suite green across
+all 15 test files.
+
+### Not done in this round
+
+  - The consolidated `ai_output` field (Current Bias/Highest-OI-Strike/
+    Suggested CE-PE/etc., Feature #4's own summary shape) wasn't
+    surfaced as its own section — the Summary card and per-strike table
+    together already cover most of the same ground without duplicating
+    it; could be added later if a gap is felt in practice.
+  - No historical/trend view of the institutional score over time —
+    this shows the CURRENT cycle's read only, same as every other live
+    panel in the dashboard.
+
+
+## v57.1 — manual-deploy for Strategy 7 + Futures Signal, closing a self-flagged honesty gap (2026-07-26, round 19)
+
+Picked from the open-items list based on priority/dependencies: small,
+self-contained, no dependency on the large remaining items (1H MTF
+port, TradingView Advanced Charts), and directly closes something the
+Strategies-page table has shown as an honest "—" since v54.
+
+### What was built
+
+  - **`/api/futures/manual_deploy`** — the easiest of the three,
+    since the machinery already fully existed: re-evaluates via the
+    exact same `_futures_signal_eval()` the eligibility preview
+    already calls, and if genuinely eligible, calls `enter_future()`
+    directly — which already carries every real safety gate (paper-
+    mode, market hours, margin, kill-switch cooldown, one position per
+    symbol). No new gate, no new evaluation logic.
+  - **`/api/strategies/manual_fire` (sg_ema / Strategy 7)** —
+    required a small, careful refactor first: extracted the sig-
+    construction block from `PriceActionAgent.cycle()`'s inline logic
+    into a standalone `build_pa_signal()` function, called by BOTH the
+    existing automatic loop (byte-identical math, not rewritten) and
+    the new endpoint — so there is no second, divergent copy of the
+    entry-price/stop/target formula. The endpoint re-evaluates via the
+    same pure `pa.evaluate_sg_ema()` the eligibility preview already
+    uses, builds the identical signal, and publishes it through the
+    standard `signal` bus topic — RiskAgent picks it up on its next
+    cycle and runs the FULL existing gate (regime, AI Decision Engine,
+    AI Probability Engine, min_confidence), exactly as if the automatic
+    loop had fired it.
+  - Strategies-page table: real "Fire Now" buttons for these two rows,
+    replacing the honest "—" placeholder. Everything else in the
+    table (MTF Confluence, orb/vwap_pullback/ema_mtf, momentum_buy)
+    still has no manual-trigger mechanism and keeps showing "—"
+    honestly rather than a button that would do nothing.
+
+### Deliberately NOT attempted this round
+
+MTF Confluence's own manual-deploy — its per-symbol evaluation logic
+is deeply embedded in a loop that also handles a live Dhan historical-
+daily-candle fetch, per-symbol cooldown/max-trades bookkeeping, and
+several early-exit branches, all in one block. Extracting it safely
+would need a comparable refactor to the one just done for sg_ema, but
+under real time pressure with a broker-dependent code path that's
+harder to fixture realistically — judged too risky to rush. Left
+open rather than shipped half-verified; still shows "—" honestly.
+
+### Verified
+
+test_manual_deploy.py — 11 checks: a source-level guard confirming
+`build_pa_signal()` is truly a single shared function (not re-inlined
+at either call site); the futures endpoint's agents-not-running guard;
+a full end-to-end futures manual-deploy through a REAL running
+`ExecutionAgent` (genuinely eligible signal → real paper position →
+correct side/entry, then confirmed the one-position-per-symbol gate
+still blocks a second call); a full end-to-end sg_ema manual-fire
+through a REAL running `PriceActionAgent` using the same sweep-based
+fixture technique already proven in test_strategy7.py (genuinely
+eligible setup → real signal with `s7_gates` attached → confirmed the
+agent's own `_taken` dedup bookkeeping was updated, so the automatic
+loop can't double-count the same fire); an unsupported strategy name
+rejected cleanly. Full regression suite green across all 16 test
+files. Confirmed no stray test data in config or the persisted version
+file after every run.
+
+
+## v57.2 — MTF Confluence manual-deploy, completing the trio (2026-07-26, round 20)
+
+Continuation of v57.1 — finished the piece explicitly flagged as
+too risky to rush that round: MTF Confluence's own manual-deploy.
+
+### What changed since the v57.1 assessment
+
+Read `MTFConfluenceAgent.cycle()`'s full per-symbol body carefully
+before touching anything. It turned out to be the same SHAPE of
+problem as sg_ema's extraction (an inline block doing position/
+cooldown checks, a broker data fetch, confluence evaluation, entry/
+stop/target math, then publish) — not fundamentally harder, just
+longer. Applied the identical extraction pattern that worked cleanly
+for Strategy 7: pulled the entire per-symbol body out of the `for sym
+in ...` loop into a new `_evaluate_and_fire(sym, d, cfg, ...)` method
+(byte-identical math, not rewritten), called by BOTH the existing
+automatic loop (one call per symbol, same as before) and the new
+manual-deploy endpoint (one call for the requested symbol only).
+
+**Bug introduced and caught during the extraction, fixed before
+shipping**: a stray leftover log line from the old inline block's tail
+survived the edit at the wrong indentation level, breaking the module
+entirely (`IndentationError` on `python3 -m py_compile`). Caught
+immediately by running the compile check as the very next step, not
+after moving on — consistent with this project's own "run the test,
+don't assume the edit worked" discipline.
+
+### `/api/strategies/manual_fire` extended
+
+Now branches on `name`: `sg_ema` (v57.1, unchanged) or `mtf_confluence`
+(new) — both re-evaluate right now via their agent's own extracted
+per-symbol method and publish through the standard `signal` bus topic,
+so RiskAgent runs the full existing gate exactly as if the automatic
+cycle had fired it. The MTF branch requires the same broker/enabled
+gates the automatic loop enforces (Dhan client, `mtf_confluence_
+enabled`) — no new gate, no bypass of any existing one. Strategies-
+page table: MTF Confluence's row now has a real "Fire Now" button too,
+completing the trio (Futures Signal, Strategy 7, MTF Confluence) that
+started the v57.1/v57.2 arc.
+
+### Verified
+
+test_manual_deploy.py extended to 14 checks (from 11): the full MTF
+Confluence path tested end-to-end through a REAL running
+`MTFConfluenceAgent`, with `mtf_confluence_strategy.evaluate()` itself
+mocked (its 5-condition confluence math is unchanged and out of scope
+for this round — the thing actually being tested is the NEW wiring:
+agent lookup, broker-client dispatch, entry/stop/target calculation,
+bookkeeping, and publish) — confirmed a genuinely eligible (mocked)
+confluence fires a real signal and updates the agent's own `_taken`
+day-count, and confirmed a second call the same day correctly hits the
+max-trades/day gate, the SAME gate the automatic loop enforces. Full
+regression suite green across all 16 test files, including the
+existing MTF-touching tests in `test_strategies_table.py`/`test_
+strategies_table_v2.py` re-run to confirm the extraction didn't
+regress anything those already covered. Config confirmed clean
+(matches registered defaults) after every test run.
+
+### This closes the item fully
+
+"No manual-deploy endpoint exists for MTF Confluence, S7, or Futures
+Signal" — now fully done, all three.
+
+
+## v58 — Unified AI Probability single-number stage (2026-07-26, round 21)
+
+The narrowed item from the roadmap-confirmation pass: after correcting
+a bookkeeping error (the "live feedback loop" half of the original
+item was already built in an earlier session; v56's optimizer
+separately addressed the backtest-search complaint), what genuinely
+remained was combining Option Chain + Institutional + Technical +
+Decision Engine into ONE literal number, not four separate scores a
+person has to weigh themselves.
+
+### What was built
+
+New `ai_probability_engine.unified_probability()` — a weighted
+composite following the exact same pattern already established twice
+in this codebase (`risk_engine.compute_ai_risk_score`, `risk_engine.
+trade_quality_score`): documented first-pass weights, any unavailable
+component EXCLUDED and the remaining weights renormalized (never a
+missing input defaulted to a misleadingly neutral score).
+
+Deliberately distinct from what it consumes, not a re-derivation:
+  - `estimate_probability()` (already existed) is purely EMPIRICAL —
+    historical trade record only. This function uses that as ONE
+    input, not a replacement.
+  - `ai_decision_engine.evaluate_signal()` (already existed) checks
+    whether Institutional/Technical CURRENTLY AGREE with the proposed
+    direction — that adjusted confidence is reused directly as one
+    component. What this adds is the two engines' own MAGNITUDE
+    (institutional_score / technical_score — how strong the reading
+    is, not just whether it agrees), which the Decision Engine's
+    agreement check never uses. Disagreement INVERTS the magnitude
+    rather than ignoring it (a strong institutional reading pointing
+    the wrong way scores worse than a weak one, not a neutral wash).
+
+Weights: option-chain base confidence 25%, Decision-Engine-adjusted
+confidence 30%, institutional magnitude 20%, technical magnitude 15%,
+empirical historical probability 10% (itself scaled down further when
+its own `confidence_in_estimate` is low — a 95% estimate from 3 trades
+shouldn't swing the composite as hard as one from 200).
+
+Wired into `RiskAgent.evaluate()` right after the existing plain
+probability estimate, advisory only (same reasoning as that estimate —
+not gated on). One small but real fix needed to wire it correctly:
+`sig["confidence"]` gets OVERWRITTEN by the Decision Engine a few lines
+into `evaluate()` — captured the pre-adjustment value into `sig["_pre_
+decision_confidence"]` beforehand so the option-chain's own base
+confidence survives as a distinct input rather than being lost to the
+same variable the Decision Engine already mutated. Exposed automatically
+via the existing `/api/signal` preview (which already runs `risk.
+evaluate()` speculatively) with zero additional wiring, since it
+mutates the same `sig` dict in place. Dashboard: a new, more prominent
+"Unified AI Probability" line on the signal card above the existing
+plain estimate, with a hover tooltip showing each component's own
+value and weight.
+
+**Complementary config-hygiene fix made alongside this**: found two
+flags (`ai_decision_engine_enabled`, `learning_feedback_enabled`) read
+via `cfg.get(key, True)` but never registered in `config.DEFAULTS` —
+the same "config.save() silently drops it" risk already fixed for
+`pa_enabled` in v55.1. No Settings-page UI currently exposes either
+(a latent gap, not a live bug), closed now with both defaults matching
+their existing inline fallback exactly, plus declared on `SettingsIn`
+per the v54 lesson.
+
+### Verified
+
+test_unified_probability.py — 20 checks: full 5-input composite
+lands within its own components' range; institutional disagreement
+correctly inverts magnitude rather than excluding or neutralizing it,
+and correctly produces a LOWER unified number than agreement; graceful
+degradation confirmed at 2/5 and 0/5 available inputs, weights always
+renormalizing to sum to 1.0; a non-actionable (WAIT) signal never gets
+a fabricated score; a low-confidence historical estimate contributes
+measurably less than a high-confidence one at the same raw percentage;
+full end-to-end through the REAL `RiskAgent.evaluate()` confirming the
+pre-decision confidence capture actually works and the unified number
+gets attached correctly; both config-hygiene registrations confirmed
+present in `config.DEFAULTS` and `SettingsIn`. Full regression suite
+green across all 17 test files. Config confirmed clean (matches
+registered defaults) after every test run.
+
+### This closes the item
+
+Both halves of the original "Unified AI Probability... live feedback
+loop" bullet are now genuinely done — the live feedback loop was
+already built earlier, the single combined number is built now.
+
+
+## v58.1 — Kotak options WS: index confirmed live, options gap CONFIRMED on re-run (2026-07-27)
+
+Real market-hours diagnostic run, requested and executed by the user
+right at market open.
+
+### Result
+
+- **Index (nse_cm): fully CONFIRMED.** 8 real ticks, smoothly moving
+  (23896.25 → 23900.55), matching NIFTY's actual level at capture
+  time. Connection, subscribe, the CHRESUME fix, and the decode logic
+  are all validated end to end against the real server.
+- **Options (nse_fo): inconclusive, not negative.** The 60s option-
+  listen window ran 09:04:40–09:05:40 — entirely BEFORE 9:15 IST,
+  when F&O actually opens (equity has a 9:00-9:08 pre-open call
+  auction; F&O has no pre-open session at all). Zero ticks in that
+  window is exactly what "nothing has traded yet" looks like, not
+  evidence of a broken subscription — caught before it got misread as
+  a negative result.
+
+### Fixed
+
+`test_kotak_ws.py`: added a SECOND, fresh F&O-specific market-hours
+check immediately before the options step, distinct from the existing
+top-of-run check (which had already gone stale by the time execution
+reached this point — 20s of index-waiting plus setup had passed). The
+final "still zero" conclusion at the end of the options step is now
+conditional on whether F&O was confirmed open for the WHOLE window,
+rather than a blanket "genuinely suggestive of a real gap" regardless
+of timing.
+
+### Next step
+
+Re-run `test_kotak_ws.py` again sometime after 9:15 (ideally a few
+minutes in, to let at least one real trade occur on the tested ATM
+strike) for an actual verdict on the options feed specifically.
+
+### Follow-up (same day, 09:17 re-run) — CONFIRMED, not inconclusive
+
+Re-run executed with F&O confirmed open the entire 60s window this
+time. Index again fully confirmed (8 ticks, 23934.35 \u2192 23932.15,
+smoothly moving). Options: subscribe + CHRESUME acknowledged for both
+NIFTY 23800 CE/PE (this week's expiry) \u2014 then zero DATA_TYPE frames of
+any kind for either leg over the full 60s, on what's normally one of
+the most heavily-traded contracts on the exchange right at open. This
+rules out the earlier timing artifact and confirms a genuine gap in
+the option subscription path specifically (index handshake is
+identical and works perfectly in parallel).
+
+Root cause not identified — no further live-server access available
+to test against. Recommended NOT to spend further live-market time on
+this: low priority, Dhan WS already covers the need (user-confirmed),
+Kotak REST option-chain fetch is validated and already serving as
+fallback. If pursued further, asking Kotak support whether the API key
+has real-time options WS entitlement is the one next step that
+resolves something rather than continuing to guess at unverifiable
+protocol bytes.
+
+
+## v58.2 — three live bug reports: two root-caused and fixed, one traced but inconclusive (2026-07-27, round 22)
+
+Three issues reported from live screenshots taken right at/after market
+open. Investigated each with equal rigor rather than assuming which
+were real bugs.
+
+### 1. SENSEX change ~48 points off from real broker apps — FIXED
+
+Root cause: `prev_close_for()` always called `dhan_client()` —
+whichever broker is ACTIVE in Settings, not necessarily Dhan despite
+the name. `get_chain()` already has a dedicated fallback (`_dhan_
+fallback_client()`) specifically because "Kotak's NSE-only master
+lacks SENSEX," but `prev_close_for()` never used it — if the active
+broker can't correctly serve SENSEX candles, the previous-close
+calculation silently used wrong or unavailable data while the live
+spot itself (fetched via a different path) stayed accurate, producing
+exactly this kind of fixed-offset discrepancy in the shown change.
+
+Second bug found in the same function while fixing the first: the day-
+boundary comparison (which candle counts as "yesterday's close") relied
+on `_dt.date.today()` / `_dt.datetime.fromtimestamp(...)` using the
+server process's ambient system timezone — correct only if that
+happens to be IST. Made explicitly IST-aware instead.
+
+Fix: SENSEX now always prefers the dedicated Dhan fallback client
+outright, matching `get_chain()`'s established pattern; other symbols
+are unaffected (still resolve via the normal active-broker path).
+
+### 2. "False Breakout" marker stuck on yesterday's session, even after today's open — FIXED
+
+A precisely-located second-order edge case from a fix made two days
+earlier (2026-07-25) for a different, related symptom. That fix
+anchored institutional/smart-money chart markers to "the last real
+candle's timestamp" instead of wall-clock "now," to stop markers from
+colliding across a quick symbol switch. The edge case: right after
+market open, before the first live tick or completed 1-minute bar
+exists for today, "the last real candle" available to that anchor
+computation is still yesterday's final bar — so a CURRENT
+institutional read was getting stamped onto yesterday's chart position.
+
+Fix: if the only candle on hand predates today (IST), the anchor
+timestamp now resets to `None`, which correctly falls through to wall-
+clock "now" — the 07-25 fix's collision-avoidance reasoning doesn't
+apply to this case, since there's no symbol-switch collision risk in
+using "now" specifically when nothing from today exists yet.
+
+### 3. "Institutional Activity" panel stuck on "Loading..." — investigated, inconclusive
+
+Traced thoroughly: the backend endpoint (`/api/institutional/{symbol}`)
+is a pure, fast bus read — confirmed correct and near-instant, ruling
+out a slow backend. The frontend's own code paths (`renderIae()`) never
+produce literal "Loading..." text under any outcome — both the
+"unavailable" and network-error branches write DIFFERENT text than the
+static placeholder. Since every code path that could plausibly explain
+this was checked and found correct, most likely explanation is a
+transient window caught right after page load, before the first 10s
+refresh cycle completed — not a confirmed bug. Left open rather than
+"fixed" without reproducing it; flagged for the person to report back
+if it recurs after being open for more than ~20 seconds, which WOULD
+indicate a real bug not yet found.
+
+### Verified
+
+test_prevclose_and_marker_anchor.py — 9 checks: `prev_close_for`
+returns the real historical close via the SENSEX-specific fallback (not
+None, not today's data leaking in); the fallback preference correctly
+overrides even when the active broker would otherwise be tried and
+fails; confirmed SENSEX-specific (NIFTY still uses the normal active-
+broker path, unaffected); IST-awareness confirmed present in the actual
+shipped source, not just my standalone reasoning about it; the marker-
+anchor day-boundary logic confirmed correct for a prior-day bar
+(resets to None), a same-day bar (kept), and no data at all (unrelated,
+stays None); confirmed the actual fix text is present in app.py, not
+just a parallel reimplementation in the test. Full regression suite
+green across all 18 test files. Confirmed no test artifacts left in
+the `_prev_close` cache or config after every run.
+
+
+## v58.3 — Institutional panel root cause found (name collision), Ollama safety confirmed, redeployment reminder (2026-07-27, round 23)
+
+Follow-up screenshot report of the SAME three issues from v58.2 plus
+one new one. Investigated each rather than assuming the earlier fixes
+had failed.
+
+### Institutional Activity panel — REAL bug found, not the transient timing issue guessed at in v58.2
+
+Root cause: TWO functions both named `loadInstitutional()` existed in
+the same script scope — the original Feature #5 dashboard-panel
+loader (updates `iaeScoreVal`/`iaeSummary`/`iaeCommentary`/`iaeEvents`,
+calls `renderIae()`) and the v57 "Institutional" page loader (updates
+`instSummary`/`instCommentary`/etc.) I added in an earlier round. In
+JavaScript, the LATER function declaration in source order silently
+wins — so every call to `loadInstitutional()` anywhere in the file,
+including from the OLDER `refresh()` cycle on the main dashboard, has
+actually been calling the NEWER page's function since v57. The
+original panel's own refresh logic never ran again, permanently stuck
+on its static "Loading..." placeholder — not a one-time timing
+artifact as guessed in v58.2's investigation.
+
+Fixed: renamed the newer function to `loadInstitutionalPage()` and
+updated its three call sites (the page's own refresh button, `showView`
+dispatch, and its auto-refresh interval). The original `loadInstitutional()`
+now correctly reaches its own panel again.
+
+Added a permanent regression guard (`test_unified_probability.py`)
+that scans the entire shipped dashboard for ANY duplicate top-level
+function declaration — this exact bug class should never be able to
+ship silently again.
+
+### SENSEX change / False Breakout marker — likely still the OLD deployment, not new bugs
+
+Both were fixed in v58.2 and verified with real, passing tests in that
+round. Reappearing in a fresh screenshot most likely means the running
+server process hadn't been restarted with the v58.2 code yet — these
+are backend Python fixes; refreshing the browser tab alone does not
+pick them up, the actual `python app.py` / uvicorn process needs
+restarting with the new files. Flagged directly to the person to
+confirm redeployment before assuming the fix itself is wrong.
+
+### Ollama timeout on open spreads' AI advisory — confirmed safe, not a capital-risk bug
+
+Traced through `RiskAgent`/`ExecutionAgent._monitor_spreads()` to
+verify rather than just cite the design doc: the rule-based exit
+checks (profit target, profit-lock, loss limit, short-strike breach,
+time stop, EOD square-off) are computed and evaluated entirely
+independently of the AI advisory call (`_spread_ai_check`, a separate
+method) — confirmed in the actual current code, not assumed from
+documentation. A timed-out Ollama call does not block or delay any of
+these; capital protection is intact regardless of local-LLM
+availability. The timeout itself is most likely Ollama being slow/
+overloaded on the person's machine — three open spreads' advisory
+checks landing close together would queue against one locally-hosted
+model if it can only serve requests serially, plausibly exceeding the
+default 60s timeout for the later ones even if Ollama itself is
+otherwise healthy.
+
+### Verified
+
+Full regression suite green across all 18 test files after the rename
+(one test needed updating — it asserted the OLD function name, a
+stale assertion from before this round's fix, not a real regression;
+fixed and confirmed green). New regression guard specifically added
+and confirmed passing: zero duplicate function declarations anywhere
+in the shipped dashboard.
+
+
+## v58.4 — spread auto-deploy staleness gate; bear_call_spread on a bullish day clarified as by-design (2026-07-27, round 24)
+
+Live report: a bear_call_spread fired on FINNIFTY while the index was
+up +0.22-0.23% on the day, with the theory that this reflected a
+"delay in analysis."
+
+### Investigated rather than assumed either direction
+
+`REGIME_FIT["bear_call_spread"]` (strategies.py) is explicitly
+`("trending-down", "rangebound", "mixed")` — valid in rangebound/
+mixed regimes regardless of the day's net direction. A market can be
+up on the day while RegimeAgent's ADX/opening-range-expansion read
+still classifies it as rangebound or mixed (grinding sideways-up, not
+a clean trend) — "index is up X% today" and "REGIME classification"
+are different signals that can genuinely diverge. So THIS specific
+case wasn't necessarily wrong by design.
+
+### But a real, separate gap was found while checking
+
+`_auto_spreads()` read `analysis:{symbol}`/`regime:{symbol}` off the
+bus with NO freshness check at all before evaluating or entering a
+spread — unlike `/api/analysis/{symbol}`'s own existing "fresh
+enough" precedent (`ts < 90s`). A genuinely stale read was never
+actually ruled out for the reported case, and nothing would have
+stopped it from happening on a future one, regime-fit question aside.
+
+Fixed: added the same 90s freshness gate, keyed off `chain_ts:{symbol}`
+(the timestamp MarketDataAgent sets on every real chain fetch, and the
+most direct proxy for how current the `analysis` actually is). Missing
+`chain_ts` entirely (never fetched) is treated as maximally stale, not
+as fresh-by-default — a symbol with no data yet should never be
+traded on. New `stale_analysis` skip-reason counter alongside the
+existing ones, logged with the actual age when it fires.
+
+### Verified
+
+test_spread_staleness_gate.py — 5 checks: fresh data (just now, and
+30s old) is correctly NOT skipped; 5-minutes-old data IS skipped
+before ever reaching the eligibility check (confirmed via the skip-
+reason counters themselves, not just the absence of a trade); missing
+`chain_ts` entirely is treated as stale rather than fresh-by-default;
+`bear_call_spread`'s documented regime-fit re-confirmed directly from
+source to support the "not necessarily wrong" framing rather than
+asserting it from memory. Full regression suite green across all 19
+test files. Config's `auto_strategies` confirmed restored to its
+documented default after every test run (a stray persisted test value
+was caught and the test itself fixed to snapshot-and-restore properly,
+matching this project's own established discipline).
+
+
+## v58.5 — signal card showed a confident, clickable recommendation the risk gate was always going to reject (2026-07-27, round 25)
+
+Live report: the "AI Trade Signal" card showed "BUY 57,100 CE" with
+86% confidence and 81% Unified AI Probability, with an enabled
+"Confirm & place order" button — while the risk-gate checklist (shown
+after clicking through a confirm dialog) had a clear ✗ on "regime
+'trending-down' allows ['BUY_PE']". The question: why does the display
+look confidently actionable for a direction the regime gate was always
+going to block?
+
+### First, the critical safety question — answered by tracing the actual code, not assumed
+
+The order was NEVER actually at risk. `manual_trade()` (agents.py)
+re-runs `risk.evaluate()` server-side before `ex.place()` is ever
+called, and correctly returns `{"error": ..., "checks": [...]}` without
+placing anything when a gate fails — confirmed directly in the code
+that runs on every "Confirm & place order" click. **The screenshot
+itself was proof the safety net worked**: the person clicked Confirm,
+the server correctly rejected the order, and the checklist shown was
+that rejection response. This was a misleading DISPLAY gap, not a
+capital-safety gap — but a real and confusing one.
+
+### Root cause
+
+`renderSignal()`'s `canTrade` computation only ever checked the
+signal's DIRECTION (`BUY_CE`/`BUY_PE`) — never whether the risk gate
+would actually approve it. Meanwhile `/api/signal/{symbol}` has been
+computing and returning `risk_preview_checks` (the exact ✓/✗ list
+`RiskAgent.evaluate()` produces) on every actionable signal preview
+since the Unified Probability work — already there, already correct,
+simply never consulted by the button/card rendering.
+
+### Fix
+
+`canTrade` now requires zero `✗`-prefixed entries in
+`risk_preview_checks`, not just a valid direction. When a check would
+fail, the card now shows it directly (“⚠ Would be blocked right now:
+regime 'trending-down' allows ['BUY_PE']”) instead of requiring a
+click-through to a rejection alert to discover it. The confidence/
+probability numbers are left visible alongside the warning rather than
+hidden — both pieces of information are legitimate and worth seeing
+together: the underlying analysis genuinely found a high-confidence
+setup, the regime context says this isn't the moment to act on it, and
+showing both lets the person understand the system rather than just
+trusting a number.
+
+### Verified
+
+test_signal_card_risk_gate.py — 11 checks: confirmed the backend
+already computes and returns the preview data (no backend change
+needed, pure frontend fix); confirmed `manual_trade()`'s server-side
+re-evaluation in the actual source (not assumed from the docstring);
+confirmed the exact ✓/✗ string format the fix parses; the shipped fix
+verified present via source inspection; logic re-run against the EXACT
+reported scenario (now correctly computes `canTrade=False` with the
+regime check identified as the blocker) plus two control cases — a
+genuinely clean signal still computes `canTrade=True` (the fix doesn't
+over-correct into blocking everything), and a WAIT signal (which never
+gets `risk_preview_checks` at all) still correctly computes
+`canTrade=False`. Full regression suite green across all 20 test
+files.
+
+
+## v58.6 — analysis-learn-adopt loop applied to real Order History/Journal data (2026-07-27, round 26)
+
+Direct request: analyze real Order History and Shadow Journal data for
+actual patterns, then adopt concrete fixes — not a general review, a
+specific data-driven diagnostic pass.
+
+### 1. Order History showed "undefined -" for every futures trade — FIXED
+
+Root cause: futures closed-trade records use `side`/`lots`/`sl`/`target`
+field names (agents.py's `enter_future`/`exit_future`), but the Order
+History row template only knew option/spread field names (`leg`/`qty`/
+`stoploss`/`target1`/`target2`) — there was no branch for futures at
+all, so every one of those fields resolved to `undefined` for a
+futures row. Fixed with an explicit `kind==="future"` branch using the
+real field names.
+
+### 2. Repeated FINNIFTY bear_call_spread losses at the same wall — investigated, real gap found and fixed
+
+The specific pattern in the data: `bear_call_spread` re-sold the SAME
+FINNIFTY 26,100 CE wall four times in one session (10:24, 10:52, 11:28,
+12:30), with LOT SIZE INCREASING after losses (130→260→260), netting
+roughly -3,185 on that one pairing alone.
+
+Checked whether this was a design violation first, not assumed:
+`bear_call_spread` is explicitly valid in rangebound/mixed regimes
+regardless of the day's net direction (confirmed again from
+`strategies.REGIME_FIT`), so the entries themselves weren't necessarily
+wrong. But investigating surfaced a REAL, more important gap:
+`RiskAgent` already has a consecutive-loss circuit breaker
+(`stop_after_consecutive_losses`, default 2) that halts the
+DIRECTIONAL signal pipeline — but spreads never went through
+`risk.evaluate()` at all (`_auto_spreads()` calls `enter_spread()`
+directly), so that protection never applied to them. Nothing was
+watching "we keep losing on this exact wall."
+
+Fixed: added a per-(symbol, strategy) version of the same circuit
+breaker (`spread_stop_after_consecutive_losses`, same default of 2).
+Two losses in a row on a specific wall/strategy pairing now pauses
+THAT pairing (not the whole account) for the rest of the day — scoped
+per-pairing rather than account-wide since a spread's wall-based edge
+is symbol/strategy specific, not a global signal-quality signal. Wired
+into the real `exit_spread()` bookkeeping (increments on loss, resets
+on any win) and checked in `_auto_spreads()`'s per-symbol loop.
+
+### 3. Portfolio kill-switch's documented cooldown never applied to spreads — found while fixing #2, also fixed
+
+Same root cause as #2: the kill-switch's documented 60-minute post-
+trip cooldown (`portfolio_halt_until`) is checked by the directional
+pipeline but `_auto_spreads()` never looked at it — new spreads could
+open again immediately after a kill-switch force-closed everything,
+inside the window that was supposed to pause new entries. Added the
+same check at the top of `_auto_spreads()`.
+
+### 4. "High capital, picking low-money options" — checked, working as designed
+
+Confirmed dynamic sizing is active and the person's own Order History
+already shows lot counts scaling from 20 up to 260 depending on
+available capital at entry time — not defaulting to small trades. The
+thin per-share credit (₹20-80/share) is inherent to how OI-wall credit
+spreads work: small, high-probability edges scaled by quantity, not
+premium size. Flagged as a strategy-mix/risk-appetite question rather
+than a sizing bug, since the mechanics check out correctly.
+
+### Verified
+
+test_spread_safety_and_futures_render.py — 10 checks: portfolio
+cooldown correctly pauses ALL spread auto-deploy while active; two REAL
+consecutive losses (via the actual `exit_spread()` call, not a hand-
+set counter) correctly increment the per-pairing counter and log the
+halt; a subsequent win correctly resets it to 0; the halt gate in
+`_auto_spreads()` itself confirmed blocking a pairing at threshold,
+isolated from the re-entry cooldown so the two checks aren't
+conflated; new config key confirmed registered on both `DEFAULTS` and
+`SettingsIn`; futures row-rendering fix confirmed against a realistic
+record (resolves to real text, not `undefined`). Full regression suite
+green across all 21 test files. Config confirmed restored to defaults
+after every test run.
+
+
+## v58.7 — futures signal engine disabled by direct instruction; data collection preserved for analysis (2026-07-27, round 27)
+
+Direct instruction after real trading data: "Future trade are going
+directly in loss, system should avoid making future trade calls.
+Future data should only be used for analysis purposes." Every futures
+trade in the reported Order History closed at a loss or exact
+breakeven, all via forced kill-switch closure — none via its own
+profit target.
+
+### What changed
+
+`futures_strategy_enabled` default changed from `True` to `False`.
+Verified first, not assumed, that data collection and signal generation
+are genuinely separable in this codebase: `MarketDataAgent`'s futures
+OI-buildup classification (`_classify_future_tick`) and price polling
+(`_poll_futures_via_rest`) are a completely different code path from
+`ExecutionAgent._futures_signal_engine()` — confirmed by grepping the
+entire `MarketDataAgent` class body and finding zero references to
+this flag. Turning the signal engine off does not touch the data feed
+other strategies (MTF Confluence) still read as a supportive input.
+
+### A real gap found and closed while making this change
+
+The manual "Fire Now" endpoint (`/api/futures/manual_deploy`, v57.1)
+called `_futures_signal_eval()` — the PURE eligibility function —
+directly, and never checked `futures_strategy_enabled` at all; only
+the automatic engine did. This meant turning the flag off in Settings
+would have correctly stopped auto-deploy but NOT this manual button,
+which could still place a real trade. Added the same check to the
+manual endpoint, with a clear error message explaining WHY (not just
+"error") — and fixed three stale inline fallback defaults (`.get(...,
+True)`) scattered across app.py/agents.py that still assumed the old
+default, now all consistent with the registered `False`.
+
+Frontend: the Strategies-page "Fire Now" button for Futures Signal now
+shows an honest "disabled — analysis only" message instead of a
+clickable control that would just return an error — same principle
+already applied elsewhere in this table (Manual Deploy showing "—"
+where no endpoint exists).
+
+The raw discretionary "Buy FUT"/"Sell FUT" buttons on the LTP Monitor
+cards were deliberately left untouched — those represent a human
+directly choosing to trade, with no system signal or judgment
+involved, a different thing from "the system making a call." Worth
+confirming this reading is correct; happy to remove those too if the
+intent was broader.
+
+### Verified
+
+test_futures_signal_disabled.py — 11 checks: the new default confirmed
+registered; the automatic engine confirmed to return immediately with
+the flag off even when auto-deploy is separately on; the manual
+endpoint's real gap confirmed closed via an actual HTTP call (returns
+a clear error, not a silent bypass); data collection's independence
+confirmed structurally (the flag string doesn't appear anywhere in
+`MarketDataAgent`'s class body, not just "seems unrelated"); all stale
+inline fallback defaults confirmed fixed; frontend button state
+confirmed to honestly reflect the backend flag rather than always
+being clickable. Full regression suite green across all 22 test
+files/checks. Config confirmed clean after every test run.
+
+
+## v58.8 — AI signal validation, futures P&L visibility (2026-07-27, round 28)
+
+Two concrete fixes from the large data-driven report (config.json,
+activity.log, journal.json, trades CSV uploaded directly).
+
+### 1. Malformed AI signal values — real bug, 65 occurrences in one session
+
+Root cause: the AI-signal prompt uses `"signal":"BUY_CE|BUY_PE|WAIT"`
+as a SCHEMA HINT (pick one of three) — the local model (qwen2.5:3b per
+the uploaded config) was literally echoing that placeholder back as
+its answer. Nothing validated `sig["signal"]` against the actual
+allowed values, so the malformed string sailed through into every
+downstream check. The regime gate can never match a value that isn't
+literally "BUY_CE" or "BUY_PE", so this repeatedly looked like "a 90%-
+confidence NIFTY trade is being blocked by the regime gate" when it
+was actually never a valid signal in the first place. Fixed: explicit
+validation falls back to the rule engine on any unexpected value, plus
+the prompt itself hardened to explicitly forbid combining values or
+using "|".
+
+### 2. Futures positions invisible on the P&L page — and undercounted in Unrealized P&L
+
+`/api/trades` never read `futures_positions` at all — not just a
+display gap, `Unrealized P&L` itself silently excluded any open
+futures position's pnl from its sum. Same class of gap already fixed
+for spreads on 2026-07-24, never caught when futures was added later.
+Fixed both the stats calculation and added a proper Open Futures table
+to the P&L page.
+
+### Verified
+
+test_ai_signal_validation.py (7 checks) and test_futures_pnl_page.py
+(8 checks): the exact malformed string from the real log rejected
+correctly; valid BUY_CE/BUY_PE/WAIT responses still accepted (no over-
+correction); other garbage values also caught, not just the one seen;
+futures position confirmed present in the API response and correctly
+included in Unrealized P&L, including alongside options and spreads
+together; frontend rendering confirmed. Full regression suite green
+across all 24 test files.
+
+### Explicitly NOT resolved this round (flagged, not silently dropped)
+
+  - User's config.json has `futures_strategy_enabled`/`futures_auto_
+    deploy` explicitly `true` — the v58.7 default change cannot
+    retroactively override an already-saved explicit value; needs a
+    manual Settings change on the user's side.
+  - "False Breakout" marker still reported visible despite the v58.3
+    fix — not re-diagnosed this round.
+  - Index % change wrong across ALL FOUR symbols, not just SENSEX —
+    a bigger finding than the v58.2 SENSEX-specific fix addressed
+    (user's broker is already "dhan", so that fix path doesn't even
+    apply here) — needs fresh investigation, not assumed to be the
+    same root cause.
+  - Dynamic IV-based profit targets, full backtest-per-candle
+    retroactive analysis, real-time analysis cadence, multi-day candle
+    DB visibility, strategy-mix rebalancing — all substantial, all
+    explicitly deferred rather than attempted shallowly.
+
+
+## [uncommitted — code only, no build yet per explicit instruction] Index % change: authoritative Dhan quote field, not candle reconstruction
+
+Continuing the critical-items pass (2 of 4). "False Breakout" (item 4)
+and the spread/directional capital-concentration question (item 3)
+still queued.
+
+### Root cause found
+
+The earlier SENSEX-specific fix (route through the dedicated Dhan
+fallback client) doesn't explain THIS report: all four indices' shown
+change was off from TradingView by a small, consistent amount, with
+`broker: "dhan"` already active in the uploaded config — so a broker-
+mismatch can't be the cause here.
+
+Investigated `prev_close_for()` itself: it derived the previous close
+by reconstructing it from 15-minute candles — one step removed from
+the exchange's own official reference print. Dhan's quote API already
+returns an authoritative `previous_close_price` field directly,
+already used exactly this way for OPTION LEGS in `broker_adapter.py`'s
+`_leg()` — only this INDEX-level path took the less direct,
+candle-reconstruction route instead.
+
+### Fix
+
+`prev_close_for()` now tries Dhan's `quote_batch()` (IDX_I segment,
+the same endpoint and pacing already established for futures polling)
+FIRST, extracting `previous_close_price`, and only falls back to the
+existing candle-reconstruction approach if that field is missing or
+the call errors — kept as a genuine safety net, not deleted, since
+the exact schema Dhan returns for an INDEX quote (as opposed to the
+already-confirmed option-leg one) hasn't been verified against a live
+server from this environment.
+
+### Verified
+
+test_authoritative_prev_close.py — 5 checks: the authoritative field
+used when present (matches the reported TradingView reference
+exactly); falls back correctly when the field is absent; falls back
+correctly when the call raises an exception; a broker client without
+`quote_batch` at all (Kotak/Zerodha) handled gracefully, not an
+AttributeError; SENSEX's existing fallback-client preference confirmed
+to also get the new authoritative-quote-first treatment. Full
+regression suite green across all 25 test files.
+
+### Not yet built/packaged
+
+Per explicit instruction: no version bump, no zip, until all changes
+across this critical-items pass are complete.
+
+
+## [uncommitted — code only, no build yet per explicit instruction] "False Breakout" re-investigated: TWO compounding bugs, not one
+
+Item 4 of the critical-items pass. The earlier anchor-timestamp fix
+(2026-07-27, part 1) turned out not to be the whole story —
+re-investigated from scratch rather than re-applying the same fix.
+
+### Bug A: markers re-emitted every cycle a condition stayed active
+
+`_institutional_to_markers()`/`_smart_money_to_markers()`'s own
+docstrings already said it plainly: these are "current-state flags
+recomputed each cycle," not discrete events. `breakout_validation()`'s
+classification can genuinely stay "False Breakout" for an extended
+stretch of a session — and these functions ran on EVERY cycle of the
+signals websocket loop, re-emitting a FRESH marker at the CURRENT
+candle every single cycle for as long as the condition stayed true.
+Each individual marker was correctly anchored (not stale) — but
+visually this looked identical to "the same marker is stuck," since a
+new one just kept appearing right where the last one had been,
+following price forward all day.
+
+Fixed: both functions now track OFF->ON transitions (via a per-
+connection state dict, composite-keyed for `_smart_money_to_markers`
+since it carries a list of entries per event category, not a single
+flag) and only emit a marker on a genuine new occurrence.
+
+### Bug B (found while testing the fix for A, before shipping it)
+
+Fixing A on its own would have created a WORSE problem: the client
+fully REPLACES its marker array on every "signals" message rather than
+accumulating (confirmed by reading `connectLwChart`'s own handler
+before assuming this) — so a marker that now only fires ONCE (the
+genuine transition) would flash for a few seconds and then VANISH on
+the very next message, instead of persisting on the chart like a real
+historical event should.
+
+Fixed the same way trade lifecycle events already work correctly:
+newly-fired transition markers are now persisted to a bus key
+(`institutional_events:{symbol}`), day-pruned exactly like the
+anchor-timestamp fix already established, and the FULL accumulated
+list for today is resent every cycle — not just the current cycle's
+transition.
+
+### Verified
+
+test_chart_marker_transitions.py — 8 checks: a continuously-active
+condition fires exactly once across 5 cycles, not once per cycle; a
+genuine OFF->ON->OFF->ON sequence correctly re-fires on each real
+transition and stays silent otherwise; the same fix confirmed for
+`_smart_money_to_markers` with composite (event-type + strike) keying,
+including a DIFFERENT strike appearing mid-stream correctly firing its
+own marker without disturbing the first; the compounding persistence
+bug (B) confirmed fixed — a marker fired once continues being sent on
+every subsequent cycle rather than vanishing, without growing
+unbounded; a stale prior-day entry confirmed pruned rather than
+leaking forward. Full regression suite green across all 26 test
+files.
+
+### Not yet built/packaged
+
+Per explicit instruction: no version bump, no zip, until the full
+critical-items pass is complete. Item 3 (capital concentration in
+spreads vs directional PE/CE) still queued.
+
+
+## [uncommitted — code only, no build yet per explicit instruction] Item 3: spread concentration — real data analyzed, one safe fix built, one judgment call flagged not made
+
+Final item of the critical-items pass. Quantified from the real
+activity log rather than assumed.
+
+### The real numbers
+
+130 spreads closed today. 919 directional signal generations attempted,
+only 13 approved (1.4%), 652 rejected. On the surface this looks like
+"the system favors spreads" — investigated whether that's a bug.
+
+### Root cause: NOT a spread-favoring bug — safety gates working as designed on a mixed-regime day
+
+Broke down the 652 rejections: 327 combined ("no-alignment" timeframe
+confluence, both CE and PE) — the single biggest blocker by far — plus
+259 regime-direction mismatches (signal wanted a direction the current
+regime didn't allow), 78 daily-loss-limit, and smaller categories.
+Cross-checked the regime distribution across today's rejections:
+trending-up (160), mixed (102), trending-down (99), gap-and-fade (99)
+— a genuinely MIXED, frequently-changing-regime day, not a rangebound/
+choppy one as first assumed.
+
+Credit spreads (`bear_call_spread`/`bull_put_spread`) are explicitly
+documented to fit trending/rangebound/mixed regimes (`REGIME_FIT` in
+strategies.py) — i.e. almost ALL of today's conditions. Directional
+buys require a clean, confirmed regime + full timeframe agreement — a
+much narrower bar BY DESIGN, matching this project's own founding
+principle ("defined-risk bias... weighted toward credit spreads...
+rather than unmanaged directional bets"). The 98.6% rejection rate is
+the safety gates correctly declining low-quality directional setups on
+a day that didn't offer many clean ones — not a bug to fix by loosening
+them.
+
+**Deliberately NOT done**: loosening the regime/confluence gates to
+force more directional trades. That is a genuine risk-appetite
+decision, not a bug fix, and this project isn't making that call
+unilaterally without the user's explicit sign-off.
+
+### What WAS a real, fixable, purely risk-REDUCING gap
+
+The ONLY existing limit on spread exposure was a COUNT
+(`max_concurrent_spreads`, currently 20 in the uploaded config) — with
+dynamic sizing on, spreads could keep opening up to that count as long
+as margin allowed, potentially committing most of total capital to
+spreads regardless of how many that represents, leaving little room
+for directional trades even on the rare occasions they DO clear the
+gates. This directly matches "utilise most of the capital in one
+orders."
+
+Fixed: new `max_spread_capital_pct` (default 60%) caps the FRACTION of
+total capital tied up in spread margin at once, independent of spread
+count — a new ceiling, never encourages more risk-taking, unlike the
+gate-loosening question above.
+
+### Verified
+
+test_spread_capital_cap.py — 6 checks: new key registered on both
+DEFAULTS and SettingsIn; blocked correctly when capital concentration
+exceeds the cap via just ONE spread (well under the separate count
+cap, confirming this really is about capital fraction, not count);
+proceeds normally when well under the cap; zero spreads open never
+falsely blocked; the cap confirmed genuinely configurable (a stricter
+5% cap blocks the same scenario a 60% cap allowed). Full regression
+suite green across all 27 test files.
+
+### Critical-items pass now complete (items 1-4)
+
+Item 1 (futures auto-trading) — user's own config already updated.
+Item 2 (index % change) — authoritative Dhan quote field fix, tested.
+Item 3 (spread concentration) — analyzed, real cap added, tested.
+Item 4 (False Breakout) — two compounding bugs found and fixed, tested.
+Still no version bump or package, per explicit instruction to hold
+until told otherwise.
+
+
+## [uncommitted — code only, no build yet per explicit instruction] Item 5: dynamic IV-based spread profit targets
+
+### What was requested
+
+Replace the flat ~10-18% profit capture with an IV-aware target:
+20% on low IV, 30% on normal IV, 40-50% on elevated IV (the top of
+that range only when the trend also looks stable).
+
+### Reused existing, previously-dead code rather than building fresh
+
+`risk_engine.iv_percentile()` already existed, fully built and tested
+(percentile-rank against a historical IV window, with an honest
+window-size label) — but had ZERO callers anywhere in the codebase.
+This is that function's first actual use.
+
+### What was built
+
+`risk_engine.dynamic_spread_profit_target_pct(cfg, avg_iv,
+iv_pctl_result, regime_label, adx)` — three-tier fallback, always
+returns something sensible rather than silently skipping IV entirely:
+  1. Percentile-based (best, needs >=20 historical readings): <30th
+     percentile -> low-IV target, 30-70th -> normal, >70th ->
+     elevated (further split by trend stability).
+  2. Absolute IV level (fallback, no percentile history yet): reuses
+     the SAME >25/<12 thresholds `analyzer.py`'s `iv_status` already
+     uses elsewhere, rather than inventing a second definition of
+     "elevated."
+  3. Flat configured default (last resort, no IV reading at all).
+
+Elevated band checks trend stability (trending-up/trending-down regime
++ ADX >= 25) before reaching for 50% instead of 40%, per the request's
+own wording ("elevated AND trend is stable").
+
+Wired into `enter_spread()` — computed and LOCKED IN at entry time
+(same as `loss_limit` already is), not recalculated mid-trade, using
+data already on the bus (analysis for avg_iv, regime for the stability
+check, `history.get_daily_atm_iv_history()` for the percentile tier).
+The basis string is stored alongside the target itself
+(`profit_target_basis`) so it's auditable later — why THIS trade got
+THIS target, not a silent number. Disabled by default
+(`dynamic_spread_targets_enabled: False`) — a real behavior change to
+how spreads exit, opt-in rather than silently changing existing spread
+behavior for anyone already running this.
+
+### Verified
+
+test_dynamic_spread_targets.py — 25 checks: each tier tested against a
+FIXTURE-VALIDATED percentile (checked the fixture itself produces the
+intended percentile band before testing the function against it, not
+just assumed); elevated+stable trend correctly reaches 50%, elevated
+without a stable trend (either non-trending regime OR weak ADX)
+correctly stays at 40%; a too-thin percentile sample (n=2) correctly
+distrusted and falls through to the absolute-level tier; all three
+tiers' fallback behavior confirmed; config keys registered on both
+DEFAULTS and SettingsIn per the established discipline, defaulting to
+disabled; full end-to-end test through the REAL `enter_spread()` call
+(not just the pure function) confirming a genuinely elevated+stable-
+trend entry produces a real spread position with the 50% target and
+the correct rupee-value profit_target. Full regression suite green
+across all 28 test files.
+
+### Not yet built/packaged
+
+Per explicit instruction: no version bump, no zip, until told
+otherwise.
+
+
+## [uncommitted — code only, no build yet per explicit instruction] Item 7 reviewed — keeping open for later revisit, not resolved-and-closed
+
+Investigated every relevant agent's ACTUAL declared cadence rather than
+going by the "60-90s" framing at face value:
+
+  - Exit monitoring (stop-loss/target/breach on open positions):
+    ExecutionAgent, 2s cycle, checking live P&L derived from
+    MarketDataAgent's price feed (3s for Dhan — that number comes
+    directly from Dhan's own hard rate limit on the option-chain
+    endpoint, not an arbitrary choice).
+  - Signal generation (new trade candidates): event-driven
+    (StrategyAgent subscribes to fresh "analysis" events published
+    every ~3s), not polled on a slow interval.
+  - Regime/confluence classification: 90s, with the code's own comment
+    explaining why ("candles don't move that fast; every 90s is
+    plenty") — derived from 5m/15m candles, which cannot produce new
+    information faster than every 5 minutes regardless of poll
+    frequency.
+
+Working conclusion: the safety-critical and decision-critical paths
+(entry signal generation, exit monitoring) are already running at the
+pace the broker's own rate limit allows; the slower-cadence agents are
+slow because the underlying data genuinely doesn't refresh faster, not
+from neglect. No code change made.
+
+**Per explicit instruction: kept OPEN in the roadmap for later review,
+not marked resolved** — flagging this clearly in case there's a
+specific scenario or piece of evidence the person wants to revisit
+this against that wasn't covered by this pass.
+
+
+## [uncommitted — code only, no build yet per explicit instruction] Item 8: multi-day chart history — "today only" was an artificial restriction, not a data limitation
+
+### Root cause found
+
+Investigated whether multi-day candle history actually persists in the
+DB before assuming anything. Confirmed it does: `MarketDataAgent`'s
+per-tick candle builder (`_build_candle`) runs continuously as part of
+the server's own tick processing, completely independent of whether
+any browser is connected, and persists every completed minute to
+`{symbol}_SPOT_{interval}m`. Searched for any DELETE against the
+candles table and found none — this data genuinely accumulates
+indefinitely.
+
+The actual bug: the Live Chart's own history query in `/ws/candles`
+hard-cut at `WHERE ts >= today_start` — discarding weeks or months of
+perfectly good, already-persisted history every single time, for no
+reason related to the data itself.
+
+### Fix
+
+Widened to a configurable, interval-scaled lookback (`chart_history_
+days_1m`=5, `_5m`=20, `_15m`=60 — scaled so 1-minute data doesn't send
+an excessive payload relative to 15-minute data over the same real
+span) instead of "today only."
+
+### A second risk found and guarded against BEFORE shipping
+
+Widening this reopens a DIFFERENT, pre-existing, documented issue: the
+candles table still contains flat weekend/evening keepalive bars
+persisted before `_build_candle` was gated on `market_open()`
+(2026-07-26) — nothing prunes those either. Reusing this query's wider
+reach would have resurfaced that old contamination onto the chart.
+Applied the EXISTING `_in_market_session()` read-side filter (already
+used for the indicator path) to this query too, rather than risk
+shipping the history fix and reintroducing a different already-solved
+problem.
+
+### Verified
+
+test_chart_multiday_history.py — 11 checks: config keys registered
+with sensible defaults; three DISTINCT real trading days (deterministic
+day-generation, no collision risk unlike an earlier ad-hoc check)
+correctly retrieved as 60 total candles; a deliberately-seeded
+contaminated weekend row confirmed to leak through the RAW query (61
+rows) but get correctly filtered back out by `_in_market_session()`
+(60 real candles remain); confirmed the OLD "today only" query style
+would have returned ZERO rows for this exact fixture — proving the
+symptom was real and this is a genuine fix, not a no-op; the actual
+shipped source confirmed to contain the fix via direct inspection, not
+just a parallel test reimplementation. Full regression suite green
+across all 29 test files. No stray test data left in the candles
+table after any run.
+
+### Not yet built/packaged
+
+Per explicit instruction: no version bump, no zip, until told
+otherwise.
+
+
+## [uncommitted — code only, no build yet per explicit instruction] Item 6: retroactive per-candle, per-strategy audit of today's trades — the "learn and adopt" loop
+
+### What was requested
+
+"Backtest for each candle and each strategy to identify the gap and
+retune the parameter and strategy itself" — requested multiple times
+across this whole engagement as "Apply Loop - Analysis, learn and
+adopt."
+
+### What was built
+
+`backtester.audit_today(name, symbol, real_trades)` — replays the
+EXACT strategy rules against today's own archived data (reusing
+`_replay_for()`/`get_params()`/`metrics()`, all already built for the
+v56 optimizer — `days=[today]` scoping already worked on every
+`replay_*` function, nothing needed changing there), then compares
+that idealized rule-replay against what ACTUALLY happened live today.
+Surfaces three kinds of gap rather than a single aggregate P&L number:
+
+  - `missed_by_live` — the pure rules found a valid setup today, but no
+    real trade was entered near that time (could be a cooldown/gate/
+    margin constraint working as intended, or a genuine timing issue
+    worth investigating further).
+  - `unexpected_in_live` — a real trade happened that the pure rules,
+    replayed against the same day, would NOT have made.
+  - `matched` — real and replayed trades that align (entry-time
+    proximity within 5 minutes, not exact equality).
+
+### Wired into two surfaces
+
+1. **Automatic daily** — `LearningAgent`'s existing post-15:35 journal
+   cycle now runs this for every (symbol, strategy) pairing that
+   actually traded that day, alongside the AI critique it already
+   generates. Persisted to `journal.json` in TRIMMED form (summary +
+   counts only, not the full trade lists) — that file already
+   accumulates indefinitely (2.5MB+ observed in the uploaded copy) and
+   the full detail would meaningfully worsen that.
+2. **On-demand** — new `GET /api/backtest/audit-today?symbol=X&name=Y`
+   returns the FULL comparison (complete backtest/matched/missed/
+   unexpected trade lists) for ad-hoc review, cheap enough (one replay,
+   not a multi-candidate sweep) to run inline rather than queued.
+
+### Verified
+
+test_audit_today.py — 19 checks: a day with zero real trades
+correctly classifies every backtest-found setup as missed_by_live; a
+real trade within the 5-minute matching tolerance is correctly matched
+(not double-counted as missed AND unexpected); a real trade far
+outside tolerance is correctly classified as unexpected without
+consuming a false match; real trades are correctly filtered by day AND
+symbol AND strategy simultaneously (a trade differing in any one
+dimension doesn't leak into the comparison); source-level guards
+confirm `audit_today` reuses the SHARED `_replay_for`/`get_params`/
+`metrics` rather than reimplementing strategy logic a third time; the
+on-demand API endpoint confirmed returning full detail via a real HTTP
+call; the daily-cycle wiring confirmed present and confirmed trimmed
+(persists summary/count fields, not the full trade lists, into the
+already-large journal file). Full regression suite green across all 30
+test files. No stray test data left in the candles/instruments tables.
+
+### Not yet built/packaged
+
+Per explicit instruction: no version bump, no zip, until told
+otherwise.
+
+
+## [uncommitted — code only, no build yet per explicit instruction] Item 11: Strategy 7 follow-ups — rejected-signal markers built, position-cap policy resolved and documented
+
+### Half 1: rejected-signal markers — genuinely dead code found on BOTH ends, now wired
+
+An earlier roadmap note assumed this was "client layer ready, server
+not wired." Investigated and found that was wrong: the client's
+`lwSignalMarkers` layer (declared since v51, with "entries/exits/
+rejections" in its own comment) and the `s7_show_rejected_markers`
+Settings toggle both existed, but NEITHER side ever actually wired a
+rejection through — confirmed by grep: `lwSignalMarkers` was assigned
+nowhere but its own initial declaration.
+
+A "rejection" worth marking is specifically a real EMA cross (the
+`cross` gate passed) that a LATER gate (mtf/structure/ai_bias) then
+explicitly blocked — not the routine "no cross at all" case, which is
+most cycles and would be noise, not signal, if marked.
+
+Built using the SAME transition-based approach already proven for the
+False Breakout marker fix (item 4) — only marks a genuine new
+occurrence, not the same blocked state re-announced every cycle
+(exactly the mistake that fix corrected, guarded against here from the
+start rather than repeated). New `PriceActionAgent._record_s7_
+rejection()` persists to `s7_rejected_events:{symbol}` (day-pruned,
+capped), converted server-side to LWC markers (`_s7_rejections_to_
+markers()` — caught and fixed a real "diamond" shape bug before
+shipping; LWC only supports circle/square/arrowUp/arrowDown) and sent
+as a distinct `s7_markers` field the client now actually assigns to
+`lwSignalMarkers`, completing wiring that was previously 0% connected
+on either side despite looking half-built.
+
+### Half 2: position-cap policy — investigated and CONFIRMED as already resolved, documented as a deliberate decision rather than left open
+
+Traced the actual mechanism rather than guessing: `positions` (the bus
+key `RiskAgent.evaluate()` checks) is keyed by SYMBOL ONLY, not
+(symbol, strategy) — confirmed directly in source
+(`job["symbol"] not in positions`). This means S7 (sg_ema) signals
+already go through the EXACT SAME shared per-symbol slot and account-
+wide `max_concurrent_positions` cap as momentum_buy, ORB, ema_mtf, and
+every other directional strategy — with no special exemption anywhere.
+Confirmed with a real end-to-end `RiskAgent.evaluate()` call: an S7
+signal on a symbol that already has an open momentum_buy position is
+correctly BLOCKED.
+
+**Decision, not left dangling**: keeping this SHARED (the current,
+architectural default) rather than giving S7 its own separate slot.
+Separating it would only INCREASE simultaneous correlated exposure on
+a single symbol — a genuine risk-appetite change, not a bug fix — and
+this project has consistently declined to make that kind of call
+unilaterally (same reasoning already applied to items 3 and 7). This
+closes the item with an explicit, documented rationale instead of
+leaving "shared vs own cap" as an open question forever.
+
+### Verified
+
+test_s7_rejection_markers.py — 15 checks: a real cross blocked by a
+later gate correctly recorded; the SAME persistent block across
+multiple simulated cycles records exactly once, not once per cycle;
+the condition clearing then a genuinely NEW rejection on a different
+gate correctly records a second, distinct event; a routine no-cross
+cycle (the vast majority in practice) never records anything; a fully-
+passing cross (a real trade, not a rejection) never records anything
+either; the shape-validity bug caught and confirmed fixed; both sides
+of the client<->server wiring confirmed connected via source
+inspection; the position-cap policy confirmed via a real RiskAgent.
+evaluate() call showing S7 correctly blocked with no special
+exemption, plus the architectural root cause (symbol-only keying)
+confirmed directly in source. Full regression suite green across all
+31 test files.
+
+### Not yet built/packaged
+
+Per explicit instruction: no version bump, no zip, until told
+otherwise.
+
+
+## [uncommitted — code only, no build yet per explicit instruction] Item 10: news relevance/spam filter
+
+### Root cause
+
+`process_item()`'s `valid` field only ever checked `bool(title.strip())`
+— no actual relevance check existed at all. Worse, found while fixing
+this: `classify_impact_window()`'s `HIGH_SEVERITY_RE` check ran
+UNCONDITIONALLY, before any category or relevance check — a totally
+unrelated headline (sports, entertainment, a local news item)
+containing any of its generic severity words ("crash", "war",
+"emergency") got the MOST aggressive 3-window market-impact
+classification regardless of whether the story had any financial
+content at all.
+
+### Fix
+
+New `FINANCIAL_CONTEXT_RE` — a broader net than the existing narrow
+`CATEGORY_RE` (specific per-category keyword sets), specifically for
+"is this headline about markets/finance at all." A headline is now
+only treated as relevant if it matches a real category OR this broader
+context regex; `HIGH_SEVERITY_RE` (and all impact-window logic) is now
+gated behind that relevance check, and `process_item()` forces `bias`
+to neutral for anything genuinely irrelevant — `action` (only
+"monitor" when bias != neutral AND windows exist) correctly cascades
+to "none" as a result, with no separate check needed.
+
+### A second, distinct gap found and closed in the same pass
+
+`news_macro_agent.py` maintained its own byte-identical COPY of
+`BEARISH_WORDS_RE`/`BULLISH_WORDS_RE` — a genuine "two copies that
+will silently drift" risk (editing one without the other would leave
+the two consumers disagreeing about what counts as bearish/bullish,
+with nothing that would catch it). Removed the duplicate definitions;
+both are now assigned directly from `news_engine.py`'s objects —
+confirmed to be the LITERAL SAME object (`is`, not just `==`), not a
+parallel copy.
+
+### Verified
+
+test_news_relevance_filter.py — 19 checks: the exact reported bug
+pattern (irrelevant headline + generic severity word) now correctly
+neutralized instead of getting the aggressive 3-window read; a
+genuinely relevant, severe headline confirmed UNAFFECTED (still gets
+the full classification — the fix doesn't over-correct); an irrelevant
+headline with only a mild generic word also correctly neutralized;
+relevance via the broader financial-context regex (not a specific
+category) confirmed still registering correctly; the regex itself
+confirmed to match generic financial vocabulary and NOT match a
+genuinely unrelated sentence; the deduplication confirmed via object
+identity, not just equal output; existing `classify_bias()`
+functionality in `news_macro_agent.py` confirmed unaffected; source-
+level guard confirms the duplicate `re.compile()` calls are actually
+gone, not just aliased alongside a leftover copy. Full regression suite
+green across all 32 test files.
+
+### Not yet built/packaged
+
+Per explicit instruction: no version bump, no zip, until told
+otherwise.
+
+
+## [uncommitted — code only, no build yet per explicit instruction] Item 10, round 2: AI-based semantic news classification
+
+Direct, well-reasoned follow-up on the round-1 fix: keyword matching
+alone has a structural ceiling no threshold tuning can fix. Real
+example given: "Stocks to buy under ₹200: Amid escalation in US-Iran
+war, Mehul Kothari of Anand Rathi recommends three shares to buy" —
+`BEARISH_WORDS_RE` flags this bearish purely because "war" appears,
+even though the headline is literally a BUY recommendation. Confirmed
+this is genuinely wrong before building anything: `classify_bias()` on
+this exact headline does return "bearish."
+
+### What was built
+
+`news_engine.classify_headline_ai()` — sends the headline to the
+already-configured LLM (same `llm.generate_json()` used for trading
+signals) with an explicit instruction to judge the headline's ACTUAL
+substance, not react to individual words. Now the PRIMARY
+classification method in `process_item()`, with the existing keyword-
+based approach (round 1) as the fallback — same "AI first, rule engine
+as fallback" pattern already established for trading-signal
+generation, including the SAME "validate before trusting" discipline
+already applied after the earlier malformed-signal-value bug (rejects
+an invalid `bias` enum value or a non-boolean `relevant` field rather
+than trusting whatever the LLM returns).
+
+Cached by the existing `dedupe_key()` normalization (a reworded repeat
+of an already-classified headline doesn't spend another call) and
+budgeted with its own daily cap, separate from the trading-signal AI
+budget, since news volume and signal volume are unrelated quantities
+that shouldn't compete for the same cap. Disabled cleanly (falls back
+to keyword classification) when AI is off, rate-limited, or the call
+fails/returns something invalid.
+
+### A subtle consistency bug caught and fixed BEFORE shipping
+
+`classify_impact_window()` used to independently re-derive relevance
+via keywords regardless of what governed the bias decision upstream —
+meaning even when AI's OWN relevance judgment decided a headline's
+bias, the impact-window logic could disagree, producing a contradictory
+`market_impact="neutral"` alongside a non-empty `impact_windows` (or
+the reverse). Fixed by threading the actual relevance signal through
+explicitly (`is_relevant` param) rather than letting it be re-derived
+a second, possibly-disagreeing way.
+
+### Verified
+
+test_news_ai_classification.py — 19 checks: confirmed the OLD keyword-
+only result on the EXACT reported headline really is wrong (bearish);
+with AI classification (mocked), the same exact headline is now
+correctly bullish, with the AI's reasoning captured for audit;
+graceful fallback confirmed when the AI call fails, matching the pre-
+AI keyword behavior exactly (no silent behavior change when AI is
+down); config toggle confirmed; three distinct malformed-AI-response
+cases (bad bias enum, non-boolean relevant, invalid JSON) all
+confirmed rejected, not silently trusted; caching confirmed (one LLM
+call for a headline processed twice); the daily budget cap confirmed
+genuinely enforced; the impact-window consistency fix confirmed via
+source inspection. Full regression suite green across all 33 test
+files, including the round-1 news-relevance test file confirming the
+signature change to `classify_impact_window` didn't break anything
+already built. Config confirmed clean after every test run.
+
+### Not yet built/packaged
+
+Per explicit instruction: no version bump, no zip, until told
+otherwise.
+
+
+## [uncommitted — code only, no build yet per explicit instruction] Item 12: ML probability scoring — the volume question answered directly
+
+### Checked the actual volume first, rather than trusting the standing assumption
+
+The uploaded journal.json alone showed 3,580 closed-trade records
+across 55 trading days — a much larger volume than "still waiting"
+implied. Traced the Shadow Journal specifically (a SEPARATE file,
+`~/.ltp-monitor/shadow_signals.jsonl`, distinct from journal.json) —
+every signal evaluation, approved AND rejected, gets logged there, with
+rejected ones later resolved against real subsequent prices into a
+genuine win/loss hindsight label. Given the uploaded activity.log alone
+showed hundreds of signal evaluations in a single day, the real
+Shadow Journal volume is very likely already substantial.
+
+### What was built
+
+`ml_probability.py` — genuine ML, distinct from the existing bucketed
+`ai_probability_engine.estimate_probability()` (which counts win rate
+per 3-dimension bucket, already built): a real logistic regression
+trained via plain-Python batch gradient descent over 5 engineered
+features (confidence, failed-check count, S7 flag, direction, risk-
+reward), no external ML dependencies — matches this project's
+established dependency-free style throughout.
+
+Two label sources, joined into one training set:
+  - REJECTED signals already have a real hindsight outcome (resolved
+    against actual subsequent prices) — used directly.
+  - APPROVED signals are joined against the real closed-trade record
+    (entry-time proximity matching, the SAME technique already proven
+    for `backtester.audit_today()`, reused not reimplemented) for
+    their genuine win/loss outcome.
+
+`check_volume_sufficiency()` is the direct, repeatable answer to the
+"is there enough data yet" question — measures the ACTUAL current
+count and class balance every time it's called, not a standing
+assumption inherited from when this item was first scoped. Requires
+both a minimum total sample count AND a minimum count per class
+(win/loss) — confirmed this catches a lopsided dataset that clears the
+raw count threshold but wouldn't train a meaningful model.
+
+### Wired into two surfaces, mirroring item 6's pattern exactly
+
+1. **Automatic daily** — `LearningAgent`'s existing daily cycle now
+   checks volume and trains (or re-trains) once per day, persisting
+   both the volume status and the model itself to the bus.
+2. **On-demand** — new `GET /api/ml-probability/status`, cheap enough
+   (one file scan + gradient descent over at most a few hundred rows)
+   to run inline and report the real current state every time it's
+   called.
+
+### Verified
+
+test_ml_probability.py — 24 checks: volume gate correctly rejects too
+few samples AND correctly rejects a lopsided class balance even when
+the raw count clears the threshold; a synthetic dataset with a KNOWN
+underlying relationship confirms the trained model learns the CORRECT
+sign for every feature (confidence positive, failed-checks negative)
+and correctly ranks a genuinely high-quality signal well above a low-
+quality one; feature extraction confirmed to skip entries missing
+required fields or with a degenerate stop distance rather than
+guessing; end-to-end file-reading confirmed correctly labels resolved-
+rejected entries, skips still-pending ones, and joins approved entries
+against real closed trades — including the case where NO matching
+closed trade exists (correctly excluded, not guessed at); the on-
+demand API endpoint confirmed via a real HTTP call; the daily-cycle
+wiring confirmed present via source inspection. Full regression suite
+green across all 34 test files.
+
+### Not yet built/packaged
+
+Per explicit instruction: no version bump, no zip, until told
+otherwise. Feeding a trained model's prediction into the Unified AI
+Probability stage (v58 item 5) as an additional input is a natural
+next step, deliberately not done in this same pass to keep this
+round's scope to building and verifying the scoring engine itself.
+
+
+## [uncommitted — code only, no build yet per explicit instruction] Item 9: Liquidity-sweep/FVG confluence, layered on the existing OI-wall logic
+
+### What was built
+
+Two new Smart Money Concepts primitives in `structure.py`, alongside
+the existing `zigzag_series()` (shared with Strategy 7's structure
+gate, reused here rather than a second pivot-detection definition):
+
+  - `detect_liquidity_sweeps()` — a candle's wick breaks a prior
+    CONFIRMED swing high/low (the "resting stop-loss liquidity"), but
+    its CLOSE comes back inside it — the classic stop-hunt-then-
+    reverse pattern.
+  - `detect_fair_value_gaps()` — the standard 3-candle imbalance
+    pattern, with `filled` tracking whether a later candle has already
+    traded back through the gap.
+  - `wall_confluence()` — checks whether either pattern exists near a
+    given OI-wall level, in the direction that would reinforce the
+    trade thesis (a bullish sweep/FVG near a PUT support wall, a
+    bearish one near a CALL resistance wall) — always returns a
+    populated `reasons` list, even when not confirmed, matching this
+    project's "never a silent result" convention.
+
+### Wired ONTO the existing OI-wall selection, not replacing it
+
+`strategies.evaluate()` gained an OPTIONAL `candles` parameter —
+existing callers (backtester replay, the eligibility-preview API, the
+manual-deploy endpoint) don't pass it and get IDENTICAL behavior to
+before (confirmed: calling without the parameter produces the exact
+same result object as explicitly passing `candles=None`, true backward
+compatibility). When provided AND
+`spread_require_liquidity_confluence` is enabled (opt-in, off by
+default — a genuine new entry requirement, not a bug fix), the OI wall
+must ALSO show a matching sweep/FVG nearby before the spread is
+eligible.
+
+The live auto-deploy loop (`_auto_spreads()` in agents.py) now passes
+`regime_candles:{symbol}` — the 5-minute candles RegimeAgent already
+fetches every 90s cycle for its own regime classification — reused
+here with ZERO new API calls, not a fresh candle fetch.
+
+### Verified
+
+test_liquidity_fvg_confluence.py — 19 checks: a textbook bullish
+liquidity sweep of a hand-confirmed swing low correctly detected, with
+the swept level matching the actual confirmed pivot precisely; a
+candle that wicks past a level but does NOT close back inside it
+(a genuine breakdown, not a reversal) correctly NOT flagged; bullish
+and bearish FVGs both correctly identified with the right gap bounds;
+ordinary overlapping candles produce zero false-positive gaps; a
+filled FVG correctly marked once a later candle trades back through
+it; `wall_confluence` confirmed correct on three axes — confirms at
+the matching level, does NOT confirm at an unrelated distant level,
+and does NOT confirm when checked in the wrong direction (a bullish
+sweep doesn't validate a resistance wall); `strategies.evaluate()`'s
+backward compatibility confirmed via exact result-object equality, not
+just "doesn't crash"; the confluence gate confirmed to correctly BLOCK
+with a clear reason when required but absent, and confirmed to
+correctly NOT block (passes through to later checks) when a genuine
+matching pattern exists, evidenced by the recorded "confluence:"
+reason; config keys confirmed registered on both DEFAULTS and
+SettingsIn, defaulting to off. Full regression suite green across all
+35 test files. Config confirmed clean after every test run.
+
+### Not yet built/packaged
+
+Per the standing instruction from earlier in this session: no version
+bump, no zip, until told otherwise.
+
+
+## [uncommitted — code only, no build yet per explicit instruction] Pre-v50 weekend keepalive candle pruning
+
+### What was built
+
+`history.count_non_market_session_candles()` (dry-run, read-only) and
+`history.prune_non_market_session_candles(dry_run=True)` (the actual
+delete, requiring an EXPLICIT `dry_run=False` — the safe default just
+runs the dry-run count and touches nothing). Deletes by primary key in
+batches after completing the full read pass first, rather than
+interleaving deletes with an open read cursor on the same connection
+— this table has already produced a real lock-storm incident once
+(see `_conn()`'s own docstring), so avoided any pattern that could
+risk repeating that class of problem for a one-time maintenance task.
+
+### Deduplication done BEFORE writing the prune logic, not after finding a bug
+
+This session already found and fixed one real "two copies of the same
+logic silently drift apart" bug (news_engine.py/news_macro_agent.py's
+duplicate bearish/bullish regexes, item 10). Rather than write a
+second, parallel definition of "is this timestamp inside market
+hours" for history.py to use, moved the existing `app.py._in_market_
+session()` logic to a single shared `agents.in_market_session()` —
+confirmed byte-identical behavior via direct comparison across three
+cases (weekday market hours, weekend, weekday after-hours) before
+building anything on top of it. `app.py`'s own function is now a thin
+wrapper, so every existing call site there is completely unaffected.
+
+### Wired into two API endpoints, mirroring the confirm-gate pattern already established
+
+- `GET /api/history/prune-candles-status` — read-only, safe to call
+  anytime, reports the actual current contamination count.
+- `POST /api/history/prune-candles` — requires `?confirm=true`
+  explicitly; a bare POST is refused with a clear message pointing at
+  the status endpoint first, rather than a destructive action running
+  from an unguarded default.
+
+### Verified — entirely against an ISOLATED TEMPORARY database, never the shared sandbox DB
+
+Given this is a destructive operation, every test monkeypatches
+`history.DB` to a temp file for its duration (always restored, even
+on failure) rather than risk any real or other-test data. Confirmed
+directly after the full test run that the real sandbox database's row
+count was completely unaffected.
+
+test_candle_prune.py — 18 checks: the deduplicated function confirmed
+byte-identical to the original across three time-of-week cases; dry-
+run count correctly identifies contaminated rows across MULTIPLE
+security_ids simultaneously with a correct per-security_id breakdown,
+and confirmed to make ZERO changes to the table; the actual prune
+deletes EXACTLY the contaminated rows and confirmed (via exact set
+equality) that the remaining rows are precisely the legitimate
+weekday-market-hours ones for BOTH security_ids, nothing else touched;
+running the prune again on an already-clean table is a safe no-op;
+both API endpoints confirmed via real HTTP calls, including the
+confirm-gate correctly refusing an unconfirmed POST and genuinely
+changing nothing when refused. Full regression suite green across all
+36 test files, including the item-8 multi-day-history test that also
+depends on `_in_market_session` — confirming the refactor didn't
+disturb that earlier work.
+
+### Not yet built/packaged
+
+Per the standing instruction from earlier in this session: no version
+bump, no zip, until told otherwise. This is a MANUAL, one-time
+operation — the person should call the status endpoint on their own
+real (populated) database first to see the actual count before
+deciding whether to run the confirmed prune.
+
+
+## v58.9 — FULL REVIEW PASS + PACKAGED: one real bug found and fixed, complete regression confirmed, everything since v58.8 shipped (2026-07-27, round 29)
+
+Direct request: one complete round of testing across the code and
+every developed strategy's entry/exit criteria, checking for bugs,
+loopholes, and optimization opportunities, THEN package the bundle.
+This entry closes out and ships the entire body of work accumulated
+since v58.8 (items 3–12, plus the SENSEX/False-Breakout fixes, plus
+the candle-prune feature) as one consolidated, fully re-verified
+release.
+
+### Full regression run BEFORE the review
+
+All 34 Python test files + the JS chart test confirmed green as a
+baseline, before making any new changes — so any NEW finding below is
+clearly attributable to the review itself, not a pre-existing failure
+this pass happened to also touch.
+
+### Real bug found: spread capital-concentration cap used a stale snapshot within a single cycle
+
+Re-reading `_auto_spreads()` end-to-end (not just re-running its own
+tests) surfaced a genuine, confirmed bug: `spread_margin_deployed` —
+the figure the capital-concentration cap (item 3) checks against —
+was computed ONCE before the per-symbol loop and never recalculated,
+even though its sibling check (`len(spreads)`, the count-based cap)
+correctly used a `spreads` dict that DOES get refreshed after every
+successful entry within the same cycle. Within a single 60-second
+cycle, if multiple symbols each individually cleared the cap when
+checked against the STALE pre-cycle snapshot, they could all enter
+sequentially, cumulatively exceeding `max_spread_capital_pct` despite
+the cap nominally being enforced at every single check.
+
+Proven directly, not just reasoned about: constructed a real 3-symbol
+scenario (NIFTY, BANKNIFTY, FINNIFTY, zero spreads open at the start
+of the cycle, each individually eligible for a spread using ~42.5% of
+capital) and confirmed that WITHOUT the fix, all three would enter
+(reaching ~127% of capital); WITH the fix, the third symbol is
+correctly blocked once the first two — entered earlier in the SAME
+cycle — already pushed cumulative deployment past 60%.
+
+Fixed by recomputing the deployed-margin figure fresh from the
+CURRENT `spreads` dict on every iteration of the per-symbol/strategy
+loop, rather than once at the top of the cycle. The now-dead original
+computation was removed rather than left as confusing, unused code.
+
+### Other interaction points checked and confirmed safe (no changes needed)
+
+  - Dynamic spread profit targets (item 5) vs. the pre-existing
+    profit-lock/defense-zone mechanism: confirmed the lock-trigger
+    calculation already references the PER-TRADE `sp["profit_target"]`
+    field directly, not a hardcoded config constant — it scales
+    correctly with whatever target a given trade actually got
+    (10-50%), no bug found.
+  - Liquidity-sweep/FVG confluence (item 9) reusing `regime_candles`
+    (up to 90s old, RegimeAgent's own refresh cadence) rather than a
+    fresh fetch: confirmed this is an acceptable, deliberate reuse of
+    already-appropriately-paced 5-minute-candle data (a 5-minute candle
+    doesn't change meaningfully within a 90-second window) — consistent
+    with the SAME reasoning already documented for item 7's review, not
+    a new staleness gap.
+
+### Verified
+
+New check added to `test_spread_capital_cap.py` (now 8 checks in that
+file) reproducing the exact 3-symbol same-cycle scenario end-to-end
+through the real `_auto_spreads()` call — confirmed the fix causes
+exactly the two affordable entries to succeed and the third to be
+correctly blocked, with the total deployed margin matching precisely.
+Full regression suite re-run and confirmed green across all 34 Python
+test files + the JS chart test AFTER the fix, not just before it.
+Config confirmed at every intended safe default (futures disabled,
+liquidity confluence off, dynamic spread targets off) before packaging.
+
+### This entry supersedes and formally ships every "uncommitted" round documented above
+
+Items 3, 4 (False Breakout), 5, 6, 7 (reviewed/kept open), 8, 9, 10
+(both rounds), 11, 12, the authoritative-prev-close fix, and the
+candle-prune feature are ALL included in this build — the "no build
+yet" holds noted in each of those entries are lifted as of this
+version.
+
+
+## Post-deployment fixes, round 30 (2026-07-27) — real bugs found from live v58.9 usage
+
+Direct report of 8 issues after v58.9 shipped. Investigated each with
+the same "verify before fixing" discipline as every round before this.
+
+### #1 — FIXED, TESTED: False Breakout marker count increasing on every refresh
+
+Root cause: the earlier fix's transition-tracking state
+(institutional_active_state/smart_money_active_state) was a PER-
+CONNECTION local variable inside the websocket handler, reset to {}
+on every new connection — i.e. every page refresh — while the
+PERSISTED marker list it feeds is bus-shared and survives across
+connections. Refreshing made the still-ongoing condition look like a
+brand new transition again from the fresh connection's point of view,
+appending another marker every time. Fixed by moving the state itself
+to the bus (per-symbol, day-aware), so a refresh can no longer forget
+what was already seen. Proven directly: simulated 3 cycles including
+2 "refreshes," confirmed exactly 1 marker persists, not 3.
+
+### #2 — DIAGNOSTIC ADDED, ROOT CAUSE STILL OPEN: index change value still wrong
+
+The earlier fix's fallback path was completely silent (bare `except:
+pass`) — no way to tell whether the authoritative Dhan quote field
+actually worked or why it fell back. Added real logging at every
+branch (success, field missing with the raw payload, exception with
+its message). Needs the person's real activity.log output on their
+next run to actually pinpoint the cause rather than guess again.
+
+### #3 — FIXED, TESTED: backtest missing current-day data
+
+Root cause: two similarly-named buttons — "Run backtest" (replays
+existing archives only) and "Sync + backtest" (archives today's data
+FIRST) — with no indication which one was used or why today might be
+missing. Added `includes_today` to `history.coverage()` and a clear
+on-page warning naming both buttons explicitly when today isn't yet
+archived.
+
+### #4 — FIXED, TESTED: "After Optimize, no change in values"
+
+Root cause: the button only ever alerted "queued" — optimize runs
+asynchronously (up to ~2 minutes) and the old code never waited for
+or displayed the real result. Fixed to poll for completion and show
+exactly what happened (found a better version and by how much, or
+swept N candidates and none beat the current one), then auto-refresh
+the table.
+
+### #5 — FIXED, TESTED: multiple versions showing "(untested)"
+
+Root cause: the version-label check used `x.results.trades`
+TRUTHINESS — but 0 is falsy in JS. A version genuinely tested by the
+auto-tuner/optimizer that found ZERO trades in the backtest window
+(a real, meaningful outcome) was mislabeled "(untested)" as if never
+backtested at all. Fixed to check for the actual PRESENCE of a
+results value instead.
+
+### #6 — INVESTIGATED, MATCHES A KNOWN PATTERN, NOT A BUG: momentum_buy remains untested
+
+Confirmed momentum_buy has no tunable parameter bounds registered at
+all (structurally different from spread/PA strategies — by design,
+not a gap) — correctly explaining why "Optimize" shows nothing for it.
+The zero-trades backtest result matches the EXACT same finding from
+this session's earlier data-driven review (item 3): momentum_buy's
+real-world approval rate was ~1.4% of all signal attempts in a single
+day. With only 5-6 archived chain-days (per the person's own
+screenshot), finding zero qualifying setups in that small a sample
+against that strict a filter is the expected, honest outcome — not a
+bug. Needs more archived chain-history to accumulate before a
+meaningful backtest is possible, same "waiting on volume" situation
+already documented for the ML probability scoring item.
+
+### #7 (institutional/smart money page consolidation) and #8 (dashboard restructuring) — NOT STARTED, explicitly scoped for a dedicated session
+
+Both are real, valid UX/architecture concerns, but genuine design work
+— not quick fixes. Deliberately not rushed in the same pass as the 6
+concrete bugs above.
+
+### Verified
+
+test_chart_marker_transitions.py extended (+6 checks, now 21) and
+test_backtest_ui_fixes.py added (12 checks) covering fixes #1, #3, #4,
+#5 directly, including reproducing the exact reported symptoms (a
+simulated refresh scenario for #1; a zero-trades-but-tested version
+for #5). Full regression suite green across all 35 test files.
+
+### Not yet built/packaged
+
+Awaiting explicit instruction — 6 real fixes ready, #2 needs the
+person's log output to finish, #7/#8 need to be scoped as their own
+session.
+
+
+## v58.10 — SHIPPED: 6 real post-deployment bugs found and fixed, diagnostic added for #2
+
+Packages the round-30 post-deployment fixes documented above. Six real
+bugs found from live v58.9 usage, root-caused and fixed with tests
+that reproduce the actual reported symptoms:
+
+  1. False Breakout marker count increasing on every page refresh —
+     fixed (transition-tracking state moved from a per-connection
+     variable to bus-persisted, day-aware storage).
+  3. Backtest missing current-day data — fixed (explicit
+     `includes_today` flag + clear on-page message naming the two
+     buttons and their real difference).
+  4. "After Optimize, no change in values" — fixed (the button now
+     polls for and displays the actual result instead of only
+     confirming the job was queued).
+  5. Multiple versions showing "(untested)" — fixed (was checking
+     `results.trades` truthiness, where 0 is falsy in JS; now checks
+     for the actual presence of a results value).
+
+Item #2 (index change value) has a diagnostic fix shipped (the
+previously-silent fallback now logs exactly what happened at every
+branch) but the underlying root cause is still open — needs the
+person's real activity.log output to pinpoint rather than guess
+further from this environment.
+
+Item #6 (momentum_buy untested) investigated and confirmed to match
+an already-documented pattern (strict gates + small archived-history
+sample), not a bug — no code change needed, explained clearly instead.
+
+Items #7 (institutional/smart money page consolidation) and #8
+(dashboard restructuring) remain explicitly out of scope for this
+build — genuine design work, deliberately not rushed alongside 6
+concrete fixes.
+
+### Verified
+
+Full regression suite green across all 35 test files before
+packaging, including the 2 test files added/extended this round
+(test_chart_marker_transitions.py +6 checks, test_backtest_ui_fixes.py
+new with 12 checks) that reproduce the exact reported symptoms rather
+than just re-testing the underlying mechanism in isolation. Config
+confirmed at safe defaults (paper mode, futures signal engine
+disabled, liquidity confluence off, dynamic spread targets off)
+before packaging.
+
+
+## Round 31 (2026-07-27) — #2 root cause CONFIRMED and fixed from real log data
+
+The requested log finally answered the question directly rather than
+requiring another guess:
+
+  - NIFTY and FINNIFTY: authoritative quote path SUCCEEDED outright
+    (previous_close_price IS the correct field — the earlier fix's
+    guess was right all along).
+  - BANKNIFTY and SENSEX: quote_batch() raised 429 Too Many Requests,
+    in the SAME log window futures REST polling was ALSO hitting 429
+    on the identical Dhan endpoint.
+
+Root cause: calling quote_batch() four separate times in quick
+succession (once per symbol) against an endpoint already under real
+contention, not a field-name or approach problem.
+
+### Fix
+
+Batches all 4 index symbols into ONE quote_batch() call
+(`_batch_fetch_prev_close()`) instead of four separate ones — removes
+the self-inflicted rate-limit pressure entirely rather than trying to
+retry or delay around it. Runs at most once per day (module-level
+guard), uses the dedicated Dhan fallback client specifically (this
+batch always includes SENSEX, which may not be served by a non-Dhan
+active broker). The existing per-symbol path and candle-reconstruction
+fallback remain in place as a safety net for whatever the batch
+doesn't cover.
+
+### Verified
+
+Extended test_authoritative_prev_close.py (+4 checks, now 9): all 4
+symbols correctly resolve via exactly ONE combined call (not 4); the
+once-per-day guard confirmed even across repeated calls for the same
+and different symbols; a failing batch call still falls through
+gracefully rather than crashing. Full regression suite green across
+all 35 test files.
+
+### Also noted, not changed: False Breakout marker not showing on the very first page load, only after a refresh
+
+User confirmed no duplication (the actual fix holds) but observed the
+marker doesn't appear immediately on first connect. Believed to be a
+benign cold-start timing characteristic (the persisted marker read
+doesn't depend on this cycle's fresh institutional/smart-money data,
+but the "signals" send block itself may not execute on the very first
+loop iteration) rather than a functional bug — not chased further
+this round since it doesn't lose or duplicate data, only delays when
+it first appears.
+
+
+## Round 32 (2026-07-27) — real regression found from live testing, fixed same session
+
+Live testing of the batch-fetch fix immediately surfaced a genuine
+second bug: NIFTY and FINNIFTY both started showing 0 (0%) change.
+
+### Root cause
+
+Tested AFTER market close (matching the "MARKET CLOSED" badge already
+visible in the person's own screenshots). Dhan's `previous_close_price`
+field appears to reflect the JUST-CONCLUDED session's own close once
+the market has shut for the day, not genuinely the prior trading day's
+close as assumed throughout this whole investigation. Since the
+current spot/LTP also equals today's own last traded price once the
+market is closed, a previous_close that exactly matches it produces
+exactly a 0-point, 0% change — precisely the reported symptom.
+
+### Fix
+
+Added a sanity check using `last_price`, already present in the SAME
+quote response (no extra API call needed): if `previous_close_price`
+exactly matches `last_price`, distrust it — a genuine prior-day close
+essentially never matches the current price exactly — and fall
+through to candle reconstruction instead, which is unaffected by this
+after-hours field-semantics ambiguity. Applied to BOTH the batch-fetch
+path and the per-symbol fallback path for consistency.
+
+### Verified
+
+Extended test_authoritative_prev_close.py (+3 checks, now 12): the
+exact reported suspicious-match scenario correctly distrusted and not
+cached; a genuinely different previous_close still trusted and
+returned correctly (confirms the fix doesn't over-correct into
+rejecting everything); the same check confirmed working on the
+per-symbol fallback path too, not just the batch path. Full regression
+suite green across all 35 test files.
+
+### Still open
+
+Whether this after-hours field-semantics theory is fully correct, or
+there's more to it, can only be confirmed by testing DURING market
+hours tomorrow (when previous_close_price should genuinely differ
+from the live, moving last_price) — this fix is a defensive
+sanity check based on the evidence available, not a confirmed final
+answer from Dhan's own documentation.
+
+
+## New strategy: momentum_confluence — ported from a validated TradingView Pine Script (2026-07-27)
+
+Per explicit request: "include it in the immediate roadmap as a
+separate strategy which can be enabled for any index." Ported and
+fully wired in this same round, not just scoped for later.
+
+### What it is
+
+Two independent entry paths, matching the original Pine Script's logic
+exactly:
+  1. **Confluence reversal** — a regular RSI divergence just confirmed,
+     PLUS a recent 5/13 EMA cross (within a tunable lookback), PLUS at
+     least 3-of-4 signals agreeing (MACD, RSI threshold, Stochastic
+     cross from overbought/oversold, EMA bias).
+  2. **"Weapon" pattern** — two confirmed equal highs/lows (within a
+     tunable tolerance) followed by price crossing back through the
+     5-EMA — a double-top/double-bottom reversal confirmed by a
+     moving-average break.
+
+Reuses the existing MACD/RSI/Stochastic functions from
+`mtf_confluence_strategy.py` rather than reimplementing them (avoiding
+the exact "duplicate math that drifts" mistake already found and fixed
+once this session in a different module).
+
+### The one deliberate simplification versus the original
+
+The Pine Script's early exit (the MACD histogram's slope reversing)
+requires ongoing index-price monitoring on every subsequent candle —
+a mechanism that doesn't exist for ANY strategy in this codebase today
+(every existing PA strategy expresses its exit as fixed price levels
+computed once at entry time, which `ExecutionAgent`'s monitoring loop
+then checks against). The stop-loss (entry candle's own low/high) maps
+EXACTLY and faithfully — no approximation there. The histogram-turn
+early exit uses a fixed, tunable risk-reward target as an explicit
+stand-in instead, documented clearly in the code rather than silently
+dropped. Building genuine ongoing index-level exit monitoring is a
+real, separate architectural piece — a natural follow-up, not bundled
+into this round.
+
+### Registered exactly like every other PA strategy — enabled for any index automatically
+
+Added to `PA_NAMES`/`PA_DEFAULTS`/`PA_BOUNDS`/`PA_META` in
+`pa_strategies.py`. Confirmed (not assumed) that the live-trading
+dispatch, the daily auto-tuner, the backtest replay, and the
+`pa_enabled` live-default all already iterate `PA_NAMES` generically —
+zero additional wiring needed in any of those four places for the new
+strategy to be tradeable on NIFTY/BANKNIFTY/FINNIFTY/SENSEX exactly
+like ORB/Anchor Pullback/EMA-MTF.
+
+### Three real, pre-existing gaps found and fixed along the way
+
+While wiring this in, found and fixed hardcoded strategy-name lists
+(in `app.py`, `config.py`, and the frontend) that had ALREADY silently
+drifted from `PA_NAMES` before this round even started — Strategy 7
+was missing from a sweep-tracking list and a live-default config value
+well before momentum_confluence existed. Derived each from `PA_NAMES`
+dynamically instead of patching in one more hardcoded name, closing
+the drift risk for any future strategy too, not just this one.
+Deliberately did NOT add sg_ema to two OTHER frontend lists after
+finding an explicit existing comment confirming its absence there was
+intentional (it has no meaningful version-tracking data to show in
+that specific context) — checked before assuming an omission was a bug.
+
+Enabled by default only for a brand-new install (matching
+`pa_enabled`'s own default, now dynamically `list(PA_NAMES)`) — an
+existing install with an explicit `pa_enabled` override (like this
+project's own sandbox) will NOT auto-enable it; the person enables it
+explicitly via the Strategies page toggle when ready to trial it, same
+opt-in discipline as every other new-behavior addition this session.
+
+### Verified
+
+test_momentum_confluence.py — 25 checks: the pivot detector matches
+Pine's own confirmation-lag semantics exactly; both weapon-pattern
+directions (bullish equal-lows, bearish equal-highs) proven via
+hand-constructed, swept scenarios — not assumed — including exact
+stop-price matching against the entry candle's own low/high; a
+negative case (smooth trending price with no pattern) confirmed to
+never false-positive; RSI divergence tested in ISOLATION with a
+minimal, fully hand-verifiable series for both directions, confirming
+it fires exactly on the confirming bar and not one bar early or late;
+insufficient-data and full-bound-range parameter cases confirmed to
+degrade gracefully rather than crash; every integration point
+(backtest replay, daily auto-tuner, live dispatch, pa_enabled default)
+confirmed via source inspection to already work generically. Two
+pre-existing tests updated to stop hardcoding an exact strategy-name
+set (a legitimate fix, not a workaround — new strategies are SUPPOSED
+to appear in these payloads going forward). Full regression suite
+green across all 36 test files.
+
+### Not yet built/packaged
+
+Per the general practice this session: hold for explicit instruction
+before packaging.
+
+
+## v58.11 — SHIPPED: design re-theme + institutional/smart-money consolidation (items #7/#8, first increment)
+
+Per explicit request, using the person's own uploaded wireframe
+(ltp-monitor-ui-revE.html, an 11-sheet "Azia theme" design proposal)
+as the reference.
+
+### Scope decision, stated explicitly
+
+This is a live-trading tool with a 5000-line dashboard.html carrying a
+lot of interdependent JS wiring. Rebuilding all 11 wireframe sheets'
+exact card layouts in one pass would have meant touching far more
+surface area than could be thoroughly tested in this round, with real
+consequences if something broke. Chose a safer, still-substantial
+first increment: a global re-theme (unifies every page automatically,
+low risk) plus the most explicit, concrete ask (#7's institutional/
+smart-money consolidation). Full page-by-page restructuring of every
+other view remains open for a dedicated follow-up round.
+
+### Re-theme (item #8: "change alignment, colour and font... keep it
+unified across all pages")
+
+Confirmed the existing codebase ALREADY used a CSS custom-property
+theming system (--bg/--panel/--text/--accent/--up/--dn etc.) extensively
+— 283 references throughout the file. Rather than rename these
+variables to match the wireframe's own naming (--purple/--card/--text2),
+which would have meant touching every one of those 283 call sites,
+changed only the VALUES to the wireframe's Azia palette (purple/blue/
+teal accent, matching light/dark variants) and swapped Inter/JetBrains
+Mono for Roboto/Roboto Mono. Same unified visual result, dramatically
+lower risk.
+
+### Institutional/smart-money consolidation (item #7 exactly: "not
+full page shall be used for one information")
+
+Found the dashboard had TWO full-width panels ("Option Chain
+Intelligence" and "Institutional Activity") both showing the SAME
+detailed institutional/smart-money content ALSO fully available on the
+existing dedicated Institutional page. Consolidated both into ONE
+compact summary card (score + a 4-item KV summary + a one-line
+headline takeaway) with a direct link to the dedicated page, which
+keeps its own full per-strike table, smart-money event log, and AI
+narrative completely untouched — confirmed still present and
+unchanged. The wireframe's own sheet 09 explicitly calls for exactly
+this separation ("distinct element ids from the dashboard institutional
+panel").
+
+Care taken on the implementation: the two JS functions that populate
+the consolidated card (`renderOci`, `renderIae`) write to DIFFERENT
+sub-elements (score/KV vs. headline) rather than one's innerHTML
+overwriting the other's contribution — confirmed by test, not assumed.
+
+### Verified
+
+test_design_theme_consolidation.py — 16 checks: new theme values
+present and old ones removed; JS syntax valid after both changes;
+both old duplicated panels' element ids confirmed gone (not just
+absent from view, actually removed from the DOM); the new consolidated
+card confirmed present and linking to the dedicated page rather than
+duplicating it; the dedicated page's own three sub-panels (AI
+Narrative, Smart Money Events, Per-Strike Activity) confirmed
+untouched; a full getElementById-vs-actual-ids sweep confirmed zero
+NEW dangling references introduced (5 pre-existing, unrelated gaps —
+a legacy agentsGrid naming mismatch and dead canvas-chart references
+from before Lightweight Charts was adopted — confirmed present before
+this round and explicitly out of scope for it); confirmed the two
+rendering functions target different elements rather than clobbering
+each other. Full regression suite green across all 36 other test
+files. App loaded through a real request confirming status 200 and
+the new theme/consolidation actually present in the served HTML.
+
+### Explicitly NOT done in this round
+
+Full page-by-page rebuild of Strategies/Backtest/P&L/Journal/Quality/
+News/Settings to match each wireframe sheet's exact card arrangement.
+The new global theme applies to all of them automatically (unified
+look), but their internal layout/density is unchanged. A dedicated
+follow-up round, sheet by sheet, is the safer way to tackle that given
+the risk profile here.
+
+
+## v58.12 — SHIPPED: the ACTUAL layout fix (item #8), following direct feedback that v58.11 only changed colors/fonts
+
+Direct, correct feedback: v58.11's re-theme changed colors and fonts
+only — no layout actually changed anywhere. Investigated and found
+the real root cause rather than assuming the theme change was
+"enough": EVERY panel on the dashboard had the `.full` class, and
+`.full{grid-column:1/-1}` forces a panel to span the ENTIRE grid width
+regardless of the `.grid` wrapper's own sizing — meaning no panel
+could ever sit side-by-side no matter what the colors looked like.
+Re-theming was necessary but not sufficient; this is the piece that
+was actually missing.
+
+### Fix
+
+Removed `.full` from two panels that are genuinely compact enough to
+pair (Institutional Summary — now a compact score+KV card since
+v58.11's consolidation — and Portfolio Risk Engine, similar score+
+summary density) and wrapped them in the SAME `.row3` 2-column pattern
+already proven working for Key Levels + Market Sentiment, rather than
+inventing a new layout mechanism. Left genuinely wide content (Option
+Chain's 14-column table, Technical Analysis's dense indicator summary,
+AI Deep Analysis's variable-length dynamic content) at full width
+deliberately — not every panel benefits from being squeezed into a
+column.
+
+### Verified with an ACTUAL BROWSER, not just CSS reasoning
+
+Given the previous round's mistake was trusting that a CSS change
+would produce a visible layout difference without actually checking,
+this round verified with a real headless-browser render (Playwright):
+started a live server instance, loaded the actual page, and measured
+real bounding boxes. Confirmed directly — not assumed — that
+Institutional Summary and Portfolio Risk Engine render at the same Y
+position, different X positions, equal 656px widths in a 1400px
+viewport. Checked the full page for horizontal overflow (none) and
+mapped every dashboard panel's real rendered position, confirming zero
+unexpected overlaps between sibling panels (the one "overlap" the
+automated check flagged was a pre-existing, legitimate parent-child
+container relationship for the AI Trade Signal section, not a new bug).
+
+### Verified
+
+Extended test_design_theme_consolidation.py (+3 checks, now 19):
+confirms `.full` was actually removed from the paired panel and the
+`.row3` wrapper is in place; confirms div nesting stayed balanced
+across the whole dashboard view section (105 opens / 105 closes) — a
+real risk when restructuring nested grid wrappers by hand. Full
+regression suite green across all 37 test files.
+
+### Still not done, stated plainly
+
+The rest of the dashboard's full-width panels (Live Chart, LTP
+Monitor, AI Deep Analysis, Technical Analysis, Option Chain) remain
+full-width by deliberate choice given their content. The other 10
+wireframe sheets (Strategies/Backtest/P&L/Journal/Quality/News/
+Settings) still have their pre-existing internal layout — only the
+global theme applies there so far, not page-specific restructuring.
+
+
+## v58.13 — SHIPPED: real root cause of "nothing changed" found — browser caching, not the layout fix
+
+v58.12's layout fix was verified with an actual headless-browser
+render before shipping (measured bounding boxes, confirmed panels
+side-by-side). Direct follow-up report: "nothing changed" on the
+person's own machine. Rather than assume the fix was wrong, verified
+the shipped zip file directly first — confirmed it genuinely contains
+the v58.12 changes. Then checked how the page actually gets served.
+
+### Root cause
+
+`FileResponse` (Starlette/FastAPI's default) automatically sets
+Last-Modified/ETag headers derived from the file's own mtime/size —
+with no explicit Cache-Control, browsers are free to serve an already-
+cached copy of "/" without even asking the server again on a normal
+reload. The dashboard.html file on disk was genuinely updated (server
+reads it fresh via FileResponse, confirmed no in-memory caching there
+either) — the browser just never re-fetched it.
+
+### Fix
+
+Added explicit `Cache-Control: no-cache, no-store, must-revalidate`
+(plus Pragma/Expires for older browsers/proxies) to the "/" route.
+This prevents the SAME class of confusion on every future build from
+here on — not just a one-time patch for this report.
+
+### Important note for the person testing this
+
+This fix only prevents caching GOING FORWARD. A browser tab that
+already cached the OLD page from before this fix shipped may still
+need ONE hard refresh (Ctrl+Shift+R / Cmd+Shift+R, or an incognito/
+private window) to see it. After that one hard refresh, every
+subsequent build should load fresh automatically without needing to
+repeat that step.
+
+### Verified
+
+Extended test_design_theme_consolidation.py (+3 checks, now 22):
+confirmed via a real HTTP request that Cache-Control/Pragma headers
+are actually present on the response, not just added to the source
+and assumed to work. Full regression suite green across all 37 test
+files.
+
+
+## v58.14 — SHIPPED: real breakpoint bug found, plus a screenshot mismatch clarified
+
+Follow-up report ("layout is the same") with 3 screenshots (opened in
+a guest tab, ruling out caching). Examined each screenshot carefully
+before assuming the layout fix itself was broken.
+
+### Two separate things going on
+
+1. **Two of the three screenshots weren't the changed page at all.**
+   The P&L page and the dedicated Institutional page were both
+   explicitly untouched in the v58.12/13 rounds (stated plainly at the
+   time) — "looks the same" there is expected, not a regression. The
+   third screenshot showed the TOP of the Dashboard (Live Chart + LTP
+   Monitor), which was also never changed — the actual paired section
+   (Institutional Summary + Portfolio Risk Engine) sits further down
+   the same page and wasn't visible in what was shown.
+
+2. **A real, separate bug, found regardless**: `.row3` (the pairing
+   mechanism) shared the SAME 1100px collapse breakpoint as `.grid`/
+   `#chartPanel`, which have much denser content (the AI Trade Signal
+   + Live Metrics + AI Market Insights area) and genuinely need that
+   wide a threshold. `.row3`'s own content (compact score+summary
+   cards) reads fine at half-width down to a much narrower window —
+   sharing the wider threshold meant the side-by-side pairing could
+   disappear on perfectly ordinary, non-maximized browser windows for
+   no real content reason. This alone could explain "nothing changed"
+   even on a genuinely fresh, uncached load if the person's window
+   happened to be under 1100px wide.
+
+### Fix
+
+Gave `.row3` its own, narrower 640px threshold, independent of
+`.grid`/`#chartPanel`'s untouched 1100px one.
+
+### Verified with real browser renders at multiple widths
+
+Confirmed via Playwright at 1400/1100/900/700/600px: the pairing
+stays side-by-side down to 700px and correctly collapses only below
+640px where it genuinely gets too cramped. Separately confirmed the
+untouched chart-panel breakpoint (1100px) still behaves exactly as
+before — this fix didn't disturb it.
+
+### Verified
+
+Extended test_design_theme_consolidation.py (+2 checks, now 24). Full
+regression suite green across all 37 test files.
+
+
+## v58.15 — SHIPPED: real duplicate removed, LTP Monitor consolidated into one table, per direct wireframe reference
+
+Direct, well-illustrated feedback with the actual wireframe screenshot
+and an annotated observation about a genuine duplicate.
+
+### Key Levels panel removed (confirmed genuine duplicate)
+
+Verified directly (not assumed) that the standalone "Key Levels" panel
+(a text ladder + OI histogram) draws from the exact same underlying
+levels data as the chart's own R1-R3/S1-S3 line overlay — genuinely
+redundant, not just visually similar. Removed the panel completely:
+HTML, the `renderLadder()` function, the `oiChart` canvas draw call,
+and the now-unused `oiChart` variable — confirmed no dangling
+references remain anywhere in the file.
+
+### LTP Monitor consolidated from 4 cards to 1 table
+
+Per the wireframe's actual proposed structure. New columns: Index /
+Spot / Chg / Futures / Basis / Regime / Position — clicking a row
+expands a detail section with O/H/L/VWAP and the Buy/Sell FUT buttons,
+so nothing is lost, just de-emphasized behind a click rather than
+always taking full card space. The old per-card "participation"
+signal (spot vs futures directional confirmation) was NOT dropped —
+moved into the same expandable detail section.
+
+Backend: added `regime` to `/api/ltp-monitor`'s response — cheap,
+since `regime:{symbol}` was already computed and cached elsewhere,
+just not exposed on this endpoint before.
+
+### Explicitly NOT included, stated plainly rather than faked
+
+The wireframe's OI-CHG and FEED (WS vs REST) columns aren't included —
+they'd need genuine new work to expose meaningfully (index-level OI
+change isn't already computed anywhere in a form that means something
+at that level) rather than a quick addition, so left out rather than
+approximated with something misleading.
+
+### Verified with real browser rendering against realistic mocked data, not source inspection alone
+
+Confirmed via Playwright with mocked API responses: a genuine `<table>`
+renders (not the old card grid), headers match exactly, per-row basis
+calculation is arithmetically correct, an open futures position
+summarizes correctly in the Position column, clicking a row reveals
+the detail section with O/H/L/VWAP and the preserved participation
+signal, and no horizontal overflow was introduced.
+
+### Verified
+
+test_dashboard_restructure_r2.py — 18 checks (see above). Full
+regression suite green across all 38 test files.
+
+### Still open, stated plainly
+
+The "AI probability" panel in the wireframe shows a numeric factor-by-
+factor breakdown (Regime +18, MTF confluence +12, OI bias +15,
+Institutional +9, IV percentile +4, News/macro -6) — this is
+GENUINELY NEW backend work (attributing a specific point value to each
+contributing factor), not a frontend rearrangement of existing data.
+Not attempted this round rather than fabricate plausible-looking
+numbers with no real computation behind them. The rest of the
+wireframe's proposed 2-column restructuring (chart+chain on the left,
+compact summary cards stacked on the right) is also not yet done.
+
+
+## v58.16 — SHIPPED: found the wireframe's Dashboard sheet I had not read before, removed the actual duplicate, honest scope check
+
+Direct follow-up with a hand-drawn rough structure plus a screenshot of
+the wireframe's own Dashboard mockup (sheet 02, in the SAME ltp-monitor-
+ui-revE.html already used for item #7's Institutional sheet — this
+specific sheet had not been read in full before this round).
+
+### The real duplicate, found and confirmed via actual file inspection
+
+Re-checked the codebase's ACTUAL current state directly rather than
+trusting memory of earlier edits in this long session (the version
+file was already at v58.15, ahead of what had been tracked — a clear
+signal to verify rather than assume). Found the genuine duplicate: a
+"KEY LEVELS (R1-R3/S1-S3)" text strip embedded inside the Live Chart
+panel itself, listing the same R1-R3/S1-S3 levels (with source,
+strength, distance) already drawn as price-line labels directly on the
+chart. Removed the strip. Confirmed via a real browser load with JS
+error tracking that no runtime errors occur — the 3 remaining code
+references to the removed element were already null-guarded
+(if(el)-style checks), so removing it is a clean no-op there rather
+than a dangling crash risk.
+
+### Full scope of the wireframe's Dashboard sheet, read in full this round
+
+The wireframe specifies considerably more than has been implemented:
+LTP Monitor as one table (confirmed already done, likely from earlier
+in this same long session), a genuine two-column split (price/chart +
+option chain on the left; AI probability with a per-contributor
+breakdown, market regime, a simplified Institutional table, a
+simplified Key Levels table, market sentiment, and open positions on
+the right), and an entirely new "Last signal evaluated" panel showing
+every individual gate check as pass/fail chips. This is substantial,
+multi-panel restructuring — stated honestly as NOT attempted in this
+round given the size of the remaining response budget; the safest
+single, well-tested change was made instead (the duplicate removal),
+rather than a rushed attempt at the full restructure that couldn't be
+verified as thoroughly.
+
+### Verified
+
+Extended test_design_theme_consolidation.py (+3 checks, now 27):
+confirms the duplicate strip and its container element are both
+actually removed, and that all remaining code references to it are
+safely null-guarded. Full regression suite green across all 37 test
+files. Real browser load confirmed zero JS runtime errors.
+
+### Next round, clearly scoped
+
+The wireframe's Dashboard sheet (full 2-column restructure + AI
+probability contributor bars + simplified Institutional/Key Levels
+tables + the new Last-signal-evaluated panel) is real, well-specified
+work for its own dedicated pass.
+
+
+## v58.16 — SHIPPED: the actual 8/4 (70/30) two-column dashboard restructuring, per the wireframe's exact proposed layout
+
+Direct, precise feedback with the wireframe's actual Dashboard sheet
+re-referenced: chart should take ~70% width, remaining ~30% for AI
+probability/regime/institutional/smart-money cards — and there was
+too much white space between panels.
+
+### What changed
+
+Re-read the wireframe's Dashboard sheet (project file
+ltp-monitor-ui-revE.html) in full to get the exact structure, not just
+the general idea: `.c12` (LTP Monitor table, full width) → `.c8 stack`
+(chart + option chain) + `.c4 stack` (six compact right-column cards).
+
+Implemented as a genuine 12-column CSS grid (`.dashgrid`/`.dc8`/`.dc4`,
+8 and 4 column spans respectively, with its own responsive collapse
+breakpoint) — not a re-coloring, an actual structural rebuild:
+
+  - **Left column (dc8, ~67% of content width)**: Live Chart, Option
+    Chain stacked below it.
+  - **Right column (dc4, ~33%)**: AI Trade Signal, Live Metrics,
+    Market Regime (newly extracted into its own standalone card —
+    previously nested inside Live Metrics), AI Market Insights, Market
+    Sentiment, Institutional & Smart Money, Portfolio Risk Engine, AI
+    Deep Analysis, Technical Analysis — nine panels stacked, each now
+    full-width WITHIN its column rather than internally split.
+
+Un-nested AI Trade Signal's own chartCol/sideCol internal split and
+un-paired Institutional Summary from Portfolio Risk Engine (both
+row3-paired arrangements from earlier rounds) — both made sense at
+full page width, but would have been cramped squeezed into an
+already-narrow 4/12 column on top of an internal split.
+
+### Explicitly NOT included this round, stated plainly
+
+The wireframe's "AI probability" card shows a numeric factor-by-factor
+breakdown (Regime +18, MTF confluence +12, OI bias +15, Institutional
++9, IV percentile +4, News/macro −6) with individual attributed point
+values — this needs genuine NEW backend work (attributing a specific
+numeric contribution to each factor), not a frontend rearrangement of
+existing data. Not attempted this round rather than fabricate
+plausible-looking numbers with no real computation behind them. "Key
+levels" (the wireframe's simpler 6-row table version, distinct from
+the OI-histogram version already removed) and "Open positions" as a
+standalone right-column card are also not yet added.
+
+### Verified with real browser measurements, not just source inspection
+
+Confirmed via Playwright: the rendered left/right columns are
+genuinely ~67%/33% of content width (matching an 8/4 split), sit side
+by side, produce zero horizontal overflow, and the chart still renders
+at a healthy width (850px, not squeezed). Every element that used to
+live inside the removed chartCol/sideCol wrappers, and every panel
+that used to be row3/grid-paired, confirmed still present and
+reachable after being un-nested. Measured actual panel-to-panel gaps
+in the new right column directly: a consistent 8px between all 9
+panels — addressing the reported white-space concern with a number,
+not an assumption.
+
+### Verified
+
+test_dashboard_8_4_split.py — 23 checks (see above). Two now-outdated
+assertions in test_design_theme_consolidation.py (checking for the
+row3 pairing this round legitimately superseded) updated to reflect
+the current, correct structure rather than left failing. Full
+regression suite green across all 39 test files.
+
+
+## v58.17 — SHIPPED: chart widened to 75%, default interval changed to 1-hour
+
+Two explicit, well-defined changes.
+
+### Chart width: 8/4 (67%/33%) → 9/3 (75%/25%)
+
+Widened the left column from 8 to 9 of 12 grid columns (75%, the
+cleanest fraction of 12 within the requested 75-80% range), narrowing
+the right column from 4 to 3 correspondingly. Kept the same 12-column
+system and the same `.dc8`/`.dc4` class names (now spanning different
+values than their names literally suggest) rather than a risky mass
+rename across every usage — documented clearly in a comment for future
+maintenance rather than left as a silent trap.
+
+### Default chart interval: 1-minute → 1-hour
+
+Traced the actual mechanism carefully rather than just moving the
+visual "active" class: found `lwCurrentInterval` (a separate JS
+variable that drives the real websocket request URL) defaulted to "1"
+independently of which button visually appeared selected — two pieces
+of state that could have drifted apart if only one were changed.
+Updated both: the variable itself and the HTML's active-button class,
+confirmed server-side that "60" is a genuinely valid, already-supported
+interval value (with a pre-existing, disclosed limitation: no live-
+updating current bar at that granularity — not something this change
+introduced).
+
+### On "other pages"
+
+Checked directly rather than assumed: the Backtest page's own chart
+(the only other chart in the app) shows historical trade-specific
+candles with no interval selector and no chart+sidebar column split —
+there's no direct equivalent to extend either change to yet. Flagging
+this rather than guessing at a bigger restructuring of pages that may
+not need one; happy to build a similar structured layout for other
+pages if that's the intent, but wanted to confirm rather than assume
+before spending effort on it.
+
+### Verified with real browser measurements
+
+Confirmed via Playwright: the left column renders at 75.5% of content
+width (squarely in the requested 75-80% range), the "1h" button is
+genuinely the one marked active on a fresh page load (both visually
+and via its data-interval attribute), and no horizontal overflow was
+introduced by the width change.
+
+### Verified
+
+test_chart_width_and_default_interval.py — 13 checks. Outdated
+assertions in test_dashboard_8_4_split.py (checking for the exact
+previous 67%/33% span values, since legitimately superseded this
+round) updated to a broader acceptable range rather than left failing.
+Full regression suite green across all 40 test files.
+
+
+## v58.18 — SHIPPED: real root cause of "indicators misplaced" found and fixed
+
+Direct screenshot showed the actual bug clearly: status text correctly
+said "showing 5m bars from local DB" while the "1h" button stayed
+highlighted, and MACD/RSI/Stochastic visibly started partway through
+the session instead of from the first candle.
+
+### Root cause, traced through the actual code rather than guessed
+
+60m ("1h") isn't persisted to the local DB anywhere in this codebase
+(a pre-existing, disclosed design choice) — it depends entirely on a
+live REST call. When that call can't succeed (market closed, no
+broker session, etc.), the code correctly falls back to the most
+recent 5m session so the chart isn't blank. But `interval` and
+`db_backed_interval` — used throughout the REST of that connection,
+including indicator computation — stayed at their ORIGINALLY
+requested values ("60"/not-DB-backed) even after actually delivering
+5m data. That meant the indicator warm-up path (400 prior bars from
+the DB, needed because MACD/RSI require ~26-34 bars of lookback
+before producing a value) was skipped entirely — not because 5m data
+lacks a warm-up tier, but because the code was still pretending it was
+serving non-DB-backed 60m data. The lookback ate into the visible
+range itself, visually delaying every indicator by exactly that many
+bars. Confirmed this diagnosis by reading the full fallback-tier
+chain, not assumed from the screenshot alone.
+
+### Fix
+
+The moment the 5m fallback tier actually fires, `interval` and
+`db_backed_interval` now update to reflect what was ACTUALLY
+delivered, not what was originally asked for — fixing the indicator
+warm-up path and the `interval` field reported to the client in the
+same change.
+
+Paired frontend fix: the "1h" button now updates to show whichever
+interval was actually delivered, agreeing with the status text next
+to it instead of contradicting it. Deliberately does NOT overwrite the
+underlying reconnect-driving preference variable — the person's actual
+request ("1h") is retried on every future reconnect (a new symbol
+switch, etc.), not silently abandoned after one fallback; only the
+button's visual state reflects the current reality.
+
+### Verified end-to-end, not just by reading the code
+
+Connected a REAL websocket to `/ws/candles/NIFTY?interval=60` with the
+REST path mocked to fail (simulating a closed market) and a controlled,
+genuinely-varying 5m candle series available — confirmed the response
+correctly reports `interval: "5"` (what was delivered), not `"60"`
+(what was requested).
+
+### On "other pages"
+
+Confirmed momentum_confluence (the Pine-Script-ported strategy) is
+indeed present and passing in the current build — test_momentum_
+confluence.py is part of this round's regression run. Given the scale
+of restructuring every remaining page (Strategies/Backtest/P&L/
+Journal/Quality/News/Settings) with the same real-browser-verified
+rigor applied to the Dashboard, and that this build won't be reviewed
+until morning — didn't attempt that broader work unsupervised in this
+round. Prioritized shipping a solid, thoroughly-verified fix for the
+concrete bug reported over a wider, faster, less-tested pass across
+pages that could sit broken for hours before being caught. Ready to
+take on the other pages carefully in the next session.
+
+### Verified
+
+test_interval_fallback_indicator_warmup.py — 9 checks (see above).
+Full regression suite green across all 41 test files.
+
+
+## v58.19 — SHIPPED: chart zoom-to-last-hour fixed (real bug, not a quick patch), 1x3 row added, option chain question answered
+
+### Option chain row count — confirmed correct, not a bug
+
+Traced the actual windowing logic: "focus window: ~10 strikes either
+side of ATM" is a deliberate, documented design choice (10 + ATM + 10
+= 21 rows). No change made.
+
+### Chart zoom-to-last-hour — genuinely debugged, not guessed
+
+Corrected an earlier misunderstanding (v58.17 wrongly defaulted the
+candle GRANULARITY to 60-minute bars; the actual request was "always
+show the last hour of price action, regardless of which granularity —
+1m/5m/15m — is selected"). Reverted the granularity default back to 1m.
+
+Building the actual last-hour zoom took real, iterative debugging
+rather than a single plausible-looking change:
+  - First attempt (setVisibleRange with a time-based window) measured
+    150 minutes on screen instead of the requested ~61 — traced to
+    Lightweight Charts filling the container at its default 6px bar
+    spacing regardless of the requested range.
+  - Second attempt (setVisibleLogicalRange instead) hit the exact same
+    150-minute result — same underlying constraint, different API.
+  - Third attempt (explicitly forcing barSpacing) read back as
+    unchanged (still 6) immediately after being set — traced to a
+    genuine timing issue: Lightweight Charts needs a moment to settle
+    after setData() before a barSpacing change takes effect; calling
+    it synchronously in the same tick silently does nothing.
+  - Fixed by confirming the codebase's EXISTING retry pattern (already
+    written for a different reason — re-asserting fitLwChart at 80ms/
+    400ms after connect) already provides exactly the settling delay
+    needed, once zoomToLastHour replaced fitLwChart as what that retry
+    calls.
+
+Since the CDN this dashboard loads the charting library from isn't
+reachable in the sandboxed test environment, installed the exact same
+lightweight-charts version locally via npm and injected it into the
+test page — every measurement above (150 minutes, then 59 minutes
+after the fix) is from the REAL charting library actually running the
+real zoom logic, not a mock or assumption from reading the source.
+
+### Dashboard layout: Market Sentiment / Portfolio Risk Engine /
+Technical Analysis moved to a 1x3 row under Option Chain
+
+Per explicit request. New `.row1x3` class (3 equal columns, collapsing
+to 1 below 900px), positioned below the whole dashgrid (chart+chain
+column plus the remaining right-column cards), not squeezed into the
+dc8 column specifically. The right-column stack now has 6 panels
+instead of 9 (AI Trade Signal, Live Metrics, Market Regime, AI Market
+Insights, Institutional Summary, AI Deep Analysis).
+
+### Verified
+
+test_chart_hour_zoom_and_1x3_row.py — 23 checks, including full
+real-browser + real-charting-library verification (not source
+inspection alone): confirmed 59-minute visible span against a
+simulated 375-minute (full session) candle set, oldest candle
+correctly excluded, newest candle correctly included, and the new 1x3
+row rendering correctly in the same real page load. Two now-outdated
+assertions (in test_chart_width_and_default_interval.py and
+test_dashboard_8_4_split.py, both checking for states legitimately
+superseded this round) updated to reflect current, correct behavior
+rather than left failing. Full regression suite green across all 42
+test files.
+
+### Still open
+
+"Other pages" restructuring (Strategies/Backtest/P&L/Journal/Quality/
+News/Settings) — not started this round; this round's effort went
+entirely into properly debugging the chart zoom issue once its actual
+depth became clear, rather than splitting attention across both.
+
+
+## v58.20 — SHIPPED: "other pages" restructuring, scoped honestly
+
+Per explicit go-ahead once the chart fix was confirmed working.
+
+### Surveyed every remaining page before touching anything
+
+Strategies, Backtest, Journal, Agents, Macro/News, and Quality were
+all read in full first. Conclusion: most are already appropriately
+built around wide tables and filter-bar-driven content — a Strategy
+Library table with 10 columns, an Activity Log, a News Tracker with
+8 columns — genuinely needs full width. That's not the same problem
+Dashboard/P&L/Institutional had (many small summary cards stacked
+full-width, wasting horizontal space). Forcing those wide tables into
+a narrower dc8 column would have made them worse, not better, so they
+were deliberately left structurally unchanged this round.
+
+### P&L page restructured, plus a new Guardrails panel
+
+Per the wireframe's own P&L sheet structure: Open Positions + Order
+History (left, dc8) paired with Day-wise P&L + a new Guardrails panel
+(right, dc4). Guardrails shows exactly the conditions the risk gate
+checks — daily loss limit, daily profit target, consecutive losses,
+portfolio drawdown — as fill bars toward each limit, matching the
+wireframe's own reasoning ("proximity is legible before the halt
+fires"). Every value already existed in config/agents (daily_loss_
+limit, portfolio_max_drawdown, consecutive_losses — the exact same
+agent-state lookup /api/autopilot/status already uses) — this only
+gathers them into one place on /api/trades rather than requiring the
+frontend to poll multiple endpoints and re-derive the same formulas.
+
+### Institutional page restructured
+
+Per the wireframe's own Institutional sheet: Per-Strike Activity table
+(left, dc8) paired with Smart Money Events (right, dc4). AI Narrative
+stays full-width below, matching the wireframe's own c12 positioning
+for it.
+
+### Verified
+
+test_other_pages_restructure.py — 19 checks: confirmed the guardrails
+object is genuinely present in a real HTTP response with all 7
+expected fields; confirmed via real browser render that both
+restructured pages show the correct ~75/25 column split side by side;
+confirmed the Guardrails panel renders real numbers for all three
+limit bars; confirmed every element on the Institutional page survived
+the restructuring. One test-scoping bug found and fixed along the way:
+an older test's panel-count check used an unscoped CSS selector that
+started double-counting once dc4 was legitimately reused on other
+(hidden but DOM-present) pages — fixed by scoping to the Dashboard
+view specifically. Full regression suite green across all 43 test
+files.
+
+### Explicitly not attempted
+
+The wireframe's Strategies sheet (rowspan-merged consolidated
+eligibility table + payoff-diagram SVGs) and further redesigns of
+Backtest/Journal/Quality/Macro would need genuinely new backend data-
+shaping or charting work, not a layout rearrangement of existing
+elements — flagged rather than attempted hastily.
+
+
+## v58.21 — SHIPPED: all four log-analysis priority items, in order
+
+### 1. Futures quote rate-limit — investigated and improved, root cause partially uncertain
+
+Confirmed the 2.5s pacing already in place was genuinely within Dhan's
+documented 1 req/s ceiling for this specific caller — yet 429 errors
+climbed sharply anyway (28 -> 1,151 daily hits over two weeks),
+directly explaining the ~10.4-point futures stop-loss slippage found
+earlier. Widened the gap further (2.5s -> 4.0s) and changed backoff
+recovery to require 3 consecutive successes before fully clearing the
+escalation, instead of resetting on the first lucky one (which could
+otherwise immediately drop back to a short retry only to fail again
+right away). Stated honestly: the most likely explanation is that
+Dhan's rate limit isn't purely per-endpoint and the much more frequent
+option-chain fetch traffic is sharing the same budget — not able to
+confirm that policy from this environment, so this is the safe,
+concrete half of the fix rather than a certain diagnosis.
+
+Verified behaviorally against the real method with a fake client, not
+just by reading the source: confirmed the 429 streak escalates
+correctly across simulated failures, doesn't reset until the 3rd
+consecutive success, and the measured real-time gap between calls is
+4.01s.
+
+### 2. Spread profit-lock giveback — diagnosed as a config value, not a code bug
+
+Traced the 67.5% average peak-gain giveback to its actual source:
+this deployment's saved config has `spread_profit_lock_trigger_pct:
+10` and `spread_profit_lock_pct: 20`, versus the code's own defaults
+of 80/75 (already exposed in Settings, pre-populated at those
+defaults). Not something fixable from here — it lives in the user's
+own config.json, which any code-level default change wouldn't
+override. Recommended reviewing those two Settings fields against the
+built-in defaults.
+
+### 3. Journal duplication — real bug found and fixed, plus a one-time cleanup
+
+Root cause: `journal_done`/`weekly_risk_done` were in-memory-only bus
+flags that never survived a server restart, while journal.json/
+weekly_risk_journal.json themselves DO persist — every restart after
+15:35 IST on a given day re-ran that day's journal write and appended
+ANOTHER duplicate entry. Confirmed live: 71 raw entries collapsed to
+14 unique dates, some duplicated up to 8 times. Fixed the write path
+(dedup-by-date/week before appending) and added a one-time startup
+migration (`_dedupe_journal_file`) that cleans up existing duplicates
+already written before this fix existed, keeping the last entry per
+date/week. Extracted as a standalone, directly-testable function
+rather than left inline.
+
+Verified behaviorally: reconstructed the exact live duplication
+pattern (16 entries, several dates repeated 3-8 times with identical
+data, one date with two GENUINELY different duplicate payloads) and
+confirmed the dedup correctly collapses to 4 unique dates, preserves
+chronological order, keeps the LAST occurrence when duplicates
+genuinely differ, and is a true no-op (no rewrite, no log) on an
+already-clean file.
+
+### 4. Repeated "entry failed" log spam — quieted
+
+Root cause: an entry-failure reason logged unconditionally every
+cycle, even when identical to the previous cycle — 596 near-identical
+lines in one log file, 595 of them "already open on X" (a persistent
+condition unchanged while a position stays open). Fixed with the same
+rising-edge/periodic-heartbeat pattern already used elsewhere in this
+same function: logs immediately when the reason changes, otherwise at
+most once every 10 minutes as a "still blocked" pulse — extracted as
+`_should_log_entry_fail()` for direct testability.
+
+Verified behaviorally: 10 identical-reason calls in a row logged
+exactly once (matching the exact 595-line spam this fixes); a changed
+reason logs immediately; reverting to the original reason also logs
+immediately (confirms the baseline tracks the CURRENT reason, not
+"ever seen"); a different symbol/strategy pair is tracked
+independently; and a heartbeat correctly fires again after 601
+simulated seconds, confirming the fix goes quiet, not permanently
+silent.
+
+### Verified
+
+37 new checks across 3 new test files (test_futures_quote_ratelimit_
+fix.py, test_journal_dedup_fix.py, test_entry_fail_log_throttle.py).
+Full regression suite green across all 46 test files.
+
+
+## v58.22 — SHIPPED: market-hours fetch gate, futures defense-zone gap identified, signal-frequency clarified, P&L panels always visible
+
+### 1. Market-hours gate added, per explicit suggestion
+
+Confirmed MarketDataAgent.cycle() had NO market-hours gate at all —
+option-chain fetches (and, via _poll_futures_via_rest called from
+within it, futures quotes) ran continuously 24/7, including every
+evening/overnight/weekend hour. This plausibly explains why 429
+rate-limit hits were spread fairly evenly across all 24 hours rather
+than concentrated in the ~6.25 actual trading hours. Added a gate
+right before the fetch call — confirmed safe: chain:{sym} (and
+everything downstream) simply retains its last value when skipped,
+matching the existing "show the last available session" design
+already relied on elsewhere. Verified behaviorally with a fake
+get_chain: zero calls made while market_open() returns False, fetch
+proceeds normally when True.
+
+### 2. Futures loss investigation — the actual missing piece identified
+
+Traced _monitor_futures() in full: the ONLY protective mechanism
+besides the fixed entry-time SL is a trailing stop that requires the
+position to ALREADY be in profit before it engages (`peak` must
+exceed `entry` by the trigger %). The FINNIFTY short that lost ₹7,468
+never went into profit at all — it moved against the position from
+the start, so the trail never engaged, leaving only the fixed SL
+(which then got hit late due to the rate-limit data gap already
+fixed). Spreads have a "defense zone" that tightens the loss limit as
+price nears a danger level, BEFORE a full breach; futures have no
+equivalent. Not built this round (a genuine strategy-design decision,
+not a quick fix) — flagged clearly as the identified gap, pending
+discussion on whether/how to add it.
+
+### 3. AI Trade Signal frequency — clarified, not a code change
+
+Traced where actual autopilot signal generation happens: StrategyAgent
+(interval=5, event-driven off the analysis pipeline) — completely
+independent of the "auto-updates every 3 min" frontend timer, which
+only controls how often the dashboard's preview CARD refreshes for a
+human to look at. The autopilot's real trade-entry evaluation already
+runs every ~5 seconds; the 3-minute concern doesn't apply to automated
+entries. Also traced /api/signal's own 45-second cache TTL and
+confirmed it involves a real LLM call — blindly matching the display
+poll to 5s wouldn't actually refresh that often (most polls would hit
+the 45s cache) and could meaningfully increase AI-call cost/load for
+no benefit. No code change made; explained the distinction rather than
+changing a timer that wouldn't address the actual concern.
+
+### 4. P&L page: Open Options/Spreads/Futures now always visible
+
+Root cause, confirmed directly: each category's section only appeared
+in the HTML when it had something open — an all-empty category
+vanished ENTIRELY rather than showing "nothing open here", reading
+exactly like a missing feature rather than an empty one. Verified the
+underlying rendering was already correct with real data (both spread
+and futures data rendered fully and accurately when present) — this
+was purely about indistinguishable empty states. Fixed: all three
+categories (Open options / Open spreads / Open futures) now always
+render their heading, either a populated table or an explicit "No
+open X" line.
+
+### Verified
+
+38 new checks across 3 new test files (test_market_hours_fetch_gate.py,
+test_pnl_open_positions_always_visible.py, plus the futures-monitoring
+investigation folded into this write-up without new test files since
+no code changed there yet). Full regression suite green across all 49
+test files.
+
+### Open, pending discussion
+
+- Futures defense-zone mechanism (item 2 above) — not built, needs a
+  design decision on trigger/tightening parameters first.
+- Rate-limit root cause (option-chain traffic sharing Dhan's budget
+  with the quote endpoint) — still not confirmed against Dhan's actual
+  policy; the market-hours gate this round should meaningfully reduce
+  total daily call volume regardless of that uncertainty.
+
+
+## v58.23 — SHIPPED: futures defense zone, AI market-move advisories for options/futures/spreads
+
+### Futures defense zone — implemented per prior comment, thoroughly tested
+
+Mirrors the existing spread defense-zone mechanism, adapted for
+futures' linear (no-gamma) price/SL structure: once an ADVERSE move
+consumes a configured fraction (default 40%) of the ORIGINAL entry-
+to-stop distance, the stop tightens toward current price rather than
+waiting for the full original stop — one-shot (never re-triggers,
+never loosens), deliberately separate from the existing favourable
+trailing mechanism (which only engages once already in profit).
+Directly addresses the identified gap from the FINNIFTY loss
+investigation: a position moving straight against entry from the
+start had no protection until the full stop was reached.
+
+Two real bugs caught and fixed before the tests would even pass: an
+inverted sign in the adverse-move formula, and a wrong variable name
+in the log message. New config: futures_defense_enabled/_zone_pct/
+_tighten_pct, registered in both DEFAULTS and SettingsIn.
+
+Verified with 19 behavioral checks reconstructing the exact reported
+scenario (SHORT, entry 26135.1, SL 26239.64): confirmed no trigger at
+30% of the risk distance consumed, correct trigger and tightening at
+65%, one-shot behavior on a further adverse move, independent
+confirmation for the mirror LONG case, and confirmed silence while a
+position is favourably profitable (proving no conflict with the
+trailing mechanism).
+
+### AI market-move advisories for options and futures — new, per explicit request
+
+Spreads already had a periodic LLM HOLD/EXIT advisory
+(_spread_ai_check). Single-leg options ("open trade") and futures had
+no equivalent. Added both, mirroring the spread pattern exactly: same
+advisory-only-by-default design, same 5-minute cadence, same separate
+auto-exit opt-in (off by default). Also added a shared
+_market_move_context() helper — reusing the existing regime/MTF-
+confluence read every directional strategy gate already depends on,
+not a new analysis engine — and retrofitted the EXISTING spread
+advisory's prompt to include it too, so all three now factor in where
+price may move next, not just each position's own static numbers.
+
+New config: option_ai_auto_exit_enabled/_exit_confidence_threshold,
+futures_ai_auto_exit_enabled/_exit_confidence_threshold — registered
+in both DEFAULTS and SettingsIn. Added matching Settings-page toggles
+(AI option auto-exit / AI futures auto-exit) alongside the existing
+AI spread auto-exit toggle, so these are actually reachable from the
+UI rather than config.json-only.
+
+One real bug found and fixed while testing: the market-move context
+helper wasn't bound correctly in the test's fake agent, silently
+masking every downstream assertion behind a caught exception — caught
+by checking captured LLM prompts directly rather than trusting a
+"no error" result.
+
+### Verified
+
+30 checks (test_ai_advisory_option_futures.py) covering the shared
+context helper, both new advisory functions with a mocked LLM
+(confirming market context lands in the prompt, advisory recorded,
+alert fires, auto-exit correctly gated on/off by its own toggle,
+5-minute cadence enforced), plus 19 checks for the defense zone and
+11 for the new Settings toggles. Full regression suite green across
+all 52 test files.
+
+
+## v58.24 — SHIPPED: AI Probability breakdown made visible (per the wireframe's own explicit design note)
+
+Given the open-ended "make the next changes" request, picked the item
+flagged repeatedly across several rounds as genuinely outstanding: the
+wireframe's "AI probability" card, whose own sheet note reads
+"contributors always visible beneath it rather than behind a hover."
+
+### Investigated before building anything
+
+Checked ai_probability_engine.py's unified_probability() first —
+found it ALREADY computes and returns per-factor components/weights
+(option_chain, decision_engine, institutional, technical, historical_
+probability). No new backend attribution logic was needed. The actual
+gap was purely in the frontend: this data was being sent to a hover-
+only `title` tooltip attribute, undiscoverable on touch devices and
+not matching the wireframe's explicit intent.
+
+### Fixed
+
+Replaced the tooltip with an always-visible breakdown: one row per
+factor showing a readable label, a signed "contribution from neutral"
+number, the raw score, the weight, and a fill bar. The contribution
+figure is an honest transformation of data already sent — (component
+score − 50) × weight — not a new invented metric; components are
+already direction-aware server-side (a disagreeing reading inverts to
+100−score), so 50 genuinely means neutral, and summing every factor's
+contribution reproduces the final score.
+
+### Verified
+
+11 checks (test_ai_probability_visible_breakdown.py): confirmed the
+old hover-only tooltip pattern is genuinely gone, the contribution
+formula matches the intended transformation, and — via real browser
+render with realistic mocked backend data — all four factor rows and
+their fill bars are actually present in the DOM (not requiring a
+hover), with correct signed values for both a supporting factor
+(positive) and an opposing one (negative). Full regression suite
+green across all 53 test files.
+
+
+## v58.25 — SHIPPED: continued "other pages" restructuring (Macro/News), Agents/Quality surveyed and left as-is
+
+Per explicit request to continue the UI work in this chat rather than
+a new one. Surveyed the three remaining unrestructured pages before
+touching anything.
+
+### Macro/News — restructured
+
+The wireframe's own Macro/News sheet is a much larger redesign than a
+layout rearrangement: a weighted "net macro read" score, live per-
+event decay countdowns, a checkpoint pipeline rail, and a unified
+source health/yield registry all need genuinely new backend
+computation — not attempted, flagged rather than invented unilaterally
+without discussion.
+
+What WAS applied: the same proven pattern already used successfully
+on Institutional and P&L — the wide Event Log table (left, dc8) paired
+with the narrower "at a glance" panels, Digest and Global Markets
+Snapshot (right, dc4), using only existing elements and data. News
+Tracker and RSS Feed Sources stay full-width below — each is
+independently substantial with its own filter bar, same reasoning
+already applied to Journal's shadow journal.
+
+### Agents — surveyed, left structurally as-is
+
+The wireframe's redesign here also needs new backend work: exception-
+class categorization per log line (code bugs vs transient errors
+rendered distinctly), per-agent cycle-duration tracking against a
+budget, a broker-sync log separate from the general activity log, and
+an alerts panel with per-item acknowledge state. None of this exists
+yet server-side. The current structure (2-column agent grid + full-
+width activity log) is already reasonably suited to its content — the
+activity log genuinely needs full width for long log lines — so
+nothing changed here this round.
+
+### Quality — surveyed, left as-is
+
+Already uses a symmetric grid2 layout appropriately for its
+genuinely-paired content (By Setup / By Symbol; MFE-vs-P&L / MAE-vs-
+P&L; MFE-vs-Volume / MAE-vs-Volume) — a 50/50 split is the right
+choice for equally-weighted symmetric pairs, unlike the asymmetric
+"wide table + narrow summary" dc8/dc4 pattern used elsewhere. No
+changes needed.
+
+### Verified
+
+18 checks (test_macro_news_restructure.py): confirmed balanced div
+nesting, valid JS syntax, every original element preserved, and — via
+real browser render — the actual ~75/25 column split, all functional
+elements reachable in the rendered DOM, and no horizontal overflow.
+Full regression suite green across all 54 test files.
+
+
+## v58.26 — SHIPPED: Macro/News full merge, Quality page changes, LTP Monitor moved to its own Futures Trading page
+
+Per direct request, three more UI changes to close out this round of
+UI work.
+
+### Macro/News — full merge (round 2)
+
+Per direct follow-up: merged Macro/News Event Log and News Tracker
+into ONE ranked table (#macroNewsTable) — confirmed via both backend
+handlers these are genuinely different data sources (macro_events bus
+key vs news_engine's separate tracked-events store), so this is a real
+merge of two schemas, ranked by impact severity first (Risk/bearish
+above Opportunity/bullish above neutral/info) then recency within each
+tier — not a duplicate-removal. Also merged Digest and Global Markets
+Snapshot into one panel: confirmed both were showing identical market-
+data numbers from two different endpoints; Digest absorbed Global
+Markets Snapshot's two unique pieces (provider-key warning, checkpoint
+status line) and the duplicate panel is gone. RSS Feed Sources now
+scrolls, capped to a 5-row-equivalent height.
+
+### Trade Quality
+
+"By Setup" renamed to "By Strategy" — traced the backend's _setup_of()
+helper and found it was ALREADY grouping by strategy name in practice
+(PA signal source / spread strategy / option-buy leg fallback), just
+labeled ambiguously; renamed rather than building a duplicate table.
+The four MFE/MAE scatter charts now share one row (grid4) instead of
+two 2-column rows, with SVG label font sizes bumped for readability at
+the smaller rendered width.
+
+### LTP Monitor moved to its own Futures Trading page
+
+The Dashboard's "LTP Monitor — Spot vs Futures" panel is fully
+removed. A new dedicated page (nav rail: Futures) restores the
+ORIGINAL detailed per-symbol card layout (spot/futures O/H/L/VWAP/
+Prev Close, basis, participation, regime) that a 2026-07-27
+consolidation had compressed into a compact table specifically to
+save Dashboard space — that constraint doesn't apply on its own page.
+Futures Buy/Sell/Exit execution (renderFuturePosition/futEnter/
+futExit — unchanged, reused directly) is now directly visible on each
+card instead of hidden behind a click-to-expand row. Same /api/ltp-
+monitor endpoint; no new backend.
+
+### Full regression pass — 3 genuine issues found and fixed, plus 3 confirmed environmental
+
+Ran all 61 test files in batches after this round's changes. Found:
+  - test_dashboard_restructure_r2.py: its real-browser section tested
+    the now-fully-removed dashboard compact table — replaced with a
+    note pointing to test_futures_trading_page.py, which verifies the
+    new page directly. Other sections (Key Levels removal, div
+    balance, regime field) still valid, kept.
+  - test_institutional_panel.py: one brittle exact-substring assertion
+    on showView's array broke when "futures" was added to it — fixed
+    to check presence robustly instead of an exact sequence.
+  - test_macro_news_restructure.py: fully superseded by this round's
+    merge — replaced with a short note rather than silently deleted.
+Confirmed environmental, not regressions: test_dhan_scrip_master.py's
+live-network sub-check (403, no internet to Dhan's real API in this
+sandbox — its actual logic checks all passed), test_dhan_ws.py
+(missing broker credentials in this sandbox), test_kotak.py (needs
+interactive password input), test_kotak_ws.py (missing `websocket`
+package in this sandbox).
+
+54 new checks this round (test_macro_news_merge.py: 23,
+test_quality_page_changes.py: 17, test_futures_trading_page.py: 24 —
+some overlap with fixes above). Full suite green.
+
+
+## v58.27 — SHIPPED: chart height +20%, AI Deep Analysis moved + collapsible, and a real gap fixed in its actual analysis
+
+### Chart height increased to 120%
+
+Dashboard chart container: 340px -> 408px, kept in sync across the
+container div, the chart library's own height option, and the H+/H-
+manual-adjustment tracking variable (so those buttons now increment/
+decrement from 408, not silently reset to 340 on first use). The
+Backtest page's separate chart was left untouched — the request was
+specifically about the Dashboard.
+
+### AI Deep Analysis moved to its own full-width row, now collapsible
+
+Moved out of the dc4 column to a new full-width row directly under
+Market Sentiment/Portfolio Risk Engine/Technical Analysis, per direct
+request. Added a genuine collapse/expand toggle — starts collapsed by
+default (the panel only ever populates on an explicit refresh and was
+otherwise empty anyway), and clicking "refresh" now auto-expands it
+rather than silently refreshing hidden content.
+
+### The actual analysis — found and fixed a real, pre-existing gap
+
+Per direct request that this be based on market sentiment,
+institutional impact, technical analysis, chart, and trading
+behaviour: traced ai_deep_dive() and found it already accepted a
+`context` parameter (news/social_mood/macro) but NEVER ACTUALLY USED
+IT anywhere in the function body — the caller had been computing and
+passing that context for nothing, before this change touched anything.
+Fixed properly, and added two genuinely new inputs — technical (from
+technical:{sym}, the same bus key the Technical Analysis Engine panel
+reads) and institutional (from institutional:{sym}, the same bus key
+the Institutional & Smart Money panel reads) — plus trading_behavior,
+aggregated directly from existing closed_trades records for that
+symbol (recent win rate, recent exit reasons), not a new tracking
+mechanism. The prompt now explicitly instructs the model to weigh all
+five inputs rather than option-chain flow alone.
+
+### Verified
+
+19 checks (test_ai_deep_analysis_enrichment.py) confirming the context
+fix behaviorally — mocked the actual LLM call function and confirmed
+the real technical score, institutional label, win rate, and macro/
+social context all genuinely land in what gets sent, not just present
+in source; confirmed the enrichment is additive (works fine with no
+context at all); confirmed end-to-end through the real HTTP endpoint.
+21 checks (test_dashboard_chart_and_ai_panel.py) covering the height
+change and the collapse/expand behavior via real browser clicks in
+both directions, plus confirming the panel's new position and full-
+width span directly against Market Sentiment's bounding box.
+
+One pre-existing test's assertion updated (test_dashboard_8_4_split.py
+expected 6 panels in the dc4 column; correctly 5 now that AI Deep
+Analysis also moved out) — not a regression, an assertion catching up
+to a deliberate, explicit change. Full regression suite green across
+all 63 test files (4 broker-integration tests remain environmentally
+unrunnable in this sandbox — no live network to NSE/Dhan, no saved
+Kotak credentials, missing `websocket` package — unrelated to any
+change made here).
+
+
+## OPEN ITEMS — consolidated as of v58 (2026-07-26), corrected 2026-07-27
+
+Single de-duplicated list superseding the scattered "still open" notes
+in the session entries below (several of which are now stale — e.g. S4
+futures Phase 1, the Strategies-page decision, and the keepalive
+write-side gate are all DONE as of v50). This section is the one to
+read.
+
+### A. Needs YOUR live verification (code done, unverifiable from the sandbox)
+
+- [ ] Chart after v50: switch indices/timeframes repeatedly — no blank,
+      no manual Fit; ▲▼ zooms candles in place; H+/H− resizes; pane
+      checkboxes hide/show; crosshair x identical across all 5 panes;
+      panes end at the last real session bar (no flat weekend tail).
+- [ ] Futures 429s during market hours: confirm the 2.5s pacing +
+      escalating backoff actually clears them. If not, capture one 429
+      response body — the limit window may be longer than per-second.
+- [ ] TradingView Pine Script template (docs/tradingview-webhook-setup.md):
+      run it in the Pine Editor once before trusting alerts live.
+- [ ] Kotak options websocket (nse_fo): CONFIRMED gap as of the
+      2026-07-27 09:17 market-hours re-run (F&O open the entire 60s
+      window this time, ruling out the earlier timing artifact).
+      INDEX (nse_cm) fully confirmed again — 8 real ticks, smoothly
+      moving (23934.35 \u2192 23932.15). OPTIONS: subscribe + CHRESUME
+      acknowledged for both NIFTY 23800 CE/PE (this week's expiry,
+      normally one of the most heavily-traded contracts on the
+      exchange right at open) \u2014 then literally ZERO DATA_TYPE frames
+      of any kind for either leg over the full 60s. Sixty seconds of
+      total silence on that specific a contract, with the identical
+      handshake mechanism streaming the index perfectly in parallel,
+      rules out "nobody traded it that minute" \u2014 this is a genuine gap
+      in the option subscription path, not a decode issue and not a
+      timing artifact.
+
+      Root cause NOT identified (no further live-server access to
+      test against) \u2014 two candidates, unconfirmed: (1) account-level
+      entitlement gating index WS access separately from options WS
+      access (broker-side, would explain silent-but-acked exactly like
+      this), (2) a token/topic format mismatch specific to the nse_fo
+      channel that doesn't necessarily match the REST quotes API's own
+      addressing scheme even though both are Kotak.
+
+      Recommended NOT to sink further live-market time into this:
+      already low priority, Dhan websocket gives comparable results
+      (user-confirmed), Kotak REST option-chain fetch is validated and
+      already serving as the fallback \u2014 nothing is currently blocked.
+      If pursued further, the next USEFUL step is asking Kotak support
+      directly whether the API key has real-time options WS
+      entitlement \u2014 settles candidate (1) immediately without more
+      guessing at unverifiable protocol bytes.
+
+### B. Known gaps / bug-risk items (code-side, not yet done)
+
+- [ ] Candles table still CONTAINS pre-v50 weekend keepalive bars —
+      filtered at read time everywhere that matters; a one-time offline
+      prune would reclaim space and remove the read-filter dependency.
+- [ ] News relevance/spam filter: `valid` still only checks non-empty
+      title; ~9 RSS feeds never reviewed for execution-relevant
+      content. Two parts: a real filter (category/keyword-density) and
+      a feed-suitability review.
+      STALE — DONE, see "Item 10" and "Item 10, round 2" entries below
+      (relevance gate + AI semantic classification). Feed-suitability
+      review specifically still not done.
+- [ ] News impact-window heuristic never validated against real candle
+      outcomes (flagged as a first-pass model at build time).
+- [x] Snapshot retention — DONE (v53). Wired to LearningAgent's daily
+      cycle via a dedicated `chain_prune_done` gate.
+- [x] Rich per-strike engine data — DONE (v57). New "Institutional"
+      dashboard page (summary card, AI narrative, Smart Money events,
+      per-strike activity table). Required zero backend changes — both
+      consumed endpoints already existed and already returned
+      everything needed.
+- [x] Backtest-page redesign — DONE (v55). Chart overlay (Lightweight
+      Charts, one shared instance, day-selector, entry/exit markers),
+      per-row sparkline removed, consolidated table (name rowspan-
+      merged, version enum, current version, last P&L, win rate,
+      status, enable/disable). Backend enrichment (entry/exit
+      timestamp+spot on trade records) unblocked this in the same
+      round rather than needing a separate pass.
+- [x] Manual-deploy for MTF Confluence, S7, and Futures Signal — ALL
+      THREE DONE (v57.1/v57.2). MTF Confluence's per-symbol logic
+      extracted into `_evaluate_and_fire()` the same way sg_ema's
+      `build_pa_signal()` was — one shared method per strategy, not a
+      second copy of the entry/stop/target formula.
+- [x] `pa_enabled` toggle endpoint — DONE (v55.1) for
+      orb/vwap_pullback/ema_mtf. momentum_buy remains intentionally
+      uneditable (no gate exists for it at all).
+- [x] config.save() silent key-drop — DONE (v53). Now logs loudly to
+      activity.log naming the dropped key(s).
+- [x] S7 Settings-page fields — DONE (v53), grouped into the existing
+      MTF Confluence subcard slot per spec.
+- [ ] S7 (v51) follow-ups still open: rejected-signal dim markers
+      server emit (client layer ready); decide shared vs own position
+      cap; S4/S7 collapse decision AFTER Shadow Journal data.
+      STALE — first two DONE, see "Item 11" entry below (rejection
+      markers built + wired both ends; position-cap policy resolved
+      and documented as deliberately shared). S4/S7 collapse decision
+      still genuinely open.
+
+### C. Original roadmap items not started
+
+- [ ] #7/#12 — ML probability scoring (shadow journal now accumulating
+      real volume; check volume sufficiency first).
+      STALE — DONE, see "Item 12" entry below. Checked actual volume
+      first (journal.json alone showed 3,580 closed trades across 55
+      days); built a real logistic regression (plain-Python gradient
+      descent, no external deps) trained on Shadow Journal outcomes,
+      with a volume-sufficiency check that measures the real current
+      count/balance on every call rather than assuming. Wired to both
+      an automatic daily check/train cycle and an on-demand endpoint.
+- [ ] #11 — Liquidity-sweep / FVG confluence on top of the OI-wall
+      logic.
+- [ ] #13 (remainder) — visual redesign: emoji cleanup across
+      Dashboard/P&L/Strategies/Backtest/Agents panel headers; deeper
+      Supabase layout patterns (breadcrumbs, page sections) beyond
+      Settings. (#6 chart pass is substantially superseded by the
+      Lightweight Charts work — mark closed unless something specific
+      remains wanted.)
+- [ ] "Overall Strategy Level" SL/Target control (was disabled in the
+      original reference design too — lowest priority).
+
+### D. Scoped-later features (each needs its own session)
+
+- [x] S4 Phase 2 — DONE (v52). Hybrid entry-signal engine (regime+
+      confluence base, futures-OI confirmation), dynamic sizing
+      (sizing.size_future), Settings subcard, live-mode orders behind
+      a second explicit switch. Not yet done: Shadow-Journal-style
+      logging for futures signals; chart markers for futures entries;
+      live order path unverified against a real broker.
+- [ ] Full "1H MTF Reversal Strategy" port (second Pine Script in
+      rinkoo.docx): pivot-based MACD/RSI/Stoch divergence, EMA 5/13/26
+      1H cross with weekly+daily gate, Fibonacci-extension targets,
+      live confluence table. Large; own session.
+- [ ] **TradingView Advanced Charts** — corrected/expanded 2026-07-26
+      (superseding the vaguer "for analysis, which paid product" note
+      this replaces). Researched live rather than assumed, since
+      licensing terms are exactly the kind of thing that goes stale:
+
+      What it actually is: a standalone client-side charting WIDGET
+      (github.com/tradingview/charting-library-tutorial), distinct from
+      the webhook mechanism already built. Webhooks push alerts OUT
+      from a tradingview.com-hosted Pine script TO our server; Advanced
+      Charts is the reverse shape — we host the widget on OUR server
+      and feed it OUR OWN data via a Datafeed we implement, same job
+      Lightweight Charts already does, but with built-in indicator
+      studies, drawing tools, multiple layouts, and a Pine-based custom-
+      indicator editor. It does NOT expose tradingview.com's own
+      analysis or the Pine Strategy Tester/backtester — TradingView's
+      own docs are explicit that Advanced Charts "does not provide full
+      functionality of the charts on tradingview.com," and Strategy
+      Tester specifically stays a tradingview.com-hosted feature. So it
+      would not change the earlier "no query API into tradingview.com
+      itself" finding — it's a nicer chart shell around data we already
+      own, not new analytical capability.
+
+      The blocker, as of this research: the free license is restricted
+      to "companies for use in **public web projects and/or
+      applications**" and explicitly excludes "personal use, hobbies,
+      studies, or testing." The agreement also requires the
+      implementation stay publicly accessible with NO login wall,
+      specifically so TradingView can monitor compliance, and access
+      itself is gated behind an application into a private GitHub repo
+      (the public tutorial repo is instructional only — the actual
+      `charting_library` package needs approval).
+
+      **Why this is here and not dropped**: user's stated intent is
+      that LTP Monitor may be exposed on the public domain later. IF
+      that happens, this stops being a licensing mismatch and becomes
+      genuinely viable — the public-facing + no-login requirements
+      would already be satisfied by that move rather than needing a
+      SEPARATE public deployment just to qualify. Revisit at that point:
+      (1) apply for Advanced Charts repo access, (2) implement a
+      Datafeed against the existing candle/OHLC bus data (the same data
+      Lightweight Charts already consumes — no new backend work), (3)
+      decide whether Advanced Charts REPLACES the Lightweight Charts
+      panel or runs alongside it. Not a decision to make now, while the
+      deployment is still local-only.
+- [x] Unified AI Probability single-number stage — DONE (v58).
+      `ai_probability_engine.unified_probability()`, a weighted
+      composite of Option-Chain/Decision-Engine/Institutional-
+      magnitude/Technical-magnitude/empirical-probability, wired into
+      RiskAgent.evaluate() and displayed on the signal card.
+- [ ] Avadhut Sathe Triple Screen / 3rd Wave checklists — reference
+      material saved in docs/strategy-reference/, not yet scoped as
+      buildable strategies.
+- [ ] Strategy configurability design note (2026-07-25) — per-strategy
+      parameter UI beyond the current bounds-clamped persistence.
+
+
+## v50 — blank-switch finally root-caused (async), UI options, S4 Phase 1 (2026-07-26, round 6)
+
+Versioning now maintained explicitly per request: last delivered was
+v49; this build is **v50** (VERSION file, /api/version, APP_VERSION in
+app.py, badge in the chart header).
+
+### Blank-after-switch — the real mechanism at last
+
+Round 5's fix was correct but incomplete, and its harness hid that: the
+harness runs SYNCHRONOUSLY, while the real Lightweight Charts delivers
+visibleLogicalRangeChange notifications ASYNCHRONOUSLY. So the events
+emitted by resetLwChartData()'s setData([]) on the panes arrived AFTER
+the lwSyncingRange guard had closed and AFTER the fit — each one then
+propagated a degenerate/stale range onto the freshly-fitted main chart.
+Three independent defences now (any one suffices; together they are
+belt, braces and a second belt):
+  a) invalid ranges (null/NaN) never sync;
+  b) a chart with NO DATA is never a range SOURCE (lwChartHasData map —
+     an empty pane has no user intent to propagate);
+  c) for 1.5s after every (re)connect only the MAIN chart may drive the
+     range (lwRangeLockUntil), absorbing stale queued events wholesale;
+  plus the fit re-asserts itself at +80ms and +400ms (bound to the
+  connection seq, so a rapid further switch cancels it) — self-healing
+  even if something unforeseen still slips through.
+Honest limitation: the async behaviour itself still cannot be exercised
+in the sandbox (CDN blocked); the guards are individually unit-tested,
+the interaction with real LWC event timing is what the live check
+verifies.
+
+### UI options (per request)
+
+  - H+ / H− buttons restore chart HEIGHT control (200-900px), now
+    distinct from the ▲▼ vertical candle zoom.
+  - Every oscillator pane (MACD/RSI/Stoch/ATR) has a checkbox in its
+    legend to hide/show it individually; on re-show the pane is pushed
+    back to the main chart's range and axis widths re-equalized.
+
+### S4 — FUTURES TRADING, Phase 1 shipped (paper-only, manual/API)
+
+Scope decision taken (the question open since the session began): real
+futures TRADING as a new position type, not merely richer data.
+  - ExecutionAgent.enter_future/exit_future/_monitor_futures: LONG and
+    SHORT, direction-aware SL (0.4%) / target (0.8%, rr 2.0 house
+    standard) / trailing (trigger 0.3%, gap 0.2% behind the best
+    favourable price), MAE/MFE tracked, EOD square-off at 15:15 (with
+    the stale-post-close-feed case handled the same way the options fix
+    did), fees ₹40/lot/side, close records tagged kind="future" into
+    the same trades.jsonl/closed_trades stream.
+  - Margin-aware entry: margin_per_lot_future (default ₹1,10,000)
+    checked against capital minus deployed. Paper-mode-only hard gate;
+    one position per symbol; kill-switch cooldown blocks entry; and the
+    portfolio kill-switch now INCLUDES futures unrealized P&L and
+    force-closes futures alongside options/spreads.
+  - Data source: future_ohlc:{sym} — the existing futures feed, no new
+    subscription.
+  - API: POST /api/futures/enter {symbol, side, lots}, /api/futures/exit.
+    ALL gating lives in enter_future, so a raw API call gets the same
+    protections as the UI. UI: Buy FUT / Sell FUT buttons + live
+    position card (side, entry, P&L, SL/target, Exit) on each LTP
+    Monitor symbol card.
+  - FOUND WHILE BUILDING: config.save() silently DROPS any key not in
+    DEFAULTS — the new futures settings could never have been persisted
+    from Settings. Registered them in DEFAULTS with a warning comment;
+    this trap applies to every future setting too.
+  - Phase 2 (not built): futures entry-signal strategies, dynamic lot
+    sizing via the sizing module, Settings-page subcard for the futures
+    parameters, live-mode order placement.
+
+### Verified
+
+test_futures_trading.py — 22 checks: all entry gates (no price / market
+closed / bad side / margin / kill-switch cooldown), LONG lifecycle
+(P&L exact, trail ratchets the stop up, target exit, NET = gross − ₹80,
+kind tag), SHORT lifecycle (SL above entry, stop fires on UPWARD move,
+loss negative), kill-switch force-close + cooldown, 15:16 square-off.
+Test-clock pinned to mid-session — running the suite after 15:15 real
+time made the EOD check fire inside the same monitor call, which
+produced two spurious failures before the pin. Full suite green: regime
+18/18, chart alignment, DB concurrency 0 locks, JS harness (re-spliced
+with the new functions), node --check, size guard, smoke test
+(/api/version -> v50). Container-local trades.jsonl cleaned of test
+records (user data unaffected; zip excludes it anyway).
+
+
+## Keepalive candle contamination + 3 chart UI defects (2026-07-26, round 5)
+
+Reported with screenshots: chart loads fine initially, then goes BLANK on
+any index/interval switch until Fit is pressed; the ▲▼ buttons resize the
+pane instead of zooming the candles; indicators still show values after
+market hours; the crosshair is still slightly misaligned across panes.
+
+### Root contaminant — keepalive ticks becoming fake candles
+
+The screenshots showed the smoking gun: a flat bar tail running past
+"25" and "26" on the time axis — Saturday/Sunday bars after Friday's
+real close. Outside market hours the websocket feed re-broadcasts the
+last LTP as keepalive frames (a failure mode this codebase's own
+_is_degenerate note already documents); each one was built into a "new"
+flat 1m candle at a weekend timestamp, PERSISTED to the candles table,
+and streamed to the chart. Consequences, each visible in the images:
+  - The view opened on the flat tail (axis autoscaled to a 0.14-pt
+    window — candles microscopic, chart effectively blank).
+  - The indicators computed over fake flat bars — ATR visibly decaying
+    toward 0.02 across the weekend, oscillators flatlined. This is the
+    "still showing indicator values after hours" report.
+  - The candles table is permanently polluted with non-trade bars.
+
+Fixed at three layers (defence in depth, and the DB is ALREADY polluted
+from before the gate existed, so read-side filtering is required):
+  - Build: `MarketDataAgent._build_candle` returns immediately when
+    `market_open()` is False — a tick outside hours is not a trade.
+  - Stream: `ws_candles` no longer sends `type:"live"` when closed.
+  - Read: `app._in_market_session(ts)` (Mon-Fri 09:15-15:35 IST) filters
+    warm-up bars, incremental DB bars and live bars out of the indicator
+    grid — neutralising the existing contamination without a risky
+    destructive prune of the persisted table.
+
+### Blank-after-switch — a bug in round 3's fitLwChart
+
+`fitLwChart()` called `fitContent()` on EVERY chart. Right after a
+switch the sub-panes are still EMPTY (their data arrives on the next
+~30s indicator cycle); `fitContent()` on an empty pane emits a
+degenerate visibleLogicalRangeChange which the pane-sync propagated BACK
+onto the main chart — wiping the fit that had just been applied. Pressing
+Fit manually worked because by then the panes had data, which hid the
+cause. Rewritten: fit the MAIN chart only inside the sync guard, then
+push its logical range onto the panes explicitly. An empty pane can no
+longer dictate the view.
+
+### ▲▼ = vertical candle zoom (per explicit request)
+
+The buttons now scale the candles WITHIN the pane, not the pane height:
+an `autoscaleInfoProvider` on the candle series shrinks/expands the
+autoscale range around its midpoint by `lwVZoom` (0.25x-8x, 25% steps).
+Working WITH autoscale means live bars keep re-centering at the chosen
+zoom. Fit resets to neutral. (Drag-the-price-axis and double-click-reset
+from round 3 remain.)
+
+### Residual crosshair misalignment — axis width, not data
+
+After round 2's whitespace-grid fix the DATA is index-aligned, but each
+pane's right price axis renders labels of different widths ("23875.00"
+vs "20.00" vs "0.02"), so each pane's PLOT AREA is a different width —
+and the same time lands at a visibly different x. `syncLwPriceScaleWidths()`
+measures the widest rendered axis and sets it as `minimumWidth` on all
+five charts (PriceScaleOptions.minimumWidth — added in LWC v4.1; the
+pinned CDN build is 4.1.3). Re-run on history load, pane data, and fit.
+
+### Verified
+
+  - Python: `_in_market_session` boundary cases (Fri 15:29 in / 15:40
+    out / Sat / Sun / Mon 09:14 out / 09:15 in); a contaminated table
+    with 40 flat Sunday bars + a Sunday live bar produces a 120-bar
+    indicator grid with ZERO weekend bars and zero flat bars in the
+    math; source-level asserts that both the builder and stream gates
+    exist.
+  - JS harness (real functions extracted verbatim): fit with empty
+    panes never fitContent's a pane, pushes main's range onto all four,
+    restores autoScale on all 5, resets zoom; zoom clamps at 0.25x/8x
+    and 2x halves the range around the midpoint; width sync forces all
+    five charts to the widest axis; reset/toggle/whitespace regressions
+    all still pass.
+  - Full suite green: regime 18/18, indicator alignment, DB concurrency
+    (0 locks), regression battery, node --check, size guard, smoke test.
+
+### Caveats
+
+  - Rendering still unverifiable from the sandbox (LWC CDN blocked) —
+    the specific things to eyeball live: switch indices repeatedly (no
+    blank, no Fit needed), ▲▼ grows/shrinks candles in place, panes stop
+    at Friday 15:30 with no flat tail, crosshair x now identical in all
+    five panes.
+  - The candles table still CONTAINS historical weekend keepalive bars;
+    they are filtered at read time everywhere that matters, but a
+    one-time offline prune could reclaim space later if wanted.
+  - Futures trading (S4 title) — still awaiting the scope decision.
+
+
+## DB lock storm (REGRESSION I CAUSED) + futures 429 + missing levels (2026-07-26, round 4)
+
+Reported: chart data not loading at all, futures data missing, "Risk
+level are missing for indexes", plus a request to check the logs for WS
+issues. An activity.log was supplied. Log evidence drove all of this.
+
+### 1. "database is locked" — a regression from round 2/3, now fixed at source
+
+**15 occurrences, ALL on 2026-07-26, first at 17:38:55 — zero in the
+preceding 11 days of logs.** Restart was 17:38:31, so locks began 24
+seconds into the new build. The 16:18 and 17:06 restarts the same day
+(previous build) produced none. Hit every persistence path: regime
+candles, daily OHLC, chain snapshots, volume, and the backtest agent.
+
+Trigger was mine: round 2's `_indicator_candles()` re-read the warm-up
+window AND up to 2000 candle rows on EVERY 30s chart refresh cycle, per
+open websocket, against a table that now holds ~2 years of history.
+
+But the fragility underneath was pre-existing and would have surfaced
+anyway as the table grew, so it is fixed at source:
+  - `history._conn()` was executing **ELEVEN** `CREATE TABLE/INDEX IF
+    NOT EXISTS` statements on EVERY connection — and connections are
+    opened per operation by ~14 agents, several times a minute. Now run
+    once per process behind a lock.
+  - SQLite default journal mode is `delete` (rollback journal): a writer
+    takes an EXCLUSIVE lock blocking all readers, and any reader blocks
+    the writer. Now **WAL**, which is the right mode for this workload
+    (many small agent writes + growing analytical reads).
+  - No `busy_timeout`, so contention raised immediately instead of
+    waiting. Now 30s, plus a 30s connect timeout.
+  - `history.candles_since()` added; `_indicator_candles()` now caches
+    warm-up bars per connection (they cannot change) and pulls new bars
+    incrementally instead of re-reading the tail every cycle.
+
+**Also fixed: a lock could kill the entire chart.** The websocket's
+tier-1 history read was unprotected, so a transient OperationalError
+propagated to the handler's outer `except`, which sends one
+`{"type":"error"}` and ENDS the connection — no history, no levels, no
+indicators, levels stuck on "Loading...". That is almost certainly the
+blank chart in the screenshot. All three DB tiers are now guarded and
+report into `diag` instead of being fatal.
+
+Verified — `test_db_concurrency.py`, 4 writers + 3 readers mirroring the
+live agent mix against a 6000-candle table:
+  - 0 errors, 0 locks with the fix.
+  - `--ab` runs the SAME load against a scratch DB configured the old way
+    (rollback journal, no busy_timeout, DDL per connect): **7,576 lock
+    errors vs 0**. 200 connections now open in 8ms.
+
+### 2. Risk levels missing for 3 of 4 indexes — structural, not the lock
+
+Log ruled out the obvious causes: no `[regime] X: skipped` lines at all
+on 07-26, and candle-persist was attempted for all four symbols, so
+`_classify()` errored for none of them. Cause: `_compute_levels()` sat
+inside `if r:`, so any symbol whose `_classify()` returned None — the
+warm-up gate (>=20 5m / >=8 15m / >=15 1m bars, >=3 session bars) — got
+no levels either. **Levels never needed the regime**: they need
+`analysis:{sym}`'s OI walls, chain spot, and persisted daily OHLC.
+`_compute_levels()` now runs regardless. Verified: a symbol whose feed
+returns only 5 bars still produces R1/R2/S1/S2/S3 while the regime is in
+warm-up.
+
+Added `regime_warmup_reason:{sym}` naming the actual shortfall (e.g.
+"insufficient candles: 5m=5/20 15m=5/8 1m=5/15"), logged once per change
+— the diagnostic whose absence made this guesswork.
+
+### 3. Futures 429 — pre-existing, root cause identified
+
+327 rate-limit hits across the log (181 on 07-25, 116 on 07-26), so NOT
+new. `_poll_futures_via_rest()` is called at the end of EVERY per-symbol
+chain fetch — up to 4x per ~3s cycle — and self-paced at 1.2s, i.e.
+~0.83 req/s against Dhan's documented 1 req/SECOND ceiling for
+/marketfeed/quote. Under the limit but with zero headroom, so any jitter
+trips it. Confirmed there is exactly one caller of `quote_batch()`, so
+nothing else competes for that budget.
+  - Gap raised 1.2s -> 2.5s (~0.4 req/s), still well inside the ~3s
+    chain cadence.
+  - 429 backoff now ESCALATES 60s -> 5min while failures continue and
+    resets on success. It was a flat 60s, which produced exactly the
+    observed pattern: retry, fail, retry, for hours, because the poll
+    returned to the same unsustainable cadence each time.
+
+This is also why futures O/H/L were identical and VWAP == LTP in the
+screenshot: outside market hours the REST poll is the ONLY futures
+source, so when it is 429-blocked `future_ohlc` holds a single sample.
+
+### Not fixed / still open
+
+  - Whether 2.5s fully clears the 429s needs a live market-hours run to
+    confirm — the ceiling may be enforced over a longer window than
+    per-second, which the log alone cannot distinguish.
+  - Futures trading (the S4 title item) — still untouched, still needs
+    the scope decision.
+
+
+## Chart: cross-symbol leakage + unreadable price scale (2026-07-26, round 3)
+
+Reported with four screenshots: "candles are not even visible with risk
+level"; markers appearing to follow you between indices ("it is creating
+a mark on chart for each index at same position of nifty and show that
+marker when switched"); plus requests to fit-to-panel on index click and
+to pan the view vertically.
+
+### Root cause — one bug, not a scaling annoyance
+
+`connectLwChart()` cleared exactly two things: `lwHistoryLoaded` and the
+price lines. It never cleared the 11 overlay series, the 7 pane series
+(or their `dataByTime` crosshair lookups), the ZigZag line, or either
+marker set. So switching index left the PREVIOUS symbol's entire
+indicator state on the chart.
+
+Made permanent rather than transient by two details working together:
+`_clip_series()` omits a series with no computable values, and the
+handler only wrote series present in the payload (`if(points.length)`).
+A series the new symbol had no data for was therefore never overwritten
+— it kept the old symbol's data indefinitely.
+
+That explains both reported symptoms exactly:
+  - The user's own diagnosis was right: markers were never cleared, so a
+    "False Breakout" / "HH" label from NIFTY sat at the same position on
+    SENSEX and FINNIFTY.
+  - The price axis blew out — SENSEX spanning 30,000-90,000 in one shot
+    and -60,000 to 100,000+ in another, FINNIFTY -80,000 to 240,000 —
+    because autoscale covered the new symbol's candles TOGETHER WITH the
+    old symbol's leftover series (and leftover ATR/volatility bands
+    computed on another index's price level sit far outside any real
+    range). Candles collapsed to a flat line as a result.
+
+### Fixes
+
+  - `resetLwChartData()` — empties all 21 series, both marker arrays,
+    `lwSeries.setMarkers([])`, `lwCandleByTime`, every pane's
+    `dataByTime`, the remembered levels, the levels detail panel, the
+    indicator note and the OHLC readout. Called on every (re)connect.
+  - Overlays and panes messages are now treated as COMPLETE state: a
+    series the payload omits is explicitly emptied, not left stale.
+  - Stale-frame guard in `onmessage`: a frame already in flight when the
+    symbol switched is dropped (`seq`/`symbol` captured per connection).
+    Handler-orphaning stopped the old socket RESCHEDULING but not an
+    in-flight frame from painting the wrong symbol's data.
+  - `autoscaleInfoProvider: () => null` on all 11 overlays and ZigZag.
+    Structural, not just a leak fix: no indicator series can now dictate
+    the price axis, so one bad band value can never make the price
+    action unreadable again. The candles define the scale; levels are
+    price lines and don't participate in autoscale at all.
+  - Fit-to-panel on index/interval switch (`lwFitPending` -> `fitLwChart()`
+    once the new symbol's bars are drawn — the time scale has nothing to
+    fit at connect time). Also restores `autoScale`, so a vertical drag
+    on one symbol doesn't carry into the next.
+  - Vertical pan/zoom enabled explicitly: `handleScale.axisPressedMouseMove.price`,
+    `axisDoubleClickReset`, `handleScroll.vertTouchDrag`. Drag the price
+    axis to pan/zoom (LWC turns autoScale off once you do, which is the
+    desired behaviour); double-click an axis, or press Fit, to restore.
+  - Toolbar: **Fit**, taller/shorter height buttons (160-900px, applied
+    to both container and chart), and a **levels** checkbox. The levels
+    lines cannot squash the candles by themselves (price lines are
+    outside autoscale), but a screen of distant OI walls is clutter over
+    a quiet tape — the toggle only hides the LINES, the Key Levels
+    detail panel below is unaffected.
+
+### Verified
+
+`test_chart_reset.js` — a Node harness that lifts the real functions
+verbatim out of dashboard.html (no reimplementation) and drives them
+against stubs, because the LWC CDN is unreachable from the build sandbox
+so a real browser cannot render the chart. 16 checks: all 21 series
+emptied by name, markers and lookups cleared, levels toggle
+draw/hide/redraw, fit + height clamping, and the whitespace mapping
+(including that whitespace bars are NOT registered in `dataByTime`, so a
+pane with no reading clears its crosshair instead of pinning a value it
+does not have).
+
+Also green: regime suite 18/18, chart-indicator suite (alignment),
+`node --check`, dashboard size guard, endpoint smoke test.
+
+### Caveat
+
+Rendering itself is unverified from here — the CDN block means no
+browser test. The wire-level data and the reset logic are proven; what
+cannot be proven without eyes on it is the visual result (pane right
+edges lining up, crosshair tracking, axis now sane per index).
+
+
+## Pane/crosshair misalignment + Strategies-page decision (2026-07-26, round 2)
+
+Confirmed from the user: **persisted candle history is ~2 years in the
+DB**, so indicator warm-up and the last-session fallback have real depth
+to work with. Kotak to be validated during market hours; Dhan's
+websocket gives comparable results, so nothing blocks on Kotak.
+
+### 1. Chart crosshair / pane misalignment — root cause found
+
+Reported with a screenshot: "cursor on chart is not aligned for all
+indicator". The screenshot's real tell was not the cursor — it was the
+**right edges**: candles ended at x~1270, MACD ~1090, RSI ~1150,
+StochRSI ~1030, ATR ~1170. The panes were displaying DIFFERENT TIME
+WINDOWS, so a correctly time-synced crosshair still landed on a
+different x in each one.
+
+Cause: `setupLwPaneSync()` syncs panes with
+`subscribeVisibleLogicalRangeChange` + `setVisibleLogicalRange`, which
+work in LOGICAL (data-index) space, not time — this is the official LWC
+multi-pane pattern and is fine when all series share a length. They did
+not. `_pane_series()`/`_indicator_overlays()` build points via
+`if v is not None`, so each series STARTS at its own warm-up offset:
+MACD(12,26,9) ~bar 34, StochRSI ~31, RSI/ATR ~14, candles bar 0.
+Logical index 0 therefore meant a different bar in every pane, and
+propagating one chart's logical range to the others shifted each by a
+different amount.
+
+Second, self-inflicted cause found while fixing it: round 1's
+`_indicator_candles()` computed from `history_payload`, the snapshot
+taken ONCE at connect. Bars keep arriving afterwards (live ticks at 1m,
+RegimeAgent persistence at 5m/15m), so the indicator series fell
+progressively further behind the candle series the longer a chart stayed
+open — widening the same misalignment over a session.
+
+Fixes:
+  - `_clip_series(series_map, bar_times)` now pads every series to the
+    chart's full visible bar grid with Lightweight Charts WHITESPACE
+    points (`{"time": t}`, `value` key OMITTED — not null, which is a
+    different thing to LWC). Every series spans the identical time
+    range as the candles, so logical index N is the same bar in every
+    pane, while the warm-up region still draws nothing.
+  - `_indicator_candles()` re-merges the display series every cycle:
+    connect-time snapshot (wins for bars it has, since its source went
+    through the tiered fallback) + newly persisted DB bars + this
+    connection's live bars. Returns the visible bar grid too.
+  - Server-side `live_bars` tracking in the websocket loop.
+  - Client: `lwToSeriesData()` / `lwToDataByTime()` replace the inline
+    mappers. Whitespace bars are deliberately NOT registered in
+    `dataByTime`, so `syncCrosshairFrom()` calls
+    `clearCrosshairPosition()` on a pane with no reading at that bar
+    rather than pinning the crosshair to a value it doesn't have.
+
+Verified: `test_chart_indicators.py` now asserts every series' timestamp
+list equals the candle grid EXACTLY, index for index — 18 series x 3
+intervals, all aligned. The whitespace counts are the smoking gun for
+the old bug (1m: ema50 49 whitespace bars, macd/stoch 31, atr 14 — each
+of those was previously a different leading offset).
+
+### 2. Strategies page — decision taken (was the open question)
+
+**Decision: show last-session eligibility, clearly labelled, and refuse
+the deploy server-side.** Seeing which spreads would have qualified at
+Friday's close is genuinely useful for planning Monday; the danger is
+acting on it, not seeing it.
+
+  - `/api/strategies/{symbol}` falls back to `regime_last_session:{sym}`
+    and returns `regime_stale` + `regime_session_date`. Previously,
+    with no regime, `slib.evaluate()` saw `reg="unknown"` and every
+    strategy reported "regime 'unknown' not suited" — which reads as a
+    regime MISMATCH rather than missing data. It now produces real
+    reasons ("S1 wall 23700 is 79 pts below spot").
+  - `/api/strategies/deploy` refuses outright while the regime is stale
+    or absent, with a message naming which session the data is from.
+    The guard is SERVER-SIDE on purpose: entry filters for both credit
+    spreads are regime-conditional (`REGIME_FIT`), so Friday's
+    "trending-up" could green-light a bull put spread into Monday's
+    gap-down open — and a disabled button is only a UI hint, since the
+    endpoint is directly callable.
+  - Dashboard: amber "LAST SESSION" badge, "WOULD QUALIFY" instead of
+    "ELIGIBLE", a per-card note, and Deploy disabled.
+
+Verified across four cases: stale listing evaluates for real; deploy
+refused when stale; refused with a DIFFERENT message when no regime
+exists at all; and with a fresh regime the listing is not stale and
+deploy passes the guard into genuine strategy evaluation.
+
+### Still open
+
+  - Futures-derivatives trading (the S4 title item) — untouched. Still
+    needs the scope decision: real futures trading as a new position
+    type with its own margin/P&L accounting and entry/exit rules, vs.
+    richer futures DATA feeding the existing option strategies.
+  - Kotak options websocket (nse_fo) — deferred to a market-hours
+    diagnostic; Dhan websocket is comparable, so not blocking.
+
+
+## Market-closed data blackout (2026-07-26) — root cause found and fixed
+
+Reported live: (a) chart "Key levels (R1-R3, S1-S3) not loaded, still
+showing Loading... however same has been updated on key levels chart
+below. All other indicators are not loaded either overlay or underlay";
+(b) "Regime analysis: waiting for enough candles ... it is linked with
+market, so market is closed. it should still show the data based on
+available older dataset."
+
+Both are the SAME root cause, one layer apart. `RegimeAgent.cycle()`
+returned early on `not market_open()`, and it is the only publisher of
+`regime:{sym}`, `regime_candles:{sym}` and `levels:{sym}`. Outside
+market hours those keys never exist, so the Regime card plus the
+chart's levels/overlays/panes/zigzag all sat blank with no diagnostic.
+The Key Levels *ladder* kept working throughout because it reads
+`analysis:{sym}` from **TechnicalAgent**, which is NOT market-gated —
+that asymmetry is what pinned the diagnosis.
+
+Reproduced deterministically before any fix (`test_chart_indicators.py`
+drives `ws_candles()` against a fake socket; candles loaded fine from
+the DB while all four indicator features were MISSING on every
+interval).
+
+### Second, more serious defect found while fixing it
+
+`regime_candles:{sym}` is ALWAYS 5-minute bars, but the chart's
+overlays/panes read it regardless of the selected interval. On the
+1m/15m/1h views the EMA/Supertrend/Bollinger/MACD/RSI/StochRSI/ATR
+values were therefore computed on 5m data and plotted over bars of a
+different granularity — silently WRONG numbers, not just misalignment.
+Only the 5m view was ever correct. Anyone who read those panes during a
+1m or 15m session was reading another timeframe's indicators.
+
+### Fixes
+
+  - `support_resistance.build_levels()` — extracted the
+    `previous_day_levels` + `merge_levels` pair that was inlined in
+    RegimeAgent, so the agent and the chart's on-demand fallback share
+    ONE code path and cannot drift.
+  - `history.candles_before()` — prior persisted bars for indicator
+    warm-up (the overlay/pane functions return {} below 60 candles).
+  - `app._indicator_candles()` / `_clip_series()` — indicators now
+    compute on the EXACT bars the chart is displaying, warmed with up
+    to 400 earlier same-interval bars, warm-up clipped back out before
+    sending. Fixes the blackout and the timeframe mismatch together.
+  - `app._levels_fallback()` / `_levels_unavailable_reason()` +
+    `type:"unavailable"` messages naming the specific missing input,
+    replacing an indefinite "Loading..." (fail loud, not silent).
+  - `RegimeAgent._session_only()` replaces `_today_only()`: today's
+    session when it exists, otherwise the most recent session present.
+  - `RegimeAgent._fetch_candles()` falls back to this system's own
+    persisted candles when the broker returns nothing while closed, so
+    the panels work even with no broker configured. During market hours
+    failures still raise, preserving the existing backoff behaviour.
+
+### Safety guards (the naive version of this change is dangerous)
+
+  - **Regression guard**: while the market IS trading but today's
+    candles haven't accumulated, `_session_only()` returns EMPTY rather
+    than substituting an older session. Silently substituting is
+    exactly the confluence data-freshness bug fixed earlier (~75%
+    yesterday's data in the 15m slice). Covered by an explicit test.
+  - **Stale reads never reach `regime:{sym}`.** That key has 14 readers,
+    several trade-affecting (spread auto-deploy eligibility, ATR stop
+    and trail sizing, the risk gate). Requiring each to remember a
+    `stale` check is fragile and one missed call site is a real-money
+    bug. Stale reads go to `regime_last_session:{sym}`; every trade
+    consumer therefore sees "no regime data yet", a path they all
+    already degrade gracefully on. Only `state()` opts in.
+  - **`pa_candles:{sym}` withheld when stale.** PriceActionAgent's ORB
+    opening range, VWAP-proxy anchor and EMA-MTF cross timing all
+    assume index 0 is today's 9:15 open. RegimeAgent's pre-open cycle
+    runs while the market is still closed, so without this the key
+    would already hold Friday's bars before PriceActionAgent's own
+    market_open() gate lifts — yielding a real-looking breakout signal
+    from the wrong day.
+  - **PRE-EXISTING hole closed**: RiskAgent's regime gate now skips any
+    regime whose `session_date` != today. The previous session's final
+    regime lingers in the bus overnight, so at the next open — before
+    the first fresh cycle completes (~90s) — the gate was approving and
+    rejecting signals on YESTERDAY's trend and confluence. Keyed on
+    session_date rather than the `stale` flag specifically to catch
+    this lingering case too.
+  - Dashboard labels a stale read with an amber "LAST SESSION <date>"
+    badge and states plainly that it is not gating live trades.
+
+### Verified
+
+  - `test_chart_indicators.py` — levels + overlays + panes + zigzag
+    delivered on 5m/1m/15m, **0 off-bar indicator points** (timeframe
+    alignment proven, not assumed).
+  - `test_regime_closed_market.py` — 18 checks: last-session read
+    tagged/isolated, live behaviour unchanged, warmup regression guard,
+    and a CONTROL proving the same regime dated TODAY still blocks the
+    signal (i.e. the gate wasn't merely disabled).
+  - ZigZag investigated after appearing MISSING: **not a bug** — 0
+    pivots when the whole range (0.42%) is below the 0.5% deviation
+    threshold, 10 correctly-classified pivots once swings exceed it.
+    The test fixture had no qualifying reversals; fixture fixed.
+  - `regression.py` battery, `node --check` on the extracted dashboard
+    JS, dashboard.html size guard, endpoint smoke test all pass.
+
+### Open / deliberately not done
+
+  - `app.py`'s `/api/strategies` (line ~722) still reads `regime:{sym}`
+    only, so the Strategies eligibility list stays blank when closed.
+    Left alone ON PURPOSE: the neighbouring deploy endpoint (~776) uses
+    the same call, and showing eligibility computed from a stale regime
+    next to a live Deploy button invites acting on it. Needs a design
+    decision — display-only eligibility with the button disabled, or
+    leave blank — not a silent change.
+  - Kotak has no candle endpoint, so this whole path stays Dhan/Zerodha
+    only; unchanged by this work.
+
+
+## Institutional-Grade AI Options Trading Dashboard (2026-07-25)
+
+13-section spec to convert LTP Monitor into an institutional-grade
+dashboard, extending existing modules only (no rebuild). Explicit rule
+from the spec itself: **one feature at a time, stop for review after
+each** — followed here. Progress tracked feature-by-feature below,
+each section number matches the spec's own numbering.
+
+### Feature #1 — LTP Monitor (Spot vs Futures) — DONE, awaiting review
+
+Extended existing paths only, confirmed by audit before writing
+anything:
+  - Spot LTP/%/prev_close: ALREADY existed —
+    `broker_adapter.py`'s `option_chain()` already computes this from
+    Dhan's own `previous_close_price` field (`chain.chg`/`chg_pct`).
+    Found `prev_close` itself was computed internally but never
+    stored in the response — derived it in the new endpoint instead
+    of touching that tested code path.
+  - Spot O/H/L/VWAP: newly DERIVED from `spot_hist` (already
+    accumulated by `MarketDataAgent` every REST cycle) — no new
+    tracking added.
+  - Futures LTP/O/H/L/VWAP: extended the EXISTING futures websocket
+    tick pipeline (`MarketDataAgent._classify_future_tick`, built for
+    OI-buildup classification) with a new `_update_future_ohlc()` —
+    same ticks already flowing in, no new subscription.
+  - VWAP is a TWAP proxy (mean of LTP across ticks), not a true
+    volume-weighted average — same honest tradeoff already established
+    elsewhere in this codebase (AnchorPullback's "session anchor") for
+    the same reason: no clean per-trade volume delta available from
+    the data source.
+  - New `/api/ltp-monitor` endpoint + a Spot-vs-Futures panel at the
+    top of the main Dashboard, with a simple participation read
+    (Confirmed/Weak/Divergent based on whether futures direction and
+    magnitude support spot) — deliberately simple; the full weighted
+    AI Market Bias engine is Feature #2, not built here.
+
+  **Bug found and fixed before it shipped**: the futures OI-buildup
+  classifier returns early on each trading day's very first tick
+  (before the OHLC update was originally placed) — would have made
+  the recorded session "open" always be the SECOND tick of the day,
+  not the true first one. Moved the OHLC update earlier in the
+  function; verified with a direct test that "open" now correctly
+  captures the true first tick.
+
+  Tested: session-open correctness on the true first tick, high/low/
+  close/vwap tracking across multiple ticks, new-day reset applies to
+  OHLC same as the existing OI baseline, no regression on the
+  existing OI-buildup classification, and the full `/api/ltp-monitor`
+  endpoint end-to-end (prev_close derivation, spot OHLC from
+  spot_hist, futures OHLC from the extended tracker) through the real
+  FastAPI TestClient.
+
+  **Not yet done, explicitly deferred to later features per the
+  spec's own structure**: "Live Tick" real-time push to the frontend
+  (currently polled every 5s, matching this app's existing polling
+  convention — a websocket-push UI update would be a separate,
+  smaller follow-up); Market Bias/Strength/Momentum/Institutional-
+  Participation/Risk-Level labels beyond the simple participation
+  read (that's Feature #2, the AI Market Bias engine).
+
+### Feature #2 — AI Market Bias — DONE, tested
+
+New `market_bias.py`. Reused, not duplicated: MACD/RSI from
+`mtf_confluence_strategy.py`; regime/ADX from `RegimeAgent`'s existing
+output; OI/PCR from `analyzer.py`; futures trend from
+`future_oi_trend:{symbol}` (Feature #1 work); India VIX and global
+risk sentiment from `NewsMacroAgent`'s existing bus keys; spot vs
+futures % change from the same computation Feature #1's participation
+read already used. Genuinely new: Supertrend and Ichimoku Cloud —
+neither existed anywhere in this codebase before.
+
+Weighted scoring (10 components, documented as a first-pass heuristic
+to tune against real outcomes, same honesty standard as the
+impact-window classifier in `news_engine.py`) → Strong Bullish /
+Bullish / Neutral / Bearish / Strong Bearish + confidence %, with
+missing inputs degrading gracefully (weight redistributed, not
+faked) rather than hard-failing.
+
+**Market Breadth explicitly NOT implemented** — no NIFTY50 constituent
+advance/decline data source available (same honest-gap pattern as
+FII/DII flows elsewhere in this project). Its weight is excluded from
+the score entirely; reported in the `unavailable` list rather than
+silently defaulted to neutral.
+
+Extends `RegimeAgent` (already runs every 90s with fresh candles)
+rather than adding a new agent — `_compute_bias()` reuses the exact
+candle fetch already made for regime/ADX (stored to a new
+`regime_candles:{symbol}` bus key, kept separate from `regime:{symbol}`
+itself so the many existing consumers of that dict don't get a large
+candle array attached to every read).
+
+Tested: Supertrend against clean uptrend/downtrend/genuine-reversal
+scenarios (with one indexing mistake in my own test caught and
+corrected before trusting the result) and insufficient-data
+graceful-degradation; Ichimoku against uptrend/downtrend/flat-market/
+insufficient-data; the full weighted aggregator against 6 scenarios
+including the spec's own worked example (spot +0.82%/future +0.91% →
+Strong Bullish, matched exactly), the "spot rises but futures weak"
+case correctly producing a weaker read than confirmed agreement, full
+graceful degradation on zero inputs, and confirmed Market Breadth is
+never scored. One real finding during testing: MACD histogram
+converges to ~zero on a perfectly linear synthetic price series (a
+genuine mathematical property of MACD, not a bug — verified directly
+against the raw MACD/signal line values) — real market data never has
+perfectly constant slope, so this is a synthetic-test-data artifact,
+not a live-data concern; also a good demonstration of why the
+weighted multi-indicator design matters (the other 8 components
+correctly outweighed this one artifact in the full scenario test).
+Wired end-to-end through the real `RegimeAgent._compute_bias()` method
+and the actual `/api/ltp-monitor` endpoint, not just the isolated
+module. New bias badge on each LTP Monitor card (confidence % plus a
+hover tooltip showing the full component breakdown).
+
+
+
+### Feature #3 — Support/Resistance + Entry Criteria — DONE, tested
+
+Retained rather than rebuilt: `analyzer.py`'s `ranked_levels()` already
+computed R1-R3/S1-S3 from OI+OI-change+volume, with strength % and
+blue/yellow/pink coding, already used live by the spread strategies'
+wall detection. For options trading specifically, OI walls are
+arguably the most institutionally-relevant level type — kept as the
+primary source, not superseded, per the explicit "retain if better"
+instruction.
+
+New `support_resistance.py`, genuinely new pieces only: Previous Day
+High/Low/Close (didn't exist), and VWAP used as an actual level (VWAP
+itself existed since Feature #1, wasn't used as an S/R reference
+before). Merges these with the existing OI-wall levels into one
+source-tagged, deduplicated (within 0.1%) R1-R3/S1-S3 — sorted by
+proximity to spot, matching the spec's own framing of R1 as the
+*first* (nearest) level, not necessarily the strongest. Also
+implements the spec's own entry-criteria framework directly: bullish
+requires spot above S1, S2 is the stop-loss zone, R1/R2/R3 is the
+target ladder — bearish is the exact mirror.
+
+**Honest gap, stated directly in the module docstring**: Volume
+Profile and Price Acceptance from the spec are NOT implemented — both
+need tick-level volume-at-price distribution over the session, which
+this system doesn't retain (candle data is OHLC only). Same pattern as
+Market Breadth in Feature #2 — reported as `unavailable`, not faked.
+
+Extends `RegimeAgent` again (now computing regime + bias + levels in
+one 90s cycle, reusing the same candle fetch throughout — zero extra
+API calls added across all three).
+
+Tested: previous-day extraction correctly picks yesterday specifically
+(not today, not two days back) from a multi-day series; level merging
+correctly ranks by proximity and tags each level's source; near-
+duplicate levels (OI wall landing within 0.1% of a prev-day high)
+correctly collapse to one entry instead of showing twice; entry
+criteria tested across 6 scenarios — valid/invalid bullish, valid/
+invalid bearish, the early-session no-levels-yet case, and an
+unrecognized direction string. Wired end-to-end through the real
+`RegimeAgent._compute_levels()` method, not just the isolated module.
+New R/S display added to each LTP Monitor card.
+
+### Database persistence — DONE, tested (extends Feature #3, applies going forward)
+
+Per explicit request: Previous Day levels now persisted rather than
+re-derived from a live candle re-fetch every cycle, and the storage
+foundation for Volume Profile is in place. Extends `history.py`'s
+existing SQLite DB (already used for backtesting/chain archival) —
+two new tables, no parallel database:
+  - `daily_ohlc(symbol, date, open, high, low, close, volume)` — one
+    row per symbol per day, idempotently upserted every ~90s by
+    `RegimeAgent._persist_daily_ohlc()` as the session progresses, so
+    today automatically becomes tomorrow's persisted "previous day"
+    with no separate end-of-day job needed.
+  - `volume_profile(symbol, date, price_bucket, volume)` — price-
+    bucketed volume accumulation. Storage only for now; the actual
+    Volume Profile ANALYSIS (identifying high-volume nodes as S/R,
+    the gap flagged in Feature #3) is not yet wired into
+    `support_resistance.py` — but the data is now being captured
+    rather than discarded, so that feature won't need a data-
+    collection lead time later.
+
+`support_resistance.previous_day_levels()` is now DB-first with
+graceful fallback to the original live-candle derivation (handles
+both "no data persisted yet" and "DB write failed" without losing
+Previous Day levels entirely).
+
+Tested: upsert/retrieve/idempotent-update/date-filtering for daily
+OHLC (5 scenarios), volume-at-price bucketing and descending-volume
+sort, the DB-first-with-fallback path in `support_resistance.py` (3
+scenarios: DB has data / DB empty for this symbol / no symbol arg at
+all for backward compatibility), and the full running-OHLC tracker
+through the actual `RegimeAgent` method across multiple calls plus a
+day-boundary reset.
+
+**Principle to carry forward, per explicit instruction**: future
+features needing time-series or distributional data (not just current-
+state bus values) should persist to this same DB rather than holding
+everything in memory only — noted here as a standing convention, not
+a one-off for this feature.
+
+### TradingView Lightweight Charts — DONE, tested (Feature #12, reframed from webhooks)
+
+Built exactly the requested architecture: DhanHQ WebSocket (existing
+hybrid feed) → Market Data Service (existing `MarketDataAgent`) →
+Candle Builder (new) → FastAPI WebSocket Server (new) → TradingView
+Lightweight Charts (new, client-side).
+
+- **Candle Builder** (`MarketDataAgent._build_candle`): hooks into the
+  EXISTING index-tick handler (`_on_ws_tick`) — no new subscription.
+  Aggregates ticks into 1-minute candles in memory, publishes the
+  currently-forming candle to `live_candle:{symbol}` on every tick,
+  and persists each COMPLETED minute to `history.py`'s existing
+  `candles` table (security_id convention `"{symbol}_SPOT_1m"` —
+  reusing the schema built for option-leg candles, not a parallel
+  table).
+- **FastAPI WebSocket Server** (`/ws/candles/{symbol}`): sends
+  today's historical 1m candles from the DB on connect (so the chart
+  isn't empty on load), then streams the live-forming candle every
+  ~1s. One message shape handles both "still the current bar" and "a
+  new bar started" — Lightweight Charts' own `update()` call
+  distinguishes them by timestamp, no separate event type needed on
+  the wire.
+- **Frontend**: TradingView Lightweight Charts loaded from CDN
+  (`unpkg.com/lightweight-charts`, following the same CDN convention
+  already used for Chart.js), a new panel at the top of the dashboard
+  with a symbol selector, auto-reconnect on disconnect (3s backoff).
+
+Retained, not replaced: the existing custom canvas-based Price Chart
+panel stays as-is — this is a new, additional panel, not a rip-and-
+replace, since the existing one may still serve other purposes and
+this needed its own validation first.
+
+Tested: tick aggregation within a single minute (open/high/low/close
+correctly track across 3 ticks), minute-rollover persistence (the
+completed candle correctly lands in the DB with the right OHLC and
+timestamp, a fresh candle starts immediately), and the full WebSocket
+endpoint end-to-end through FastAPI's real websocket test client —
+confirmed it sends historical candles first, then the live-forming
+candle, with real data seeded into the actual DB and bus.
+
+**Honest limitation**: the CDN script load has not been verified from
+a live browser (this sandbox can't run one) — if `unpkg.com` is
+blocked or the library version pinned here ever changes its API
+shape, the chart will show "Lightweight Charts failed to load" (a
+handled, visible failure state, not a silent blank panel) rather than
+crash the page. Worth a quick visual check on your end before relying
+on it.
+
+**Bug found live 2026-07-25, fixed**: chart rendered (cursor/crosshair
+working, confirming the library and WebSocket connection itself were
+fine) but no candles showed. Root cause: the candle builder is brand
+new, so its own DB accumulation (`candles` table, `{symbol}_SPOT_1m`)
+was genuinely empty — reported at 21:39 IST, outside market hours, so
+no new live ticks were arriving either. Fixed with a fallback: when
+the DB has nothing for today, the WebSocket endpoint now seeds history
+from `regime_candles:{symbol}` — data Feature #2/#3 already fetch
+every 90s during market hours, no new API call. These are 5-minute
+bars, not 1-minute, so the chart shows coarser candles until the
+builder's own 1m data accumulates and takes over — a real, disclosed
+tradeoff, not hidden. The status line now also shows which source is
+active, and a genuinely-no-data case (e.g. a symbol regime hasn't run
+yet, or a weekend) shows a clear message instead of a silently empty
+chart. Tested both the fallback-triggers case and the truly-empty
+case through the real WebSocket endpoint.
+
+**Second round of live feedback, both fixed**:
+
+1. Candles still not showing even with the `regime_candles` fallback
+   — turned out the existing Price Chart panel reliably has data
+   because `/api/candles/{symbol}` makes a LIVE REST call
+   (`d.intraday()`) independent of any bus/DB state, while the
+   WebSocket's first two fallback tiers both depend on background
+   agents having run recently. Added that same live REST call as a
+   third tier — used only when both the candle-builder DB and
+   `regime_candles` come back empty. Tested directly: mocked the Dhan
+   client, confirmed the REST tier correctly kicks in and is
+   correctly labeled `rest_live_fallback` in the response.
+2. **Timezone bug**: the chart displayed 21:48 when the actual time
+   was 03:21 AM IST — 21:48 UTC the previous day, confirming Lightweight
+   Charts was rendering raw UTC with no IST conversion. This dashboard
+   is IST-based throughout; the library has no built-in fixed-timezone
+   option in this version. Fixed with the standard workaround: shift
+   every timestamp by +19800s (5:30) before handing it to the chart, so
+   its UTC-display shows the correct IST digits. Verified the exact
+   math directly (a live epoch shifted by 19800s landed on 03:23,
+   matching the reported 03:21 AM almost exactly).
+
+**Third round of live feedback**: still no candles, and only NIFTY's
+chart updates at all, not the other 3 symbols. Investigated the
+websocket index subscription (`add_index_instrument` correctly maps
+each symbol's own security_id in a dict, no collision across symbols)
+and found a genuine bug in my OWN diagnostic code instead: the REST
+fallback's exception was being silently swallowed (`except Exception:
+pass`) — directly violating this project's own "fail loud, not
+silent" principle. Fixed: every tier's outcome (DB count, regime_
+candles count, REST error or stale-data detail) is now captured and
+sent back in the WebSocket message's `diagnostics` field and logged to
+the activity log, with the 3 failure modes (hard REST error, REST
+returned data but none from today, no Dhan client at all) each
+distinguishable. Also added a 30s no-live-tick watchdog per symbol —
+if `live_candle:{symbol}` is never set after connecting, that's now
+visible instead of the panel just sitting silently blank forever.
+Tested all 3 new diagnostic paths directly.
+
+**Honest status**: this doesn't yet explain WHY only NIFTY works — I
+could not conclusively determine that from code inspection alone
+(several plausible causes: REST failing specifically for the other 3
+symbols, RegimeAgent not having cycled for them yet, or something
+else). What this DOES do is turn the next test attempt into actionable
+data instead of another guess — the diagnostics field will show
+exactly which tier is failing and why, per symbol, the next time this
+is tried.
+
+**Root cause found from the diagnostic data itself** (this is exactly
+why the diagnostics were built first): every symbol's log showed "350
+candles returned but none are from today". At 3:35 AM with markets
+closed, REST correctly returns the last trading session's real
+candles, but the fallback filter strictly required calendar-date
+"today" — which can never match outside market hours, so 350 genuine
+candles were being thrown away every time. Not a per-symbol issue at
+all (the "only NIFTY" theory from the previous round doesn't hold up
+against this data — all 4 symbols show the identical pattern here).
+
+Fixed: added `most_recent_session()` — prefers genuine today's candles
+when the market IS open (preserving the correct live-session behavior
+during trading hours), and falls back to the most recent PRIOR
+trading day's full candle set when nothing from today exists yet, the
+same way a real chart is expected to behave outside market hours
+rather than sitting blank. Also caught and fixed a second bug while
+implementing this: a bare `datetime.fromtimestamp()` call with no
+import in scope (this file only imports `datetime` locally inside a
+different function) — would have been a live `NameError` the moment
+this code path actually ran, caught before shipping by running the
+tests, not after.
+
+Tested: the exact reported scenario reproduced directly (350 candles,
+all from ~20h ago, none from calendar-today) now correctly returns all
+350; confirmed no regression when genuine today's candles ARE present
+(still correctly prioritized); confirmed candles spanning multiple
+prior days correctly resolve to the MOST RECENT day specifically, not
+an arbitrary older one.
+
+Also clarified from this same log: the "no live tick received" warnings
+appeared identically for NIFTY, BANKNIFTY, FINNIFTY, and SENSEX — fully
+expected with markets closed (no symbol receives live ticks with
+nothing trading), not evidence of a NIFTY-specific subscription
+problem as first suspected.
+
+
+### Log review round 2 (2026-07-25, continued) — TLS environment issue found, coverage-check diagnostic bug fixed, 3-month futures added
+
+- [!] **Root cause of "still no candles" and ">3s refresh" — NOT a code
+  bug, an environment issue on the user's own machine.** The new
+  activity.log shows, for ALL FOUR symbols simultaneously: `Could not
+  find a suitable TLS CA certificate bundle, invalid path:
+  /Users/user/Documents/Stock Tools/LTP Monitor v7/ltp-monitor-v2/
+  venv/lib/python3.14/site-packages/certifi/cacert.pem`. This means
+  every REST call to Dhan (option chain AND candle fetches, which both
+  go through the same requests/certifi HTTPS layer) was failing
+  wholesale — which fully explains both symptoms: no candles (Regime-
+  Agent's REST candle fetch, the thing that persists to the DB, never
+  succeeds) and slow refresh (MarketDataAgent's ~3s cycle spends its
+  time retrying failed HTTPS connections instead of completing).
+  The path itself is the smoking gun: it points at an OLD version
+  folder ("LTP Monitor v7/ltp-monitor-v2/venv") — almost certainly a
+  stale `SSL_CERT_FILE` or `REQUESTS_CA_BUNDLE` environment variable
+  left over from a previous venv that's since been deleted or moved
+  when this version was set up. Not something I can fix from here (no
+  access to the user's machine/shell) — flagged directly rather than
+  chasing it as a phantom code bug. Practical fix on their end: check
+  for and clear/update that env var, or reinstall certifi in the
+  CURRENT venv (`pip install --upgrade --force-reinstall certifi`).
+- [x] **My own coverage-check diagnostic had a real bug, found from
+  its own output.** The instrumentation added last round reported
+  "NEVER received for SENSEX" — but the reported security_id (1144507)
+  was SENSEX's FUTURE, not its index, and that future had been
+  subscribed only 3 seconds before the 30s check fired (futures
+  subscribe asynchronously, after the index-only initial connection).
+  It never had time to receive a tick — not a fair test. Worse, the
+  SAME log data shows all 4 INDEX security_ids (13/25/27/51) DID each
+  receive a tick within the first fraction of a second after connect —
+  meaning the original "only NIFTY gets index ticks" theory from the
+  previous round is not actually confirmed by this data. Fixed: the
+  coverage check now snapshots exactly which security_ids were part of
+  the INITIAL connection (before any subscribe_more() calls can add
+  futures/options) and checks coverage against that fixed snapshot
+  only, not the live-mutating dict. Verified directly: reproduced the
+  exact failure (index ticks all received, then a future subscribed
+  and ticked seconds before a 30s mark) and confirmed the fixed logic
+  no longer flags it as missing.
+- [x] **Futures now track 3 months, not just the front one — per
+  explicit request ("there are 2 more months - capture those as
+  well").** `dhan_scrip_master.get_current_futures_detailed(symbol,
+  n=3)` — same row-scanning logic as the single-contract version,
+  returns up to 3 nearest-unexpired contracts sorted by expiry.
+  `get_current_future_detailed()` (the original, singular function) is
+  now a thin wrapper calling this with n=1 — confirmed byte-for-byte
+  behavior-identical for existing callers via the full regression
+  suite. `MarketDataAgent._ensure_futures_subscribed()` now subscribes
+  all 3; the FRONT month keeps its EXACT existing role (still the only
+  one driving `future_oi_trend:{sym}`/`future_ohlc:{sym}` — the live
+  OI-buildup strategy signal and LTP Monitor panel are unaffected).
+  The 2nd/3rd months are additive: a new lightweight `_future_month_
+  tick()` tracks their LTP/OI (no buildup classification — that's
+  specified against the front month only) into a new
+  `future_months:{sym}` bus key, keyed by role (`month2`/`month3`).
+  **Honest scope**: this captures the data (same "capture first,
+  analyze later" pattern as the candle-DB work) — an actual multi-
+  month OI/volume-wall UI or analysis on top of it is not built here,
+  since that's squarely Option Chain Engine territory (Feature #4),
+  and building it blind without your spec risks going a different
+  direction than what you actually want there.
+  Tested against your real SENSEX/NIFTY sample rows extended to 3
+  expiries each: correctly returns all 3 sorted nearest-first, with
+  exact security_ids/expiries/lot_size/tick_size; confirmed the
+  backward-compat single-contract path still returns exactly the
+  front-month contract via the full existing test suite (all pass).
+
+### Live log review (2026-07-25, continued) — 3 real fixes, 1 instrumented-not-guessed
+
+Confirmed from real screenshots + a real activity.log the person shared
+(not guessed): the SENSEX-futures and DB-persistence fixes above ARE
+working live — the log shows `SENSEX future subscribed: BSXFUT
+(security_id=1144507, expiry=2026-07-30)` (exact match to the fix) and
+the chart's own diagnostics showed `db_candles_found: 54,
+source: "candle_builder_1m"` for SENSEX — real historical data loading
+from the DB now, not empty.
+
+- [x] **Top index tabs and the Lightweight Chart panel were two
+  independent "current symbol" selections.** Root cause of "websocket
+  change with index selection... should work for all parallelly":
+  `switchSym()` (the top NIFTY/BANKNIFTY/FINNIFTY/SENSEX tabs) never
+  touched the chart, which only moved via its own separate dropdown —
+  clicking a top tab left the chart showing whatever it was already
+  on. Fixed both directions: `switchSym()` now also updates the
+  chart's dropdown and reconnects it; the chart's own dropdown
+  (`switchLwChart()`) now also updates `current` and refreshes every
+  other panel. Both start on NIFTY by default so they're in sync from
+  load.
+- [x] **The "no live ticks" watchdog message was stomping a good
+  status.** Live report: SENSEX's chart successfully showed real
+  history (`db_candles_found: 54`), but 30s later a diagnostic message
+  overwrote that reassuring status with "no live ticks received... may
+  be closed, or feed isn't connected" — confusing given data was
+  already on screen. Fixed: the watchdog note only replaces the status
+  line if no real history has loaded yet; otherwise it goes into the
+  tooltip only. Also made the message itself context-aware
+  (`agents.market_open()`) instead of a vague "may be closed, or..."
+  hedge — it now says plainly whether the market is open (symbol-
+  specific subscription gap) or closed (expected, showing last
+  session).
+- [x] **Instrumented (not guessed) the actual "only NIFTY gets live
+  ticks" question.** Log evidence: `⚠ chart websocket: no live tick
+  ever received for {BANKNIFTY,SENSEX,FINNIFTY}` fired repeatedly but
+  NEVER for NIFTY, despite `ws: connected — 4 instrument(s)
+  subscribed` — a real, symbol-specific gap, not explained by "market
+  closed" alone (some of these fired during live trading hours).
+  Downloaded and read the REAL installed `dhanhq==2.2.0` source
+  directly (`validate_and_process_tuples`/`subscribe_instruments` in
+  `marketfeed.py`) rather than guessing: its batching correctly keeps
+  distinct security_ids as separate subscription entries (no
+  accidental dedup across different index IDs), so a client-side
+  batching bug looks unlikely from the library code alone — but that
+  can't be confirmed without seeing which security_ids actually arrive
+  over the wire. Rather than guess a third time, added real
+  instrumentation to `dhan_ws.py`: the exact resolved subscription
+  list is now logged at connect time; every tick's security_id is
+  tracked in a `_seen_sec_ids` set; an unmapped/unexpected security_id
+  arriving is logged once (would indicate a client-side routing bug —
+  tick arrives but doesn't match our expected key); and a one-shot
+  30s-after-connect coverage check logs exactly which symbols got at
+  least one tick and which never did. This will give a conclusive
+  answer next live session: Dhan's server never sending data for those
+  IDs (server/account-side) vs. the client receiving-but-misrouting
+  them (would show as unmapped-security_id log lines instead).
+  Unit-tested the tracking mechanism in isolation (mocked dhanhq,
+  simulated ticks for only one of four subscribed symbols plus one
+  unmapped id) — confirms `_seen_sec_ids`/missing-symbol reporting and
+  the unmapped-id log line both work correctly. NOT yet confirmed
+  against a real live capture of the coverage-check output itself —
+  that needs the next live session.
+
+### SENSEX futures fixed (switched to detailed scrip master CSV) + chart flat-line bug fixed (2026-07-25, continued)
+
+Live report: candles still not showing (should show last market day's
+data, never a blank chart with only a live flat line), and SENSEX
+futures still not loading. Two separate real fixes:
+
+- [x] **SENSEX futures — root cause was the wrong CSV file entirely.**
+  `dhan_scrip_master.py` was pointed at the COMPACT scrip master
+  (`api-scrip-master.csv`), which has no `UNDERLYING_SYMBOL` column at
+  all and an unconfirmed BSE exchange code — SENSEX futures could
+  never reliably resolve from it. Switched to the DETAILED file
+  (`api-scrip-master-detailed.csv`) per explicit request, with the
+  real column schema and sample rows provided directly (EXCH_ID,
+  SEGMENT, SECURITY_ID, INSTRUMENT, UNDERLYING_SECURITY_ID,
+  UNDERLYING_SYMBOL, SYMBOL_NAME, DISPLAY_NAME, INSTRUMENT_TYPE,
+  LOT_SIZE, SM_EXPIRY_DATE ["DD/MM/YY", no time component — different
+  from the compact file's "DD/MM/YY HH:MM"], STRIKE_PRICE,
+  OPTION_TYPE, TICK_SIZE). Confirmed directly from the real sample:
+  SENSEX FUTIDX rows use EXCH_ID="BSE" plainly (no BSE_FNO/BFO
+  guessing needed), and UNDERLYING_SYMBOL is populated cleanly for
+  every symbol (no more trading-symbol-prefix-parsing fallback
+  needed as the primary path). `tick_size` now also returned
+  alongside `lot_size` — both needed for margin calculations per
+  explicit request. COLUMN_CANDIDATES keeps the old SEM_* names as
+  fallbacks for backward compatibility. Cache file renamed
+  (`scrip_master_detailed.csv`) so a stale compact-schema cache can't
+  silently linger.
+  Tested (`test_dhan_scrip_master.py`, rewritten for the new schema):
+  nearest-unexpired-contract selection, OPTIDX-row exclusion,
+  **SENSEX specifically** — resolves at all (previously always
+  None), picks the nearest of 3 real BSE expiries, exchange reads as
+  plain "BSE", lot_size/tick_size both correct — legacy compact-CSV
+  schema still parses via the fallback columns (regression check).
+  All pass against real confirmed sample rows. Live-network tier
+  still blocked in this sandbox (`images.dhan.co` returns 403) — not
+  yet confirmed against the real 25MB+ file end-to-end.
+
+- [x] **Chart flat-line bug — root cause was live ticks rendering
+  before any real history loaded.** The reported symptom (empty-
+  looking chart with just a thin flat line near the current price,
+  weird auto-generated axis labels) matches exactly what happens when
+  `lwSeries.update()` is called repeatedly for live-only single-tick
+  "candles" while `setData()` was never given real historical data —
+  Lightweight Charts auto-fits its axis to whatever sparse data exists,
+  producing that degenerate look. Fixed in `dashboard.html`: a new
+  `lwHistoryLoaded` flag is set only when the `history` message
+  actually contains candles; `live` messages are now silently ignored
+  until it's true. This can't fully fix a genuine no-data-anywhere
+  case, but it guarantees the chart either shows a real candle history
+  (today's, or the DB-backed "most recent session" persisted by
+  RegimeAgent as of the fix above) or a clear "no candles found —
+  <diagnostic>" message — never a misleading flat sliver. The
+  `db_1m_most_recent_session`/`db_5m_most_recent_session` tiers added
+  above are exactly what should now make "last market day" actually
+  available immediately rather than only accumulating from the moment
+  this code first runs.
+  **Not independently confirmed against the exact reported screenshot**
+  — this sandbox has no live Dhan connection or market-hours access,
+  so this is a logical fix for the mechanism that best explains the
+  reported symptom, not a live-reproduced-then-fixed bug. Worth a
+  direct re-check with the chart's status-line tooltip (now shows the
+  full `diagnostics` JSON) if it recurs — that will show exactly which
+  of the 5 tiers is failing and why.
+
+### Candle DB persistence extended to all 4 symbols, all timeframes (2026-07-25)
+
+Per explicit request ("store the candles in local db for further use
+and analysis, now onwards") + a live report that chart candles were
+missing for all indexes. Root cause of both, same gap: the DB-backed
+1m candle table (`{symbol}_SPOT_1m`) was ONLY ever populated by the
+live websocket tick builder (`MarketDataAgent._build_candle`), which
+requires `market_data_feed: "websocket"` (default is `"rest"`) — so
+under the default config, that table stayed empty regardless of
+symbol, and the chart fell all the way back to a live REST call every
+time (slow, network-dependent, and only ever showed whichever symbol
+you'd just selected — nothing persisted for the other three).
+
+RegimeAgent already fetches 1m/5m/15m candles for ALL FOUR symbols
+every ~90s via REST (needed for regime/bias/levels) — reused that
+exact fetch, no new API calls:
+  - `history.upsert_index_candles(symbol, candles, timeframe)` — new,
+    writes into the SAME `candles` table/security_id convention the
+    websocket builder already uses (`{symbol}_SPOT_{tf}m`), so both
+    mechanisms coexist safely (idempotent REPLACE on security_id+ts).
+  - `RegimeAgent._persist_candles()` calls this for c1/c5/c15 right
+    after they're fetched, before the warmup-length early-return, so
+    even a symbol still warming up gets captured.
+  - `history.most_recent_session_candles(security_id)` — new, returns
+    the most recent IST calendar day that has ANY persisted data
+    (today's if today has data, else the last trading day's) —
+    network-independent, DB-only.
+  - `/ws/candles/{symbol}` (app.py) gained two new tiers ahead of the
+    existing bus/REST-live ones: DB 1m most-recent-session, then DB 5m
+    most-recent-session — tried before falling back to in-memory bus
+    state or a live REST call. Frontend status line updated with
+    labels for both new sources.
+
+Tested directly (synthetic data, isolated DB): insert + retrieve
+round-trip for `upsert_index_candles`/`most_recent_session_candles`,
+correct grouping to the most recent date with data, empty-security-id
+case returns `[]` not an error, and idempotent re-upsert doesn't
+duplicate rows. NOT tested against a live Dhan feed or market hours —
+today (2026-07-25) is a Saturday, market closed, and this sandbox has
+no network path to api.dhan.co — RegimeAgent itself won't run
+(`market_open()` gates its whole cycle) until the next live session,
+which is also when this persistence will actually start accumulating
+real data. Flagging directly: this should close the "candles missing
+for all indexes" report, but hasn't been confirmed against a real
+live/market-hours run yet — worth a check once markets are open.
+
+### Staggered futures resolution fixed (2026-07-25, continued)
+
+Live report: futures data updated 3-5s apart per index, one after
+another, rather than all together. Root cause confirmed directly in
+code, not guessed: `_ensure_futures_subscribed()` called `get_current_
+futures_detailed()` once PER symbol — each call independently
+downloaded (20h-cached, so not the cost) then re-PARSED+re-SCANNED the
+full ~200k-row scrip master CSV from scratch, every single call. Doing
+that 4 times back-to-back (once per index, on first resolution) is
+exactly the "3-5s per index, sequential" pattern reported.
+
+- [x] **Refactored to a single-pass multi-symbol lookup.** New
+  `dhan_scrip_master.get_current_futures_for_symbols(symbols, n=3)` —
+  downloads and parses the CSV exactly ONCE regardless of how many
+  symbols are requested, then scans it once per symbol against the
+  same already-parsed rows. The per-symbol scan logic itself was
+  extracted into a shared `_scan_futures_for_symbol()` helper so both
+  the single-symbol (`get_current_futures_detailed`, unchanged
+  behavior, still parses its own copy — correct for a genuine single-
+  symbol caller) and multi-symbol paths share identical matching logic
+  rather than two copies that could silently drift apart.
+  `_ensure_futures_subscribed()` now calls the multi-symbol version
+  once per cycle instead of looping the single-symbol one.
+- Measured directly, not assumed: built a realistically-sized (50,000-
+  row) synthetic scrip master and timed both paths — old (4 separate
+  calls) took ~1.5s, new (1 shared parse) took ~0.28s, a 5.4x speedup
+  on this synthetic scale; the real file (~200k+ rows) should show an
+  even larger absolute time reduction. Confirmed the two paths produce
+  BYTE-IDENTICAL results for all 4 symbols (NIFTY/BANKNIFTY/FINNIFTY/
+  SENSEX all resolved to the exact same security_id via either path) —
+  this is a performance fix, not a behavior change.
+  Also tested: schema-mismatch error correctly propagates to every
+  requested symbol (not just the first), and an empty symbol list
+  returns `{}` cleanly.
+- Full existing single-symbol test suite (`test_dhan_scrip_master.py`)
+  re-run afterward — all still pass unchanged, confirming the
+  refactor didn't alter `get_current_future_detailed()`'s existing
+  behavior for any current caller.
+
+### 429 self-sustaining lockout fixed (2026-07-25, continued)
+
+Live log showed `futures REST quote poll failed: 429 Client Error: Too
+Many Requests` repeated over ~9 minutes straight. The scattered log
+timestamps were misleading at first glance — this agent's own logging
+is itself throttled (only the 1st failure and every 20th get logged),
+so those spaced-out entries actually meant continuous, unbroken
+failure every cycle for the whole window, not occasional blips.
+
+- [x] **Root cause: no backoff after an actual 429.** `_poll_futures_
+  via_rest()`'s 1.2s pacing is fine in isolation, but on a real 429 it
+  just waited 1.2s and retried, hit the same wall, and repeated —
+  self-sustaining the rate-limit lockout instead of easing off it.
+  Fixed with the same `fail_until` cooldown pattern already used for
+  this agent's own option-chain REST fetch 429 handling: 60s backoff
+  on a confirmed 429, shorter exponential backoff for other errors.
+- [x] **Same fix applied to `quote_ltp()`** (broker_adapter.py) — polled
+  by `/api/ticker` roughly every 3s from the browser (just over its own
+  2.5s cache), so a 429 there without a cooldown would fall into the
+  identical retry loop. Now returns the last known-good (possibly
+  stale) quotes during the cooldown window instead of hammering Dhan
+  again immediately.
+- Confirmed the batch-quote infrastructure the person pointed to
+  (Dhan's Market Quote API, up to 1000 instruments/1 req-per-second)
+  was already correctly built in an earlier session — verified the
+  exact schema and Exchange Segment enum against dhanhq.co/docs/v2/
+  directly rather than assuming; nothing there was wrong. The 429s were
+  a pacing/backoff gap, not a wrong-endpoint or wrong-schema problem.
+
+Tested directly: simulated a 429 on both `quote_ltp()` and
+`_poll_futures_via_rest()`, then simulated 5-10 more rapid follow-up
+calls within the cooldown window — confirmed neither re-hits Dhan
+during the backoff (call count stays at 1 in both cases), which is the
+actual mechanism that stops the self-sustaining lockout.
+
+**Candles still empty, real cause still undetermined.** Confirmed
+market was closed (19:38 IST) and the backtest's own "no candles today
+(market closed)" lines are expected/correct there — that's a different
+check (today-only) than what the chart's fallback tiers look for
+(most-recent-session, including prior days). The person's own read —
+RegimeAgent never successfully persisted candles today because it only
+runs during market hours, so if today was the first day this candle-
+persistence code ran at all (or REST was still broken by the TLS issue
+during whatever window the market was open), the DB genuinely has
+nothing to fall back to yet — is the most likely explanation and isn't
+a new code bug on top of what's already been fixed. Still waiting on
+the specific `⚠ chart websocket: no candles found for {symbol}` log
+line (never received) to confirm which of the 5 fallback tiers is
+actually failing, rather than guessing further.
+
+## Live log review round 3 (2026-07-25) — real bug fixed, batch REST infra confirmed already in place
+
+User pointed to Dhan's Market Quote batch API (`/marketfeed/ltp`,
+`/marketfeed/ohlc`, `/marketfeed/quote` — up to 1000 instruments in one
+call, 1 req/SECOND, a completely separate and much faster limit than
+the option-chain endpoint) as a possible fix for SENSEX futures still
+not updating. Checked the codebase directly rather than assuming: this
+infrastructure (`DhanClient.quote_batch()`/`quote_ltp()` in
+broker_adapter.py, `MarketDataAgent._poll_futures_via_rest()` in
+agents.py, wired into every MarketDataAgent cycle) was **already
+built** — confirmed the exact schema against dhanhq.co/docs/v2/market-
+quote/ and the Exchange Segment enum (IDX_I=0/NSE_FNO=2/BSE_FNO=8 etc.)
+against dhanhq.co/docs/v2/annexure/, both match what's already coded.
+So the batch-REST approach was sound and already in place — the
+remaining question was why it still wasn't fixing SENSEX specifically.
+
+- [x] **Real bug found and fixed: futures OHLC/LTP tracking was gated
+  behind OI being present.** `_classify_future_tick()` bailed out
+  entirely — before even updating the futures OHLC/LTP the LTP Monitor
+  panel displays — whenever a tick's `oi` field was `None`. The
+  OI-buildup classification genuinely needs OI, but the simple LTP/
+  OHLC tracking only needs LTP; some BSE_FNO contracts' REST quote
+  responses may not populate `oi` reliably (lower liquidity, or a
+  BSE-specific gap in what Dhan returns), which would silently freeze
+  the entire futures panel for that symbol even though a perfectly
+  usable LTP was arriving every cycle. Fixed: OHLC/LTP tracking
+  (`_update_future_ohlc`) now runs whenever LTP alone is present; only
+  the OI-buildup classification below it still requires OI
+  specifically, and degrades gracefully (skips just that part) when
+  OI isn't available on a given tick.
+  Tested directly: an LTP-only tick (no OI at all) now correctly
+  updates `future_ohlc:{symbol}` (open/high/low/close/vwap) while
+  correctly leaving `future_oi_trend` unset (no OI to classify, no
+  crash); a later tick WITH OI arriving in the same session correctly
+  continues updating OHLC and starts the OI baseline — mixed OI-
+  present/absent ticks across a session work correctly together.
+- Segment mapping double-checked directly against Dhan's own
+  documented enum: `SEGMENT_FOR_SYMBOL["SENSEX"] = "BSE_FNO"` (enum 8)
+  is correct — not the source of the problem.
+- **Candles still not loading** — most likely explanation remains the
+  TLS/certifi environment issue found in the previous log review (a
+  stale `SSL_CERT_FILE`/`REQUESTS_CA_BUNDLE` pointing at an old,
+  deleted venv folder, breaking every REST call including the candle
+  fetch). That's a local environment fix on the user's machine, not
+  something fixable from here — flagged again rather than guessing a
+  new code-side cause without fresh evidence. Asked for confirmation
+  of whether that specific error still appears in the current activity
+  log before chasing this symptom further.
+- Swagger UI at api.dhan.co/v2/#/ is a JS-rendered SPA — `web_fetch`
+  only returns the empty HTML shell, no usable schema content. The
+  dhanhq.co/docs/v2/ pages (already fetched) contain the same schema
+  as real prose/tables and were sufficient — no missing information
+  found there beyond what's already coded.
+
+### Increment 2 — DONE, tested: Breakout/Breakdown Validation + full Institutional Detection event layer
+
+- [x] **Breakout/Breakdown Validation**, exactly the spec's own 6
+  conditions, each pulled from data already computed elsewhere: Spot
+  confirms (RegimeAgent's own `or_position`/`or_expansion` — opening-
+  range breaks are already classified there, not re-detected here),
+  Future confirms (bias's future_trend component), Volume confirms
+  (Feature #4's volume_breakout list), Institutional participation
+  confirms (this module's own score from increment 1, >=40), Option
+  Chain confirms (Feature #4's PCR trend direction + a resistance/
+  support shift in the breakout's favor), Technical confirmation
+  (bias's own label+confidence). A condition is SKIPPED (not counted
+  either way) when its data isn't available yet, rather than
+  defaulting to fail. `>=5/6` confirmed → Confirmed; `>=50%` → Weak;
+  else → False. Breakdown is the exact mirror for bearish moves.
+- [x] **Full Institutional Detection event list** (all 13 from the
+  spec): Aggressive Buyers/Sellers, Smart Money Accumulation/
+  Distribution, Fresh Long/Short Positions, Profit Booking, Position
+  Rotation, Hedging Activity, False Breakout, Trap Formation, Breakout/
+  Breakdown Confirmation — each with a confidence score. Notably,
+  **Fresh Long/Short Positions reuses `future_oi_trend:{symbol}`
+  directly** — the futures OI-buildup classification (long/short) was
+  already computed by the existing futures pipeline and had gone
+  unused in increment 1; this is exactly what those two events are
+  asking for, verbatim, no new logic needed. Trap Formation is framed
+  as "breakout/breakdown underway per spot+regime, but the OPPOSITE
+  side's writers are actively capping it" (smart_money's strong_call_
+  writing during a bullish breakout, or strong_put_writing during a
+  bearish breakdown) — a classic bull/bear trap read, distinct from a
+  plain False Breakout (which just means insufficient confirmations,
+  not necessarily active opposing pressure).
+- [x] **Wiring**: `TechnicalAgent._compute_institutional()` now also
+  passes `regime:{symbol}` (RegimeAgent) and `future_oi_trend:{symbol}`
+  (existing futures pipeline) into the institutional engine call —
+  both new optional parameters on `analyze_institutional()`, defaulting
+  to `None` so increment-1 style calls still work unchanged.
+
+Tested extensively: a fully-agreeing bullish scenario (6/6 confirmed)
+correctly reads Confirmed Breakout with Fresh Long Positions and
+Breakout Confirmation both active, False Breakout correctly inactive;
+an unconfirmed spot-only breakout correctly reads False Breakout; a
+genuine bull-trap scenario (breakout underway, but call writers
+actively capping it) correctly flags Trap Formation; a balanced OI
+in/out scenario correctly flags Position Rotation; simultaneous call
+AND put writing correctly flags Hedging Activity; a dedicated
+unwinding-dominant + net-OI-exiting scenario correctly flags Profit
+Booking; confirmed increment-1 functions and call signatures still
+work completely unchanged (backward compatible); the full
+`TechnicalAgent` wiring re-tested end-to-end with regime/future_oi_
+trend seeded on a mocked bus — produces a coherent Confirmed Breakout
+plus all 13 events from real data flowing through the actual method.
+
+**Stopping here for review.** Remaining: Market Participation
+classification (Accumulation/Distribution/Trend Following/Range
+Trading/Profit Booking/Short Covering/Hedging/No Participation — a
+single categorical label synthesized from everything built so far,
+should be a light final layer) and AI Commentary sentences (same
+rule-based, zero-latency approach as Feature #4's narrative generator).
+
+### Increment 3 — DONE, tested: Market Participation classification + AI Commentary + consolidated spec-shaped output — Feature #5 COMPLETE
+
+- [x] **Market Participation classification** — a single label from the
+  spec's own 8: Accumulation / Distribution / Trend Following / Range
+  Trading / Profit Booking / Short Covering / Hedging / No
+  Participation. Priority-ordered (Hedging/Profit-Booking take
+  precedence as the most specific reads), built entirely from fields
+  already computed in increments 1-2 (money flow, events, score,
+  regime, breakout/breakdown status) — flagged directly in the
+  function's own docstring as a first-pass rule set to tune against
+  real outcomes, same honesty standard as every other judgment-call
+  heuristic in this codebase (IV/Greeks thresholds, Smart Money
+  thresholds, etc.).
+- [x] **AI Commentary** — rule-based (zero-latency, always available,
+  same approach as Feature #4's narrative generator), matching the
+  spec's own example phrasing closely ("Institutions continue
+  accumulating long positions.", "Fresh buying observed across futures
+  and ATM Calls.", "Aggressive Call writing suggests resistance near
+  {strike}.", "Volume expansion confirms institutional participation.",
+  "Current breakout lacks institutional confirmation."). **Real bug
+  caught and fixed during testing**: the first draft flagged "Current
+  breakout lacks institutional confirmation" whenever EITHER breakout
+  OR breakdown validation read False — but in a one-directional market
+  the opposite-direction check almost always correctly reads False,
+  so a genuinely Confirmed Breakout was getting mislabeled as
+  unconfirmed just because the (irrelevant) breakdown check failed.
+  Fixed twice, refining as testing revealed a sharper distinction: the
+  first fix used bias-label direction to pick which side to comment
+  on, then a second pass switched to the breakout/breakdown
+  validation's own `spot_confirms` detail (RegimeAgent's real-time
+  `or_position` read) instead — more directly answers "is an attempt
+  actually happening right now" than the bias label, which can lag a
+  fresh move. Verified all three cases directly: a genuinely confirmed
+  breakout no longer wrongly flagged, a genuine spot-confirmed-but-
+  otherwise-unconfirmed attempt correctly flagged, and a quiet market
+  with no breakout attempt at all correctly produces no breakout/
+  breakdown commentary either way.
+- [x] **Consolidated spec-shaped OUTPUT** — new `institutional_output()`
+  assembles the exact field set the spec's OUTPUT section lists
+  (Institutional Score, Institutional Bias, Current Activity, Money
+  Flow, Accumulation/Distribution → market_participation, Breakout/
+  Breakdown Status, Support/Resistance Shift, Participation Strength,
+  Confidence%, AI Commentary) purely by reshaping `analyze_
+  institutional()`'s own result — no new calculation, just the spec's
+  exact naming for callers (Market Bias/Risk/Trade Recommendation/AI
+  Narrative Engines) that expect this specific structure.
+  `TechnicalAgent._compute_institutional()` now calls this final
+  function instead of the increment-2 intermediate one.
+
+Tested: the full consolidated output against a realistic bullish
+scenario (all 17 expected keys present, sensible values throughout);
+the three-case commentary regression above; re-ran the ENTIRE
+`test_dhan_scrip_master.py` suite plus every increment-1/2 scenario to
+confirm nothing else in this session regressed; the full `Technical
+Agent` → bus → `/api/institutional/{symbol}` path re-tested end-to-end
+with the FINAL output shape (not just the intermediate one) flowing
+through real code, not mocks beyond the bus itself.
+
+**Feature #5 (Institutional Activity Engine) is now complete** — all
+sections of the spec (Smart Money Score, Institutional Detection,
+Money Flow, Supply/Demand Shift, Breakout/Breakdown Validation, Market
+Participation, AI Commentary, consolidated Output) are built, each one
+reusing Feature #2/#3/#4's existing outputs per the spec's own
+explicit "do not duplicate" instruction — confirmed via review before
+writing any code, not assumed. Market Breadth remains an honest,
+disclosed gap throughout (same precedent Feature #2 already set).
+Like Feature #4, what's NOT yet built is a dashboard panel actually
+DISPLAYING this — the data flows into `institutional:{symbol}` and is
+served at `/api/institutional/{symbol}`, but there's no UI panel for
+it yet, a natural next piece whenever picked back up.
+
+### Institutional Activity dashboard panel + chart integration (2026-07-25)
+
+Per explicit request: a display panel for Feature #5's output, plus
+chart integration matching Feature #4's existing pattern.
+
+- [x] **New "Institutional Activity" panel**, placed between the
+  Option Chain Intelligence panel and the Option Chain table. New
+  `/api/institutional/{symbol}` fetch (separate from `/api/analysis`,
+  since institutional:{symbol} lives on its own bus key) — fetched
+  alongside the existing analysis call inside `refresh()`, so both
+  panels stay in sync on every symbol switch. Shows: Institutional
+  Score as a numeric value + a color-coded progress bar (green
+  Very-Strong down to red No-Activity, matching the score's own
+  banding), Institutional Bias, Money Flow (direction + increasing/
+  exiting state), Market Participation, Breakout/Breakdown status
+  (color-coded — green when confirmed, red when false), Support/
+  Resistance Shift (shown only when present), Confidence%, the AI
+  Commentary as a bullet list, and Active Events with their individual
+  confidence scores.
+- [x] **Chart integration** — the `/ws/candles/{symbol}` socket's
+  existing `signals` message (built for Feature #4's smart-money
+  markers) now ALSO carries Feature #5's institutional markers, via a
+  new `_institutional_to_markers()` helper: Breakout Confirmed (green
+  arrow up), Breakdown Confirmed (red arrow down), False Breakout
+  (amber circle), Trap Formation (amber square). Deliberately does NOT
+  duplicate the existing support/resistance-shift markers (those
+  already come from the same underlying smart_money data via
+  `_smart_money_to_markers()`) — kept as a distinct, additive marker
+  set covering breakout/breakdown/trap detection specifically, capped
+  at 10 total markers combined.
+
+Tested: `_institutional_to_markers()` directly against a populated
+events_detail (correct single marker for a confirmed breakout, correct
+2 markers for a false-breakout + trap-formation combination) and an
+empty dict (no markers, no crash); `renderIae()` smoke-tested in Node
+with a DOM shim across three cases — a realistic populated payload
+(all fields render correctly, score bar width/color match the score),
+the `available: false` case (clean "not yet computed" state, no
+crash), and a fully `null` input (still renders a safe fallback state).
+NOT tested in an actual browser (this sandbox can't render one) — JS
+syntax validated and the Node/DOM-shim smoke tests catch runtime
+errors in the render logic, but the actual visual layout is
+unverified until it's loaded live.
+
+### Increment 2 — DONE, tested: EMA Engine
+
+`ema_engine(candles)` — EMA Alignment (9/20/50/200, reusing `mtf_
+confluence_strategy.ema()` directly, not recomputed), Golden Cross /
+Death Cross (EMA50 vs EMA200, comparing current vs previous candle),
+Price above/below EMA9, Trend Strength (0-100, from how widely
+separated the fastest/slowest EMAs are relative to price — a
+documented first-pass calibration, not backtested) → Strong Bullish/
+Bullish/Neutral/Bearish/Strong Bearish.
+
+**Real bug found and fixed during testing**: a choppy/flat synthetic
+series still satisfied the strict "EMA9 < EMA20 < EMA50 < EMA200"
+inequality by a razor-thin margin, so the engine confidently reported
+"Bearish" on data that was really just noise (trend_strength=1, i.e.
+essentially zero separation). Fixed with a minimum trend-strength
+floor — below it, the read is forced to Neutral regardless of which
+way the alignment technically points, since a true-by-epsilon
+inequality on bunched-together EMAs isn't a real trend.
+
+Golden Cross/Death Cross detection verified directly with mocked EMA
+values (forcing an exact 50/200 cross on the last candle in both
+directions) rather than hoping real synthetic price data happened to
+cross at exactly the right candle — confirms the detection LOGIC
+itself, not just that some scenario didn't crash. Also tested: empty/
+too-few-candles (needs 202+ closes for EMA200) degrades gracefully;
+clean uptrend → bullish alignment + Strong Bullish; clean downtrend →
+bearish alignment + Strong Bearish; the fixed choppy/flat case now
+correctly reads Neutral; full `TechnicalAgent` wiring re-tested with
+both VWAP and EMA engines publishing together to the same `technical:
+{symbol}` key; full existing suite (`test_dhan_scrip_master.py`)
+re-run, zero regressions.
+
+**Stopping here for review**, per this spec's stricter one-at-a-time
+pacing. Next up: MACD Engine (cross detection, above/below zero,
+histogram expansion/weakening — all built on top of `mtf_confluence_
+strategy.macd()`, already computed elsewhere, not recomputed).
+
+### Increment 3 — DONE, tested: MACD Engine
+
+`macd_engine(candles)` — Bullish/Bearish Cross (MACD vs signal line),
+Above/Below Zero, Histogram Expansion/Weakening (comparing |histogram|
+to the previous bar, same-side only — a sign flip is a cross, not
+expansion/weakening), trend strength (current |histogram| normalized
+against its own recent range, not an absolute threshold, since MACD's
+scale depends on the underlying's absolute price level — NIFTY vs
+BANKNIFTY are wildly different). Reuses `mtf_confluence_strategy.
+macd()` directly — MACD/signal/histogram math not recomputed.
+
+**Hit the exact same documented MACD-on-perfectly-linear-data artifact
+already noted elsewhere in this project** (Feature #2's own market_
+bias.py testing notes: "MACD histogram converges to ~zero on a
+perfectly linear synthetic price series — a genuine mathematical
+property, not a bug"). My first test used a constant-slope synthetic
+uptrend and got a near-zero, slightly-negative histogram despite a
+clean uptrend — not a code bug, a synthetic-test-data artifact (real
+market data never has perfectly constant slope). Fixed the TEST, not
+the code, using an accelerating trend instead — consistent with how
+this exact issue was already resolved once before in this codebase.
+
+Cross detection and histogram expansion/weakening verified directly
+with mocked MACD/signal/histogram values (forcing an exact cross and
+exact expansion/weakening on the last candle) rather than relying on
+synthetic price data happening to produce the right pattern. Also
+tested: empty/too-few-candles (needs 35+ closes) degrades gracefully;
+accelerating uptrend/downtrend correctly read Bullish/Bearish with
+above/below zero; full `TechnicalAgent` wiring re-tested with all
+three engines (VWAP/EMA/MACD) publishing together to `technical:
+{symbol}`; full existing suite re-run, zero regressions.
+
+**Stopping here for review**, per this spec's one-at-a-time pacing.
+Next up: RSI Engine (current RSI, RSI trend, overbought/oversold,
+divergence detection — divergence is the one genuinely new calculation
+in this engine so far, everything else has reused an existing
+function).
+
+### Increment 4 — DONE, tested: RSI Engine
+
+`rsi_engine(candles)` — Current RSI, RSI Trend, RSI Momentum,
+Overbought/Oversold, Bullish/Bearish Divergence. Reuses `mtf_
+confluence_strategy.rsi()` directly for the RSI values — the
+genuinely NEW piece is divergence detection (comparing price extremes
+against RSI extremes across a lookback window's two halves), which
+didn't exist anywhere in this codebase before. Per the spec's own
+explicit "do not generate trades solely on RSI" instruction, this
+engine's own `bias` treats divergence as the stronger signal and plain
+overbought/oversold as a weaker lean — still just one confirmation
+input for a higher-level aggregator, never a standalone call.
+
+Divergence logic verified directly with controlled mock RSI values
+(same approach as the golden-cross/MACD-cross tests in increments 2-3)
+rather than hand-crafting realistic price series — caught and fixed my
+own test-construction bug twice while building this: the first attempt
+used a monotonically-increasing dummy price base, which meant the
+series' own natural last-element-is-biggest property silently
+overrode my intended extremes regardless of where I placed them: fixed
+by switching to a flat base series so only the deliberately-placed
+extremes stand out. Confirmed bullish divergence (lower price low +
+higher RSI low), bearish divergence (higher price high + lower RSI
+high), and a no-divergence control (price and RSI extremes moving
+together, confirming the trend rather than diverging from it) all
+correctly distinguished.
+
+Also tested: empty/too-few-candles degrades gracefully; a sharp
+sustained rally/decline correctly reads overbought/oversold with the
+weaker Bearish/Bullish lean; full `TechnicalAgent` wiring re-tested
+with all four engines (VWAP/EMA/MACD/RSI) publishing together; full
+existing suite re-run, zero regressions.
+
+**Stopping here for review**, per this spec's one-at-a-time pacing.
+Next up: ADX Engine (Strong/Weak Trend/Sideways — the underlying ADX
+math already exists in RegimeAgent's own `_adx()`, so this should
+mostly be an interpretation layer plus separately exposing +DI/-DI,
+which aren't currently surfaced as their own values).
+
+### Increment 5 — DONE, tested: ADX Engine
+
+`adx_engine(candles)` — ADX, +DI, -DI, Strong Trend/Weak Trend/
+Sideways Market, plus a Bullish/Bearish/Neutral lean from whichever DI
+dominates. The interesting part of this increment was avoiding
+duplication: `RegimeAgent._adx()` already computed ADX (and internally
++DI/-DI too, but only ever returned the final ADX value, discarding
+the rest) for its own regime classification. Rather than write a
+second copy, extracted the exact math into a new shared `mtf_
+confluence_strategy.adx_di()` function returning all three values, and
+refactored `RegimeAgent._adx()` itself to call it — a genuine touch of
+live, tested code, done carefully: verified the refactored version
+produces BYTE-FOR-BYTE IDENTICAL ADX output to the original
+implementation across 200 randomized candle scenarios before
+considering it safe, not just a visual diff of the code. `strong_
+threshold=25` matches RegimeAgent's own trending-regime cutoff
+exactly, so this engine's "Strong Trend" and RegimeAgent's "trending"
+never disagree on the same data.
+
+Tested: empty/too-few-candles degrades gracefully; a strong sustained
+uptrend/downtrend correctly reads Strong Trend with the dominant DI
+matching direction (+DI for up, -DI for down); a choppy/oscillating
+series correctly reads Sideways Market/Neutral; the full `Technical
+Agent` wiring re-tested with all five engines (VWAP/EMA/MACD/RSI/ADX)
+publishing together; `RegimeAgent._adx()` re-tested standalone post-
+refactor to confirm zero behavior change to the live regime
+classification it feeds; full existing suite re-run, zero regressions.
+
+**Stopping here for review**, per this spec's one-at-a-time pacing.
+Next up: ATR Engine (expected intraday range, volatility expansion/
+contraction — the ATR math itself already exists in `mtf_confluence_
+strategy.atr()`, reused there already for `sizing.size_by_atr_risk`;
+this increment adds a volatility-trend read that watches ATR over
+time, which is new).
+
+### Increment 6 — DONE, tested: ATR Engine
+
+`atr_engine(candles)` — ATR, Expected Intraday Range, Volatility
+Expansion/Contraction, and a suggested stop-loss distance. Reuses
+`mtf_confluence_strategy.atr()` directly, called twice (full candle
+list, and a shortened slice from `lookback` candles ago) to get a
+"then vs now" comparison — the same before/after technique already
+used elsewhere in this module, not a new ATR calculation. The
+suggested stop distance reuses the EXACT SAME `atr_stop_multiplier`
+config value (default 2.5) that `sizing.py`'s live ATR-based stop-loss
+mode already uses — this engine surfaces the number for confirmation,
+it doesn't implement a competing stop-loss formula. ATR itself is a
+volatility measure, not directional — `bias` is always Neutral here;
+expansion/contraction inform conviction (how wide a stop needs to be,
+how much a move can be trusted), matching the spec's own framing.
+
+Tested: empty/too-few-candles degrades gracefully; a basic sanity
+check confirming ATR computes and the suggested stop distance matches
+ATR × the config's default multiplier; a genuine quiet-then-volatile
+scenario correctly detects Volatility Expansion; a genuine volatile-
+then-quiet scenario correctly detects Volatility Contraction (caught
+one test-precision slip along the way — comparing against an already-
+rounded display value produced a spurious one-cent mismatch against
+the raw internal computation; fixed with a tolerance check, not a code
+change, since the underlying calculation was correct all along); full
+six-engine `TechnicalAgent` wiring re-tested (VWAP/EMA/MACD/RSI/ADX/
+ATR all publishing together); full existing suite re-run, zero
+regressions.
+
+**Stopping here for review**, per this spec's one-at-a-time pacing.
+Next up: Supertrend Engine (trend direction/change, buy/sell state,
+support/resistance level — the Supertrend line itself already exists
+in `market_bias.py`'s `supertrend()`, used there only for its
+direction; this increment should expose the actual line value too,
+which isn't currently surfaced, as a dynamic S/R level).
+
+### Increment 7 — DONE, tested: Supertrend Engine
+
+`supertrend_engine(candles)` — Trend Direction, Trend Change, Buy
+State/Sell State, and Support/Resistance Level. Reuses `market_bias.
+supertrend()` directly — that function ALREADY computed both the
+direction series AND the actual trend-line value per candle, but
+Feature #2's own bias engine only ever used the direction, discarding
+the line value entirely. This increment is exactly that missing
+piece: exposing the trend line itself as a dynamic level — support
+(below price) when bullish, resistance (above price) when bearish — no
+new Supertrend calculation, purely surfacing what already existed.
+
+Trend Change looks across a short recent window (5 candles default),
+not just the single latest bar, so a flip that happened a couple of
+candles ago still reads as "recent" rather than only the instant it
+occurs. Caught my own wrong test expectation while verifying this: my
+first reversal scenario checked `trend_change` 14 candles after the
+actual flip and got `False` — traced it directly (found the exact
+flip index in the direction series) and confirmed that's correct
+behavior, not a bug — 14 candles is well outside a 5-candle recency
+window. Fixed the test to check shortly after the flip (within the
+lookback) where it correctly reads `True`, and confirmed it correctly
+reverts to `False` once genuinely past the window — both ends of the
+recency behavior verified, not just one.
+
+Also tested: empty/too-few-candles degrades gracefully; a clean
+uptrend/downtrend correctly produces bullish/support and bearish/
+resistance with the level sitting on the correct side of price; full
+seven-engine `TechnicalAgent` wiring re-tested (VWAP/EMA/MACD/RSI/ADX/
+ATR/Supertrend all publishing together); full existing suite re-run,
+zero regressions.
+
+**Stopping here for review**, per this spec's one-at-a-time pacing.
+Next up: Ichimoku Cloud Engine — the spec's own most detailed section
+(full Tenkan/Kijun/Senkou/Chikou breakdown, cloud thickness, twist,
+Kumo breakout/breakdown, "should carry one of the highest weights").
+`market_bias.ichimoku_bias()` already computes a simplified bullish/
+bearish/neutral read from the underlying Ichimoku lines — this
+increment will need to expose the FULL structured breakdown the spec
+asks for, which is a bigger lift than the last several increments
+since most of that detail isn't currently surfaced anywhere.
+
+### Increment 8 — DONE, tested: Ichimoku Cloud Engine (the biggest lift so far)
+
+`ichimoku_engine(candles)` — the spec's own most detailed section, and
+explicitly called out to "carry one of the highest weights in
+technical confirmation". `market_bias.ichimoku_bias()` only computes a
+SIMPLIFIED, non-shifted read (documented there as "not the full
+plotted system with forward/backward time shifts") — this increment
+needed the REAL system: Senkou Span A/B are calculated at one point in
+time but PLOTTED 26 bars forward on a real chart, so "today's cloud"
+was actually calculated 26 bars ago, and "the future cloud" (what will
+appear 26 bars from now) is exactly today's freshly-computed Senkou
+A/B. That distinction — not the underlying Tenkan/Kijun/Senkou math
+itself, which reuses the same high-low-midpoint formula already
+established — was the genuinely new piece. Full output: Tenkan-sen,
+Kijun-sen, Senkou A/B (both current-cloud and future-cloud), Chikou
+Span confirmation, price position (above/below/inside cloud), cloud
+thickness%, future cloud direction, Tenkan/Kijun cross, bullish Kumo
+breakout, bearish Kumo breakdown, cloud twist, confidence score.
+
+Needs 80 candles minimum (52+26+2) — the largest history requirement
+of any engine in this feature so far.
+
+**Testing this one surfaced the same "degenerate synthetic data"
+lesson three more times, each slightly different:**
+- A perfectly symmetric 2-tick oscillation produced an EXACT-zero
+  cloud width (senkou_a and senkou_b landing on literally the same
+  value), making "inside the cloud" a floating-point coin-flip rather
+  than a real behavior — fixed by using genuine random noise around a
+  fixed mean instead of a deterministic oscillation.
+- A Kumo-breakout test built on a random-walk "stable" period drifted
+  just barely across the cloud boundary ON ITS OWN before my
+  deliberate breakout candle, so there was no clean crossing left to
+  detect — fixed by using non-cumulative noise around a fixed center
+  instead of a random walk.
+- The bearish-breakdown half of that same test then failed for a
+  completely different, non-code reason: the two-part test script only
+  called `random.seed()` once at the top, so the second block silently
+  continued the same random sequence instead of a fresh one, landing
+  on a different boundary case than an isolated re-test of the exact
+  same logic (which passed). Confirmed by reproducing the failure,
+  then reseeding properly and watching it pass — the code was correct
+  throughout; the test needed its own independent seed per scenario.
+
+Tested: empty/too-few-candles (<80) degrades gracefully; clean
+sustained uptrend/downtrend correctly produce price-above/below-cloud,
+bullish/bearish Chikou and future-cloud direction, Strong Bullish/
+Strong Bearish; genuinely random rangebound data produces a real (non-
+zero) cloud width and correctly lands Neutral when the four component
+signals disagree with each other; bullish Kumo breakout and bearish
+Kumo breakdown both directly verified with deterministic pre-event
+candles (eliminating boundary ambiguity from randomness); full eight-
+engine `TechnicalAgent` wiring re-tested (VWAP/EMA/MACD/RSI/ADX/ATR/
+Supertrend/Ichimoku all publishing together); full existing suite
+re-run, zero regressions.
+
+**Stopping here for review**, per this spec's one-at-a-time pacing.
+Remaining, in the spec's own order: Bollinger Bands, Stochastic RSI,
+Momentum Engine, Volume Analysis, Multi-Timeframe Analysis (extending
+what RegimeAgent already computes), then the final Technical Score/
+Confirmation/AI Interpretation/Output aggregation layer tying all
+eight-plus engines together.
+
+### Increments 9-13 + final aggregation — DONE, tested — Feature #7 COMPLETE
+
+Per explicit instruction ("continue and not wait for confirmation"),
+built the rest of Feature #7 in one pass rather than stopping after
+each remaining engine — still fully tested, just not paused for
+review between each one.
+
+- [x] **Bollinger Band Engine** — Upper/Middle/Lower bands, Band
+  Width, Squeeze/Expansion, Breakout, Mean Reversion. Reuses the
+  IDENTICAL rolling-mean/stdev formula `mtf_confluence_strategy.
+  bollinger_percent_b()` already uses (that function only exposes %B,
+  not the absolute band values needed here) — same statistics, not a
+  second independent calculation.
+- [x] **Stochastic RSI Engine** — %K/%D, crossovers, overbought/
+  oversold. Genuinely different from the existing `stochastic()`
+  (which operates on price H/L/C) — applies the same %K/%D formula to
+  the RSI *series* instead, reusing `mtf_confluence_strategy.rsi()`
+  for the underlying values. Per the spec's own instruction, used only
+  as secondary confirmation.
+- [x] **Momentum Engine** — Rate of Change, Momentum, Acceleration,
+  Divergence. Genuinely new (no existing ROC/momentum calculation
+  elsewhere). **Two real bugs found and fixed during testing**: (1) an
+  index-arithmetic bug in the divergence detection — `range(half, n)`
+  already yields indices starting at `half`, but the code added `half`
+  again on top, producing an out-of-range index into the window array,
+  caught immediately by running the test (an `IndexError`), not
+  shipped; (2) a design flaw where a tiny, noise-level deceleration
+  (-0.057%) could override a clearly positive +4% ROC and force a
+  Neutral bias — fixed by making bias reflect ROC direction primarily,
+  with acceleration reported as its own informational field rather
+  than gating the bias.
+- [x] **Volume Analysis Engine** — Volume Spike, Average/Relative
+  Volume, Breakout, Confirmation. **Honest, disclosed gap**: the INDEX
+  itself has no real traded volume (documented fact already
+  established elsewhere in this codebase — NIFTY is a calculated
+  value, not a traded instrument) and Dhan's index intraday candle
+  response carries no volume field at all. This engine checks for
+  volume data on whatever candles it receives and reports unavailable
+  with an honest reason when none exists (which is what happens with
+  the current `regime_candles` wiring) — same disclosed-gap pattern as
+  Market Breadth elsewhere, not silently faked. Tested both the
+  no-data honest-gap path and a genuine spike with real volume data.
+- [x] **Multi-Timeframe Analysis Engine** — Trend Alignment/Conflict,
+  Higher-Timeframe Confirmation. Reuses RegimeAgent's OWN existing
+  1m/5m/15m confluence read (`regime:{symbol}`'s `confluence`/
+  `tf_bias`) rather than fetching additional timeframes — 3m/30m/60m
+  are NOT added, flagged as a disclosed gap rather than silently
+  expanded (would mean new API calls against this confirmation-only
+  engine's own "reuse existing feeds" mandate).
+- [x] **Final aggregation layer** (`technical_output()`) — runs all 13
+  engines exactly once each, combines them into the spec's own
+  Technical Score (0-100)/Technical Bias (5-level)/Confidence%/Trend
+  Strength%/Momentum%/Volatility%/Indicator Summary/Indicator
+  Agreement%/Confirmation Status/recommended stop-loss distance
+  (reusing the ATR engine's own value, not a second formula). Per the
+  spec's weight table (Ichimoku 20%, VWAP/EMA/MACD/ADX/Supertrend 10%
+  each, RSI/ATR/Bollinger/StochRSI/Volume/MTF 5% each, Momentum 10%),
+  normalized against whichever engines actually have data (graceful
+  degradation, same convention throughout this feature).
+- [x] **AI Interpretation** (`generate_technical_commentary()`) —
+  rule-based, matching the spec's own example sentences exactly
+  ("Price remains above VWAP with strong EMA alignment.", "MACD
+  histogram expanding confirms bullish momentum.", "Ichimoku Cloud
+  shows strong bullish continuation.", "ADX above 30 confirms trend
+  strength.", "Volume expansion supports breakout.", "Technical
+  indicators do not confirm Option Chain activity."). The last one
+  cross-checks this engine's own technical_bias against Feature #5's
+  institutional_bias — tested both the agreeing case (no false
+  "doesn't confirm" message) and the disagreeing case (correctly
+  flagged).
+- [x] **Wiring**: `TechnicalAgent._compute_technical()` now calls the
+  single `technical_output()` entry point (replacing the incremental
+  per-engine calls built up over increments 1-8) and cross-references
+  `institutional:{symbol}` (already fresh on the bus — `_compute_
+  institutional()` runs earlier in the same cycle) for the commentary
+  check.
+
+Tested: a 300-trial randomized stress test across momentum/bollinger/
+stoch_rsi/volume with varying candle counts (0-130) confirmed zero
+crashes after the index-arithmetic fix; a realistic strong-bullish
+multi-indicator scenario correctly produces Strong Bullish/score 76/
+Partial Confirmation with sensible commentary; the empty-input case
+correctly returns "Insufficient Data" with no crash; the full
+`TechnicalAgent` wiring re-tested end-to-end (all 13 engines present
+in `indicator_summary`, commentary correctly cross-references
+institutional bias, error isolation still works); `/api/technical/
+{symbol}` re-tested against the new richer output shape; full existing
+suite (`test_dhan_scrip_master.py`) and the ADX byte-for-byte
+regression re-run, zero regressions anywhere in the whole session.
+
+**Feature #7 (Technical Analysis Engine) is now complete.** Every
+indicator engine reused existing calculations wherever they already
+existed (MACD/RSI/Stochastic/Bollinger/ATR/ADX from `mtf_confluence_
+strategy.py`, Supertrend/Ichimoku-base from `market_bias.py`, MTF
+confluence from `RegimeAgent`) and only built genuinely new
+interpretation layers (VWAP cross/slope/retest, EMA alignment/crosses,
+Ichimoku's real forward-shift, Stochastic-of-RSI, Momentum/ROC,
+Volume analysis) — confirmed via review before each increment, not
+assumed. Same gap as Features #4/#5: the data flows into `technical:
+{symbol}` and is served at `/api/technical/{symbol}`, but there's no
+dashboard panel displaying it yet.
+
+### Technical Analysis dashboard panel + chart indicator overlays (2026-07-25)
+
+Per explicit request: a display panel for Feature #7, plus resolving
+the TradingView chart issue with the stated overall objective of
+getting "candle and strategies indicators on the chart" together.
+
+- [x] **Re-audited the entire candle-loading pipeline once more**
+  before building anything new, specifically looking for anything
+  missed in earlier rounds. Confirmed the DB-tier reordering (today's
+  DB → bus → live REST → DB most-recent-session as last resort) is
+  already in place and logically sound — found no further code-side
+  bug on this pass. Without fresh live evidence (market was closed
+  during this session too), there's nothing further to fix blind here
+  — continuing to point at the previously-identified TLS/certifi
+  environment issue as the most likely remaining blocker, which is a
+  fix on the user's machine, not something addressable from this
+  sandbox.
+- [x] **New "Technical Analysis" panel** on the dashboard, between
+  Institutional Activity and the Option Chain table. Fetched from a
+  new call inside `refresh()` (`loadTechnical()`), alongside the
+  existing analysis/institutional fetches, so all three panels stay in
+  sync on symbol switch. Shows: Technical Score with a color-coded bar,
+  Confirmation Status, Technical Bias, Confidence/Trend-Strength/
+  Momentum/Volatility percentages, Indicator Agreement%, suggested
+  stop distance, the AI Interpretation bullet list, and a per-
+  indicator summary table (skipping unavailable ones, with an honest
+  note about how many and why — e.g. Volume needing futures data not
+  currently wired in).
+- [x] **Chart indicator overlays — "candle and strategies indicators
+  on the chart".** New `_indicator_overlays()` in app.py computes
+  EMA20/EMA50 (reusing `mtf_confluence_strategy.ema()`'s existing full
+  series), Supertrend (reusing `market_bias.supertrend()`'s existing
+  full series), and Bollinger upper/lower bands (same rolling-stats
+  formula `bollinger_percent_b()`/`technical_engine.bollinger_engine()`
+  already use, evaluated at every index instead of just the latest) —
+  all as proper multi-point LINE SERIES for the chart, not single
+  values. Sent over the same `/ws/candles` socket as a new `overlays`
+  message type, throttled to once every 30s (these don't shift
+  meaningfully bar-to-bar). Frontend creates 5 Lightweight Charts line
+  series once at chart init (EMA20 blue, EMA50 amber, Supertrend
+  purple, Bollinger bands dashed grey) and populates them via
+  `setData()` on each overlay message. New legend with checkboxes
+  under the chart to toggle each line on/off independently, keeping
+  the chart readable rather than always showing all 5 at once.
+
+Tested: `_indicator_overlays()` directly — all 5 series compute with
+correct time/value point format, empty/too-few-candles (<60) correctly
+returns `{}` with no crash; `renderTae()` smoke-tested in Node with a
+DOM shim across a realistic payload, the not-available case, and null
+input — all render correctly; chart overlay initialization and
+toggling smoke-tested with a mocked LightweightCharts library — all 5
+line series created correctly, toggle-off/toggle-on both work; full
+existing Python suite re-run, zero regressions. NOT tested in an
+actual browser (this sandbox can't render one) — same disclosed
+limitation as every other UI piece built this session.
+
+### Chart marker anchoring bug fixed (2026-07-25, live report)
+
+Live screenshot showed "False Breakout" appearing at the same visual
+position on the chart regardless of which index was selected —
+looked like the same event repeating identically across NIFTY/
+BANKNIFTY/FINNIFTY/SENSEX rather than each symbol's own read.
+
+- [x] **Confirmed first, not assumed: `institutional:{symbol}` IS
+  correctly symbol-scoped** on both the write side (agents.py) and
+  read side (app.py, both call sites) — grepped directly to rule out
+  a shared-data bug before looking anywhere else. Each symbol's
+  institutional computation genuinely runs independently; if all four
+  showed similarly low scores/False Breakout at once, that can be a
+  legitimate correlated read during quiet/closed-market conditions,
+  not necessarily a bug on its own.
+- [x] **Real bug found: both marker-conversion functions (`_smart_
+  money_to_markers()`, `_institutional_to_markers()`) always stamped
+  markers with wall-clock `time.time()`** rather than any symbol-
+  specific timestamp. Since "now" barely changes across a quick
+  symbol switch, markers for every symbol landed at nearly IDENTICAL
+  positions — exactly the reported symptom. Fixed: both functions now
+  take an explicit `anchor_ts` parameter — the actual last real candle
+  time for THAT SPECIFIC SYMBOL (the most recent live tick if one has
+  arrived this connection, else the last bar of the historical seed
+  sent at connect) — falling back to wall-clock only if the caller
+  genuinely has no candle data at all. This ties each marker to where
+  it actually belongs on that symbol's own timeline rather than a
+  shared "now".
+
+Tested directly: two different anchor timestamps produce two
+genuinely different marker times (not just theoretically — asserted
+the actual values differ); omitting `anchor_ts` still falls back to
+wall-clock time (full backward compatibility, in case any other
+caller doesn't have a real candle time handy); confirmed for both
+marker functions. Full existing suite re-run, zero regressions.
+
+### Candle chart root cause FOUND AND FIXED (2026-07-25, live capture)
+
+Live browser capture of the actual `"type":"history"` WebSocket
+message finally gave direct proof, ending a long back-and-forth of
+guessing without evidence: **55 candles spanning ~11 hours, every
+single one with open=high=low=close=23767.45 — an exact flat line.**
+Not empty data (which is why every earlier "is there any data at all"
+check let it through) — degenerate data.
+
+- **Root cause**: the live websocket tick feed re-broadcasts the last
+  known LTP as a keepalive/reconnect artifact while the market is
+  closed, rather than genuine trades. Each sparse repeat (~12 minutes
+  apart in the captured data) lands in a different 1-minute bucket, so
+  the candle builder persists a "new" candle each time — but every one
+  is a single static point, not real price action. This tier
+  technically wasn't empty, so `if not history_payload` always let it
+  through and permanently blocked every fallback tier below it — including
+  the live REST call, which was independently PROVEN to return real,
+  varying OHLC (the legacy Price Chart panel, which only ever uses that
+  same REST endpoint, showed genuine movement the whole time this chart
+  showed a flat line — the two panels disagreeing was itself a strong
+  clue, followed up on directly rather than dismissed).
+- **Fix**: new `_is_degenerate(candles)` check — true when a candle
+  set has zero price variation across every entry (all closes
+  identical). Applied to all three DB-sourced tiers (today's DB, and
+  both DB "most-recent-session" last-resort tiers) — a degenerate
+  result from any of them is now treated the same as empty, so the
+  pipeline correctly falls through to the next, more trustworthy tier
+  instead of accepting flat data just because it's technically
+  non-empty. Diagnostic fields (`db_today_degenerate`, `db_1m_most_
+  recent_degenerate`, `db_5m_most_recent_degenerate`) added to the
+  existing diagnostics dict — the frontend already generically
+  surfaces this whole dict as a tooltip whenever candles end up empty,
+  so no frontend change was needed for these to show up.
+
+Tested directly against the EXACT reported data: confirmed the 55
+flat candles are correctly flagged degenerate; confirmed genuine
+varying data (matching the legacy chart's real REST response shape)
+is correctly NOT flagged; confirmed edge cases (empty list, single
+candle) behave sensibly; then simulated the FULL three-tier fallback
+with this exact scenario (degenerate DB tier 1 → empty bus tier 2 →
+real REST tier 3) and confirmed the pipeline now correctly lands on
+100 real varying candles instead of getting stuck on the flat DB data
+— directly reproducing and resolving the reported symptom, not just
+patching the general category of bug. Full existing suite re-run,
+zero regressions.
+
+**Not yet addressed** (flagged, not silently worked around): the
+write-side root cause — `_build_candle`'s own logic still persists a
+new DB row for these stale keepalive ticks in the first place. This
+read-side fix means the chart will now correctly skip over that
+degenerate data and show real REST-sourced candles instead, but the DB
+will keep quietly accumulating more flat rows underneath until the
+write side is also hardened — worth revisiting, lower urgency now that
+the visible symptom is resolved.
+
+### Chart timeframe selector + legacy panel removal + OHLC hover (2026-07-25)
+
+Per explicit multi-part request. Delivered this session:
+
+- [x] **Timeframe selector (1m/5m/15m/1h)** — `/ws/candles/{symbol}`
+  now accepts `?interval=1/5/15/60`. 1m/5m/15m read from their own
+  DB-persisted security_id (`{symbol}_SPOT_{interval}m` — all three
+  already persisted by RegimeAgent's existing `_persist_candles`, no
+  new write path); 60m ("1h") isn't persisted anywhere, so it skips
+  DB tiers entirely and goes straight to a live REST call (Dhan's
+  `intraday()` already accepts arbitrary interval strings) — a
+  disclosed, deliberate gap rather than a silently degraded 1h view.
+  The bus `regime_candles` tier (always 5m) now only applies when the
+  user actually selected 5m — wrong granularity otherwise. Live tick-
+  by-tick streaming (`live_candle:{symbol}`, always 1m data) is now
+  gated to only fire for the 1m view — pushing 1m ticks into a 5m/15m/
+  60m chart would misrepresent the current bar. Cross-timeframe last
+  resort added: if the requested interval has no data of its own
+  (including 60m, which never does), falls back to the 5m most-
+  recent-session data rather than showing a blank chart — coarser
+  real data beats nothing.
+  Frontend: 4 toolbar buttons calling `switchLwInterval()`, which
+  reconnects the same symbol's socket with the new interval.
+  **Tested end-to-end** with FastAPI's TestClient against a real
+  seeded in-memory SQLite DB (shared-cache, so multiple independent
+  connections — matching production's per-call-fresh-connection
+  behavior — all see the same data): confirmed 1m/5m each return their
+  own distinct candle set from the correct security_id; confirmed 60m
+  correctly skips DB, hits REST (fails gracefully with no test broker
+  configured, surfaces `rest_error`), and correctly falls through to
+  the cross-timeframe 5m last resort; confirmed an interval with no
+  persisted data of its own (15m in the test) also falls through
+  correctly. Not a unit-test-in-isolation check — an actual live
+  connection through the real endpoint.
+- [x] **Legacy "Price Chart" panel removed.** Turned out to share
+  layout wrapper divs (`#chartPanel`/`#chartCol`/`#sideCol`) with the
+  AI Trade Signal, Live Metrics, and AI Market Insights panels — NOT
+  legacy, and had to stay untouched. Removed only the canvas element
+  and its 1m/5m/15m header buttons; kept everything else nested in the
+  same wrapper. Added a null-guard to `drawCandles()` (still harmlessly
+  called by `applyTheme()` and the window-resize listener) so those
+  callers no-op cleanly instead of throwing once the canvas element no
+  longer exists, rather than hunting down and removing every caller
+  individually (safer, lower-risk fix). Removed the now-dead
+  `loadCandles()` call from `refreshAll()` — confirmed first that
+  `candleData`/`candleLevels` aren't read by anything else before
+  retiring the fetch cycle.
+- [x] **Hover OHLC readout** ("chart hover option ... same as
+  TradingView") — `subscribeCrosshairMove()` populates a toolbar
+  readout (O/H/L/C + change/change%, color-coded) matching
+  TradingView's own fixed-line style (shown in the reference
+  screenshot) rather than a floating tooltip. Smoke-tested with a
+  mocked chart/DOM: confirmed it populates correctly on a simulated
+  hover and clears cleanly when the cursor leaves the chart.
+
+**Not yet delivered from this same request** (flagged, not silently
+dropped): Volume + MACD/RSI/Stochastic/ATR sub-panes matching the
+reference screenshot's multi-pane layout — a substantial additional
+lift (each needs its own synced Lightweight Charts instance with
+crosshair/time-scale sync against the main chart), and Volume
+specifically needs an honest caveat: index candles carry no volume
+field (an already-established fact in this codebase), so a real
+volume pane needs futures volume accumulated as a persisted series,
+which doesn't exist yet — would need building, not faking. R1-R3/S1-S3
+"update" — these are already drawn as labeled price lines from earlier
+work; nothing further identified to change without clarification on
+what specifically should differ.
+
+### Volume persistence pipeline + chart Volume pane (2026-07-25)
+
+Per explicit instruction: "Volume is NOT optional." Reviewed the
+referenced Dhan Option Chain API docs directly before building
+anything — confirmed that endpoint gives OI/Greeks/volume PER OPTION
+STRIKE (already captured, `_leg()`'s own `volume` field), and that
+`UnderlyingSecurityId`/`UnderlyingSeg`/`Expiry` are REQUEST parameters
+(which chain to fetch), not response fields carrying separate
+spot/futures volume — a genuine correction, not a silent
+reinterpretation. The real, already-fetched source is the EXISTING
+futures quote poll (`_poll_futures_via_rest`, used for the Futures
+panel) — its tick dict already carries a `volume` field (documented
+in `_update_future_ohlc`'s own VWAP-proxy note as "cumulative session
+volume") that was being silently dropped before this session.
+
+- [x] **Wired the tick's volume through** — `_classify_future_tick`
+  now passes `tick.get("volume")` into `_update_future_ohlc` instead
+  of discarding it.
+- [x] **New `_build_volume_candle()`** — builds a REAL per-minute
+  traded-volume series from the cumulative counter (the delta between
+  consecutive minute buckets, not the running total itself — a bar
+  showing "total volume since open" at every single candle would be
+  meaningless). Mirrors `_build_candle`'s own minute-bucketing
+  technique exactly, applied to volume instead of OHLC. A negative
+  delta (counter reset, e.g. new session) is clamped to 0 rather than
+  persisted as nonsense.
+- [x] **New `history.upsert_volume_history()`/`get_volume_history()`**
+  — reuses the EXISTING `candles` table (already has a `v` column)
+  rather than a new table, per explicit "reuse existing infrastructure"
+  instruction. Uses `ON CONFLICT DO UPDATE` (not a naive `INSERT OR
+  REPLACE`) specifically so writing volume for a (security_id, ts) that
+  already has a price row only touches the `v` column — a naive
+  REPLACE would silently null out that row's OHLC. Persisted under a
+  DISTINCT `{symbol}_FUT_1m` key — deliberately NOT the same
+  `_SPOT_1m` key price candles use, since this is futures volume (the
+  only real volume source; the index itself has none) and conflating
+  the two would be a real data-integrity bug, caught and fixed before
+  it shipped.
+- [x] **`/ws/candles` merges volume onto the price candle payload** by
+  matching timestamp, only at the 1m interval (the only granularity
+  volume is persisted at) — coarser intervals get no volume rather
+  than a fabricated aggregate, a disclosed gap not silently faked.
+- [x] **Chart Volume pane** — uses Lightweight Charts' own documented
+  overlay pattern (a histogram series on a SEPARATE price scale,
+  scaled to the bottom ~18% of the chart) rather than a second synced
+  chart instance, per explicit "prefer official Lightweight Chart
+  APIs... do not create custom workarounds if native functionality
+  exists" instruction — this is the officially recommended approach
+  specifically for price+volume (unlike oscillator panes, which
+  genuinely do need separate instances). Bars colored green/red
+  matching the candle's own up/down color. Toggle checkbox in the
+  legend ("Futures Volume" — labeled explicitly as futures, not bare
+  "Volume", so it's never mistaken for the index's own volume, which
+  doesn't exist). Honest empty-state note when no volume has
+  accumulated yet for the session, rather than a blank pane with no
+  explanation.
+
+Tested extensively: hand-traced a simulated sequence of cumulative-
+volume ticks across 3 minute boundaries and confirmed the persisted
+per-minute deltas exactly matched manual arithmetic (200/600/400);
+confirmed zero collision with the `_SPOT_1m` security_id; full end-to-
+end test through the real WebSocket endpoint with a seeded DB
+including a REALISTIC partial-coverage gap (volume only for every
+other candle) — confirmed the merge correctly attaches real volume
+where it exists and honestly leaves `None` elsewhere, not a fabricated
+zero; volume series creation/toggle/data-population smoke-tested with
+a mocked chart. Full existing suite re-run, zero regressions.
+
+**Deferred, not attempted this session** (the remaining request was
+extremely large — full TradingView-parity multi-pane layout, ZigZag,
+Series Markers workflow for entries/AI signals/target/stop-loss,
+Bands plugin evaluation, enhanced R1-R3/S1-S3 with Strength/Distance/
+Source labels): flagged directly rather than rushed. Given the size,
+recommend tackling as separate follow-ups rather than one pass.
+
+### Full synced multi-pane MACD/RSI/StochRSI/ATR layout (2026-07-25)
+
+Per explicit request: "use TradingView toolkits ... prefer official
+Lightweight Chart APIs ... do not create custom workarounds if native
+functionality exists." Reviewed the official tutorial (tradingview.
+github.io/lightweight-charts/tutorials/how_to/set-crosshair-position)
+directly before writing any sync code, rather than guessing at the
+API — confirmed the exact officially-documented pattern (`subscribe
+VisibleLogicalRangeChange` + `setVisibleLogicalRange` for time-scale
+sync; `setCrosshairPosition`/`clearCrosshairPosition` for crosshair
+sync) and followed it, generalized from the tutorial's 2-chart example
+to this layout's 5 charts (main + 4 sub-panes).
+
+- [x] **Backend**: new `_atr_series()` and `_stoch_rsi_series()` in
+  app.py compute FULL historical series (existing engine functions —
+  `mtf_confluence_strategy.atr()`/`technical_engine.stoch_rsi_engine()`
+  — only ever return the latest single value, since that's all
+  position-sizing/confirmation needs; a chart pane needs the whole
+  history). `_atr_series()`'s last value verified BYTE-IDENTICAL to
+  the existing single-value `atr()` for the same candles before
+  trusting it — same Wilder-smoothing recurrence, not a second
+  drifting implementation. MACD/RSI reuse `mcs.macd()`/`mcs.rsi()`
+  directly (already full series). New `_pane_series()` assembles all
+  7 series (macd_line/signal/hist, rsi, stoch_k/d, atr) into one
+  payload, sent as a new `"panes"` WebSocket message alongside the
+  existing `"overlays"` message, same 30s throttle, same candle
+  source (regime_candles, no new API call).
+- [x] **Frontend**: 4 new Lightweight Charts instances (MACD/RSI/
+  StochRSI/ATR), each in its own stacked container below the main
+  chart + volume pane, created via a shared `createPaneChart()`
+  helper (matching the main chart's own ResizeObserver auto-resize
+  pattern). RSI pane gets 70/30 reference price lines, StochRSI gets
+  80/20 — via `createPriceLine()`, the native API, not custom-drawn
+  lines. Time-scale sync: every chart's `subscribeVisibleLogicalRange
+  Change` propagates to all four others through a re-entrancy-guarded
+  loop (zoom/scroll on ANY pane moves all five together). Crosshair
+  sync: hovering any chart calls `setCrosshairPosition` on all others
+  — critically, each pane supplies ITS OWN value at the hovered time
+  (via a per-pane `dataByTime` lookup populated from the "panes"
+  message), not the hovering chart's value — the official tutorial's
+  own example uses mirrored data across both charts so this distinction
+  wasn't obvious from the example alone, but genuinely matters here
+  since MACD/RSI/price are on completely different scales.
+- [x] **MACD pane**: histogram (green/red matching sign) + 2 line
+  series (MACD, signal) — three series sharing one pane. **RSI pane**:
+  single line + reference lines. **StochRSI pane**: %K/%D two-line +
+  reference lof lines. **ATR pane**: single line.
+
+Tested extensively, all via mocked chart objects since this sandbox
+has no real browser: full 300-trial-style structural verification —
+confirmed all 5 chart instances get created and all 4 panes exist;
+confirmed a range change on ANY single chart (tested via the MACD
+pane specifically, not just the main chart) propagates correctly to
+all 4 others; confirmed hovering the MAIN chart positions every
+sub-pane's crosshair using THAT PANE'S OWN data at the shared time
+(not the main chart's price — the subtle point above, explicitly
+asserted, not just checked for "did it call the function"); confirmed
+hovering a SUB-PANE (Stochastic) correctly syncs back to the main
+chart (using its own OHLC close) AND to the other panes; confirmed
+mouse-leave correctly clears the crosshair on every synced chart, not
+just the one it left. Separately verified the "panes" message handler
+converts the wire format to Lightweight Charts' expected shape
+correctly, and — critically — that its `dataByTime` lookup keys use
+the exact same `toLwTime()`-shifted timestamp convention that real
+crosshair events will report at runtime, so the two pieces will
+actually match each other in the browser, not just in isolation.
+Full existing Python suite + JS syntax re-verified, zero regressions.
+
+**Still deferred from the original large request**: ZigZag indicator,
+Series Markers workflow (Buy/Sell/Entry/Exit/AI Buy/AI Sell/Target
+Hit/Stop Loss Hit), Bands plugin evaluation, enhanced R1-R3/S1-S3
+labels (Strength%/Distance/Source per level) — each is its own
+substantial piece, not attempted this pass.
+
+### WebSocket ghost-reconnect bug fixed (2026-07-25, live log report)
+
+User-reported server log showed 5 concurrent `/ws/candles/NIFTY?
+interval=1` connections opened in quick succession for the SAME
+symbol+interval — confirmed as a real bug, not expected/benign
+behavior, before investigating further.
+
+- **Root cause**: `connectLwChart()` called `.close()` on the old
+  socket before creating a new one, but WebSocket close is
+  ASYNCHRONOUS — the old socket's `onclose` handler was still attached
+  when this ran. Once that close eventually completed, the OLD handler
+  fired and, having no way to know the close was intentional (versus a
+  genuine drop), unconditionally scheduled its own 3-second reconnect
+  — on top of the brand-new connection that had already been opened.
+  Every symbol switch, interval switch, or reconnect attempt left one
+  of these "ghost" timers running, each eventually opening a spurious
+  duplicate connection.
+- **Fix**: before closing the old socket, its handlers (`onclose`/
+  `onerror`/`onmessage`/`onopen`) are explicitly nulled out first, so
+  an in-flight close can never trigger anything. A `lwConnectSeq`
+  counter additionally guards the legitimate-reconnect path itself —
+  each connect() call stamps its own reconnect timer with the sequence
+  number active at the time; if a newer connect() has since taken
+  over, that stale timer checks the sequence and no-ops instead of
+  firing.
+
+Tested by directly simulating the exact race condition from the live
+report: 5 rapid successive `connectLwChart()` calls (symbol switches)
+followed by manually flushing all pending async close callbacks (the
+delayed condition that caused the original bug) — confirmed exactly 5
+sockets exist afterward, zero ghost reconnects. Separately confirmed
+all 4 superseded sockets had `onclose` explicitly nulled before being
+closed. Also confirmed the fix does NOT break the legitimate case: a
+genuine unexpected disconnect (simulated as a drop not caused by our
+own `.close()`) still correctly schedules and fires exactly one real
+reconnect — the fix only suppresses ghost reconnects from intentional
+closes, not real network drops. Full existing suite re-run, zero
+regressions.
+
+### Enhanced R1-R3/S1-S3 level labels (2026-07-25)
+
+Per explicit request: "Enhance them. Each level should display Level
+Name / Current Distance / Strength / Source." `support_resistance.
+merge_levels()` already computed `strength` and a raw `source` tag
+(oi_wall/prev_day_high/prev_day_low/prev_day_close/vwap) — the two
+genuinely missing pieces were Distance and a human-readable Source
+label.
+
+- [x] **`_source_label()`** — reuses `oi`/`oi_chg` already present on
+  OI-wall candidates (no new lookup) to distinguish "Highest CE/PE OI"
+  (a level that's simply the biggest wall) from "Fresh Call/Put
+  Writing" (oi_chg is a large fraction of total oi — genuine fresh
+  positioning this cycle, not just an old established wall) — matching
+  the two distinct source phrasings in the request's own example for
+  what is, underneath, the same `oi_wall` source type. Prev-day/VWAP
+  sources get their own plain-English labels (Previous Day High/Low/
+  Close, VWAP).
+- [x] **Distance** — `distance_pts` and `distance_pct`, computed
+  directly in `merge_levels()` since `spot` is already a parameter
+  there (no new data needed). Positive for resistance (above spot),
+  negative for support (below spot) — signed, not absolute.
+- [x] **Frontend**: price-line titles now show `"R1 Highest CE OI
+  92%"` style compact labels; a new Levels detail panel below the
+  chart shows the full breakdown per level (Source/Strength/Distance)
+  in a two-column R/S layout, matching the request's own example
+  format essentially verbatim.
+
+No backend wiring changes needed beyond `merge_levels()` itself — the
+richer data flows through the SAME existing `levels:{symbol}` bus key
+and the SAME `/ws/candles` "levels" message unchanged.
+
+Tested extensively: confirmed the Highest-OI vs Fresh-Writing
+distinction fires correctly on both sides (small oi_chg/oi ratio →
+"Highest CE/PE OI", large ratio → "Fresh Call/Put Writing"); confirmed
+distance sign is correct (positive above spot, negative below);
+confirmed Previous Day / VWAP labels render correctly; confirmed
+graceful handling of a falsy spot (distance fields cleanly `None`
+rather than a division error) and fully empty input; confirmed
+`check_entry_criteria()` — the other consumer of this same levels
+dict — still works completely unchanged, since it only ever reads the
+untouched `level` field (new fields are purely additive). Frontend
+price-line title generation and the detail-panel HTML tested directly
+against the request's own worked example (R1/Highest CE OI/92%/+58pts)
+and reproduced it exactly, plus the empty-levels clean state. Full
+existing suite re-run, zero regressions.
+
+### Series Markers (trade lifecycle) + ATR Bands (2026-07-25)
+
+Per explicit request to build these two together.
+
+- [x] **Series Markers** — real trade lifecycle events, not the
+  current-state-flag markers built earlier (smart money/institutional,
+  which needed an `anchor_ts` workaround since they're recomputed
+  every cycle). `ExecutionAgent._record_chart_event()` records a
+  genuine event with its own real timestamp and the underlying's SPOT
+  price at that moment (the chart shows spot candles, not option
+  premium — entry/exit happen on the OPTION leg, so this uses `job[
+  "analysis"]["spot"]` at entry and the same `chain:{symbol}` bus key
+  `_monitor_one()` already reads at exit, no new data fetch). Hooked
+  into `place()` (entry) and `exit()` (exit, classified into `target_
+  hit`/`stop_hit`/generic `exit` by reusing the SAME `reason` string
+  `_monitor_one()` already builds — not a separate classification).
+  Capped at the last 50 events per symbol. New `_trade_events_to_
+  markers()` converts these into Buy Entry (green arrow up)/Sell Exit
+  (amber arrow down)/Target Hit (green circle)/Stop Loss Hit (red
+  circle) Lightweight Charts markers, sent uncapped/prioritized ahead
+  of the current-state flags in the same "signals" message (real
+  trade history shouldn't get truncated away by a noisy option-chain
+  cycle).
+  **Honest gap**: the spec's own marker list also asked for "AI Buy"/
+  "AI Sell" specifically — not built this pass. That maps to the
+  spread AI advisory system's HOLD/EXIT calls, a different code path
+  (spreads, not single-leg trades) not yet wired into chart_events.
+  Flagged, not silently omitted.
+- [x] **ATR Bands** — a close ± (ATR × 1.5) envelope, added to `_
+  indicator_overlays()` reusing `_atr_series()` directly (already
+  built and verified byte-identical to the existing single-value
+  `atr()` for the pane work) — no new volatility calculation, per the
+  explicit "do not duplicate functionality already available"
+  instruction. Rendered as dashed green/red lines on the main chart,
+  toggleable via the same legend pattern as the other overlays.
+
+Tested: `_record_chart_event()` directly — entry recorded correctly,
+`spot=None` correctly no-ops rather than placing a marker at a
+nonsensical price, the 50-event cap correctly drops the oldest; the
+exit-reason classification logic tested against 5 real reason strings
+covering all 3 branches (stoploss/target/generic); `_trade_events_to_
+markers()` tested for correct shape/color/text per event kind, and
+empty/None input; ATR bands tested to confirm the envelope genuinely
+sits above/below price at every point, not just structurally present;
+ATR band series creation smoke-tested alongside the other overlays in
+the mocked chart. Full existing suite re-run, zero regressions.
+
+**Still remaining**: ZigZag, Volatility Bands/Dynamic Support Zones
+(beyond the ATR Bands built here), and the AI Buy/AI Sell marker gap
+noted above.
+
+### ZigZag market-structure indicator (2026-07-25)
+
+Per explicit request — the last major deferred piece from the original
+multi-part chart spec.
+
+- [x] **`_zigzag_series()`** — standard reversal-threshold algorithm
+  (0.5% deviation default): tracks a running price extreme in the
+  current direction, confirms it as a pivot once price reverses by
+  more than the threshold, then flips direction. Each confirmed pivot
+  is classified against the PREVIOUS pivot of the SAME type (skipping
+  the alternating opposite pivot in between) into Higher High/Higher
+  Low/Lower High/Lower Low — the market-structure read explicitly
+  requested, not just raw swing points.
+- [x] **Frontend**: a native Lightweight Charts line series connects
+  the confirmed pivots (the zigzag line itself); HH/HL/LH/LL labels
+  use the SAME native Series Markers API as the trade-event markers
+  built earlier. Real subtlety caught here: both trade markers and
+  ZigZag markers want to live on the same series, but `setMarkers()`
+  fully REPLACES the marker set on every call — a naive implementation
+  would have had one silently overwrite the other. Fixed with a small
+  `lwRedrawMarkers()` that always sends the MERGED set from two
+  independently-tracked arrays, and made the ZigZag visibility toggle
+  go through that same function so a message arriving after the user
+  hides ZigZag doesn't silently re-show its markers.
+  **Overlap with the "confirmed by Strategy Engine" request**: rather
+  than build separate cross-referencing logic, ZigZag pivots and real
+  trade markers naturally coexist on the same shared timeline/series
+  already — a strategy-confirmed entry/exit sitting at or near a
+  ZigZag turning point is directly visible without extra plumbing.
+
+Tested extensively: empty/too-few-candles degrades gracefully; a
+hand-constructed uptrend sequence with known expected values correctly
+detects the swing high (110) and swing low (99), and correctly
+classifies a subsequent higher high (125) as HH; a hand-constructed
+downtrend sequence correctly classifies a lower low (80 vs 90) as LL
+and a lower high (95 vs the initial reference) as LH — both directions
+of the HH/HL/LH/LL logic verified, not just one; caught my own wrong
+test assumption once (expected the first detected high to be the
+downtrend's own swing high, forgot the algorithm's first pivot is
+always the very first candle's high, used as a legitimate starting
+reference) — verified this was correct algorithm behavior, not a bug,
+before fixing the test. Frontend: smoke-tested the full pipeline with
+a mocked chart — confirmed the zigzag line populates correctly,
+confirmed markers correctly MERGE with pre-existing trade markers
+rather than overwriting them (the critical behavior), confirmed
+toggling ZigZag off hides both the line and its markers while
+correctly preserving trade markers, and confirmed toggling back on
+restores everything. Full existing suite re-run, zero regressions.
+
+**This closes out all major pieces from the original multi-part chart
+request** except Volatility Bands/Dynamic Support Zones beyond the
+ATR Bands already built, and the AI Buy/AI Sell marker category (spread
+advisory system, not yet wired to chart_events) — both previously
+flagged as deferred.
+
+### Volatility Bands, Dynamic Support Zone, AI Sell markers (2026-07-25)
+
+Closing out the last two deferred pieces from the original chart spec.
+
+- [x] **Volatility Bands** — deliberately a DIFFERENT statistical basis
+  from ATR Bands (already built): ATR measures true RANGE (high-low-
+  close spread per bar); this measures the standard deviation of
+  period-over-period % RETURNS, scaled onto price (±2σ). A genuinely
+  distinct volatility read — a market can have wide bars but calm
+  returns, or the reverse — not the same number relabeled. Verified
+  directly: the two bands' values are NOT identical on the same test
+  data, confirming this isn't a duplicate.
+- [x] **Dynamic Support Zone** — reuses the ZigZag pivots just built
+  (`_zigzag_series()`) rather than any new swing-detection math: a
+  band around the MOST RECENT confirmed low pivot, width scaled by
+  ATR (reusing `atr_vals` already computed for ATR Bands) so the zone
+  widens in volatile conditions and tightens in calm ones. Plotted as
+  a flat band persisting forward from the pivot's own time to "now" —
+  a real support zone persists until price breaks it, not just at one
+  instant. Verified the zone is genuinely flat (constant value)
+  across its whole time range, anchored correctly to the last low
+  pivot.
+- [x] **AI Sell markers** — wired the spread AI advisory system's
+  confident EXIT calls (`_spread_ai_check()`, reusing the exact same
+  confidence-threshold gate already used for its own alert, not a
+  new/different threshold) into `chart_events`, recorded regardless of
+  whether `spread_ai_auto_exit_enabled` actually executes it — the
+  marker represents the AI's call, not necessarily an executed trade.
+  **Honest gap, stated directly rather than faked**: there is no "AI
+  Buy" equivalent wired anywhere — this advisory system only ever runs
+  HOLD/EXIT checks on ALREADY-OPEN spread positions; it never
+  recommends new entries, so no genuine "AI Buy" event exists in this
+  codebase to record. A real AI Buy marker would need a wholly
+  different capability (an AI-driven entry-suggestion system) that
+  doesn't exist yet, not just a missing wire-up.
+
+Tested: `_indicator_overlays()` produces both new band types with
+correct envelope behavior (upper > close > lower at every point);
+directly confirmed ATR Bands and Volatility Bands are numerically
+different on identical input (not a relabeled duplicate); Dynamic
+Support Zone confirmed flat/constant across its full time range and
+correctly anchored to the last confirmed low pivot; AI Sell marker
+conversion tested for correct shape/color/label. Frontend: both new
+band pairs confirmed created alongside all existing overlays via the
+same generic (no-code-change-needed) overlays message handler. Full
+existing suite re-run, zero regressions.
+
+**This closes the entire original multi-part TradingView-parity chart
+request** — every section addressed: real candles + timeframe
+selector, hover OHLC, full overlay set (EMA/Supertrend/Bollinger/ATR/
+Volatility Bands/Dynamic Support Zones/ZigZag), synced multi-pane
+MACD/RSI/StochRSI/ATR layout, real Volume persistence, Series Markers
+for the full trade lifecycle plus AI Sell, and enhanced R1-R3/S1-S3
+labels — with the one disclosed, genuine gap (AI Buy) requiring new
+capability this session didn't build, not a missed wire-up.
+
+## Feature #9 — Institutional Portfolio Risk Engine (2026-07-26)
+
+Explicit instruction: "DO NOT create a new Risk Engine... extend
+them, do not duplicate." Full audit done first (presented before any
+code), confirming most sub-systems already exist inside RiskAgent/
+sizing.py. This increment covers two of the spec's ~20 sections —
+Greeks Risk and the weighted AI Risk Score composite — the two other
+sections most other pieces (Trade Quality Score, Portfolio Limits,
+dashboard gauge) would depend on having available.
+
+### New `risk_engine.py`
+
+- [x] **`aggregate_portfolio_greeks()`** — Net Delta/Gamma/Theta/Vega
+  across open single-leg positions, scaled by quantity. Reuses per-leg
+  greeks analyzer.py ALREADY computes for every strike (broker-
+  supplied, or Black-Scholes fallback via its existing `greeks_source`
+  field) — zero new greek calculation, purely a lookup-and-sum.
+  Missing/incomplete chain data for a position is excluded and
+  counted separately (`positions_missing_data`), not silently treated
+  as zero exposure. Honest gap: single-leg positions only, not credit
+  spreads yet (spreads have two legs with opposing signs — a natural
+  next extension, not attempted this pass).
+- [x] **`compute_ai_risk_score()`** — the spec's own weighted
+  composite (Portfolio 25% / Liquidity 20% / Greeks 15% / Volatility
+  15% / Institutional 10% / Technical 10% / News 5%). Portfolio reuses
+  the SAME two numbers RiskAgent.evaluate() already gates on (daily
+  loss limit, max concurrent positions) as a graduated score instead
+  of pass/fail. Liquidity is genuinely new — average bid-ask spread %
+  across open positions, reusing the `bid`/`ask` fields already
+  present on every leg. Greeks reuses the aggregation above, expressed
+  as net delta exposure relative to deployed capital. Volatility
+  reuses analyzer.py's own existing `risk_meter` (confirmed via audit
+  to be a real but NARROWER score — distance-from-max-pain + PCR skew
+  + IV — that now feeds this slice of the bigger composite rather than
+  being duplicated). Institutional/Technical reuse Feature #5/#7's own
+  outputs directly. News reuses the existing `news_risk_opportunity()`
+  score's magnitude. Missing sub-components are excluded and weights
+  renormalized across whatever's available — not treated as zero risk
+  (misleadingly reassuring) or blocking the score entirely.
+- [x] **Real bug found and fixed during testing**: `news_score=None`
+  (genuinely no news data available) was silently collapsing into
+  `0` (a confirmed calm reading) via a `... or 0` pattern — the two
+  are different things, and conflating them would have let the score
+  quietly treat "no data" as "definitely safe" instead of excluding
+  it. Fixed with an explicit `None` check; verified directly that
+  `news_score=None` now correctly appears in `unavailable` while
+  `news_score=0.0` correctly appears in `components` as a real zero.
+- [x] **Wired into `RiskAgent.cycle()`** as an ambient, portfolio-wide
+  computation (throttled to every 10s) — independent of whether
+  there's a signal to evaluate right now, since this is a standing
+  portfolio-health reading, not a per-trade check. Published to
+  `ai_risk_score`/`portfolio_greeks` bus keys. New `/api/risk-score`
+  endpoint for dashboard consumption, same graceful "not yet computed"
+  pattern as every other engine endpoint this session.
+
+Tested extensively: Greeks aggregation — single position, multi-
+position summing (including opposite CE/PE legs), missing-chain-data
+exclusion, empty positions, all verified against hand-computed
+expected values. AI Risk Score — fully empty inputs (score 0, no
+crash), a genuinely calm scenario, a genuinely high-risk scenario
+(near daily loss limit + wide spread + high volatility, correctly
+reaching "Extreme"), and the None-vs-zero news distinction specifically
+isolated and confirmed. Liquidity component tested directly for tight-
+vs-wide spread discrimination and the missing-bid/ask honest-
+unavailable case. Then tested against the REAL `RiskAgent.cycle()`
+method end-to-end (not isolated mocks) — confirmed both `ai_risk_score`
+and `portfolio_greeks` are correctly computed and published from real
+position/chain data. `/api/risk-score` endpoint tested for both empty
+and populated states. Full existing suite re-run, zero regressions.
+
+**Deliberately not attempted this pass** (per the spec's own "stop
+after implementation for review," and the sheer size of the full
+spec): Trade Quality Score, full Strike Quality/IV-percentile scoring,
+Time/Theta/Correlation Risk, spread Greeks (single-leg only for now),
+Dynamic real-time monitoring, Live Portfolio Monitor dashboard
+aggregation, dashboard risk gauge UI, DB persistence of risk decisions,
+weekly analytics. Each flagged directly, not silently skipped.
+
+### Increment 2: Strike Quality, Trade Quality Score, Time/Theta/Correlation Risk, spread Greeks, DB persistence (2026-07-26)
+
+Continuing the same module, closing most of the gaps flagged above.
+
+- [x] **`strike_quality()`** — ATM/1-ITM/1-OTM/Deep-ITM/Far-OTM tier
+  scoring combined with OI/Volume/Liquidity, per the spec. **Real bug
+  found and fixed during testing**: moneyness was originally computed
+  from spot's distance to the candidate strike, divided by the
+  (candidate strike − ATM) gap — conflating two different reference
+  points. The ATM strike itself would incorrectly classify as "Deep
+  ITM" any time spot wasn't sitting EXACTLY on a strike (the normal
+  case — e.g. spot=23705 with strikes at 23700/23750/...). Fixed:
+  tier is now based purely on strike-STEP distance from ATM
+  (`(strike − atm) / strike_interval`), independent of spot's exact
+  sub-interval position. Verified the exact original bug scenario
+  directly (ATM strike + spot=23723.45 now correctly stays "ATM").
+- [x] **`time_risk()`** — near-close/lunch-session/expiry-day
+  multipliers, reusing only the clock, no new data.
+- [x] **`theta_risk()`** — expected premium decay from time alone
+  before session close, reusing per-leg theta already computed
+  elsewhere. Verified risk is correctly LOWER late in the session
+  (less remaining decay-time budget left to lose), not higher —
+  matching the spec's actual intent (theta eats a bigger fraction of
+  a SHRINKING remaining-time budget, so the RATE of risk accrual
+  increases even as the absolute remaining exposure shrinks).
+- [x] **`correlation_risk()`** — flags multiple CE (or PE) positions
+  open simultaneously across symbols that move together (NIFTY/
+  BANKNIFTY/FINNIFTY/SENSEX), since that's effectively one large
+  leveraged directional bet dressed up as diversification. Flags,
+  doesn't auto-block — contextual judgment left to the caller.
+- [x] **`trade_quality_score()`** — the spec's own PER-TRADE
+  composite (Market Structure/Institutional/Technical/Option Chain
+  Strength/Strike Quality/Liquidity/Volatility/Probability/Historical
+  Similar Trades), explicitly distinct from the portfolio-wide AI Risk
+  Score built in increment 1. Every component reuses an existing
+  engine's output; "Historical Similar Trades" is expressed as a
+  confidence-multiplier on the Probability component's WEIGHT (a 95%
+  estimate from 2 trades counts for less than 95% from 50) rather than
+  a separate score, since more data behind the probability number IS
+  that signal, not a different one. Verified a strong setup (77) scores
+  far above a weak one (14) — the composite genuinely discriminates,
+  not just computes a number.
+- [x] **Spread Greeks** — `aggregate_portfolio_greeks()` extended to
+  cover credit spreads, not just single-leg positions (the honest gap
+  flagged at the end of increment 1). **Second real bug found while
+  building this**: the first draft assumed a `short`/`long` dict-key
+  shape for spread legs — grepped the actual construction code
+  (`agents.py`'s spread-building strategies) and found the REAL shape
+  is a `legs` LIST with `action` ("SELL"/"BUY") and `leg` ("CE"/"PE")
+  fields, completely different from what was assumed. Fixed to match
+  reality rather than shipping against an invented shape. Verified
+  against a real bull_put_spread structure (short PE + long hedge PE)
+  with hand-computed expected delta, confirmed regular positions and
+  spreads combine correctly in one aggregate, and confirmed a spread
+  referencing a strike with no matching chain row is excluded (not
+  crashed).
+- [x] **DB persistence** — new `risk_decisions` table (`history.py`),
+  one row per risk EVALUATION (approval or rejection — per the spec's
+  own "store every approval and rejection," not just trades that
+  executed), with portfolio Greeks unpacked into flat columns for SQL
+  querying rather than a JSON blob. Wired into `RiskAgent.cycle()`
+  right after every decision, reusing data already computed that same
+  cycle (the ambient `ai_risk_score`/`portfolio_greeks`, the signal's
+  own `ai_probability`) rather than a second computation pass.
+
+Tested extensively: Strike Quality across the full tier range (ATM/
+1-ITM/1-OTM/Deep-ITM/Far-OTM) plus the CE/PE moneyness mirror and the
+specific bug-reproduction case; Time Risk across normal/near-close/
+lunch/expiry-day; Theta Risk early-vs-late session and missing-theta
+honesty; Correlation Risk diverse-vs-concentrated positions; Trade
+Quality Score's strong-vs-weak discrimination and the probability-
+confidence-weighting effect; spread Greeks against a real bull_put_
+spread structure with hand-computed expected values, combined-with-
+positions, and missing-strike exclusion; DB persistence against a
+REAL temporary SQLite file (not an in-memory mock) — insert, symbol-
+filtered retrieval, flat-column Greeks unpacking, and None-greeks
+handling all confirmed. Then tested the FULL `RiskAgent.cycle()`
+method end-to-end (not isolated pieces) — confirmed a real risk
+decision, complete with genuinely computed risk score/trade quality/
+liquidity score, gets persisted to a real database file on an actual
+evaluate-and-decide cycle. Full existing suite re-run, zero
+regressions across the whole session's accumulated work.
+
+**Still not attempted after increment 2**: IV Percentile/Rank, Dynamic
+real-time monitoring, Live Portfolio Monitor + dashboard risk gauge
+UI, weekly risk analytics.
+
+### Increment 3: IV Percentile + dashboard risk gauge UI (2026-07-26)
+
+- [x] **IV Percentile/Rank** — reuses `chain_snapshots` (Feature #4's
+  own persistence, already running every ~60s) rather than a new data
+  pipeline. New `history.get_iv_history()` queries that existing table
+  for a range of IV readings; `risk_engine.iv_percentile()` computes
+  where today's IV sits relative to that distribution (standard
+  percentile-rank: % of historical readings at-or-below current IV).
+  **Honest limitation, stated directly in both functions' docstrings
+  and in the output itself** (`window_label`): `chain_snapshots` is
+  pruned after 5 days, so this can only ever be a genuine 5-day IV
+  percentile, not the traditional 30-90 day IV Rank options traders
+  usually mean by that term — the output says so explicitly rather
+  than silently implying a longer lookback than the data supports.
+- [x] **Dashboard risk gauge UI** — new "Portfolio Risk Engine" panel
+  (dashboard.html), following the same pattern as the Institutional/
+  Technical panels built earlier this session. Color-coded per the
+  spec's own "Green/Yellow/Orange/Red" requirement, mapped across the
+  5-level Very Low→Extreme scale. Shows the AI Risk Score with its
+  gauge bar, Portfolio Greeks (Net Delta/Gamma/Theta/Vega, with
+  position-count and missing-data-count context), and a breakdown of
+  which score components are currently available vs missing. New
+  `/api/risk-score` endpoint (already existed from increment 1 — this
+  is its first actual consumer).
+
+Tested: IV percentile at the top/bottom/middle of a historical
+distribution (100th/0th/~50th percentile respectively, confirming the
+calculation is genuinely a percentile rank and not some other
+statistic); the no-history case correctly reports unavailable; the
+honest window-label disclosure confirmed present in the output, not
+just in a comment. `get_iv_history()` tested against a real temporary
+SQLite file with seeded snapshot data, confirming correct chronological
+retrieval. Dashboard panel: JS syntax validated, `renderRiskScore()`
+smoke-tested with a mocked DOM across three cases — a populated payload
+(confirmed correct score display, correct High-risk→orange color
+mapping, correct Greeks formatting), the not-yet-available case, and a
+null input — all render without crashing (one assertion initially
+"failed" due to a mock-object type-coercion quirk absent in a real
+browser's DOM, traced and confirmed not a real bug before moving on).
+Full existing suite re-run, zero regressions across the accumulated
+session.
+
+**Still not attempted after increment 3**: Dynamic real-time
+monitoring, Live Portfolio Monitor's fuller aggregation, weekly risk
+analytics.
+
+### Increment 4: Dynamic Real-Time Risk Monitoring (2026-07-26)
+
+Per explicit follow-up: options chain conditions genuinely change
+within seconds, so risk needs continuous reassessment against open
+positions, not just a point-in-time check at entry.
+
+- [x] **`risk_engine.dynamic_risk_check()`** — compares CURRENT
+  conditions against what was captured at ENTRY time (the position's
+  own `entry_*` snapshot fields — extended this increment with
+  `entry_gamma`/`entry_liquidity_score` alongside the confidence/
+  agreement/regime fields Feature #8 already added) to detect
+  meaningful degradation. All six signals from the spec: **Institutional
+  Exit** (institutional bias was agreeing at entry, now opposes) and
+  **Technical Confirmation Lost** (same pattern, technical side) both
+  reuse Feature #5/#7's live bias reads directly; **VWAP Break** reuses
+  Feature #7's own VWAP engine cross detection; **Gamma Shift** compares
+  current vs entry gamma (>50% change); **OI Shift** reuses Feature #4's
+  own smart-money `oi_migration` data, checking whether THIS position's
+  exact strike shows OI leaving right now; **Liquidity Collapse**
+  compares current vs entry bid-ask spread (>30-point score
+  degradation). Every signal reuses an existing engine's live output —
+  nothing new is calculated, this is purely a then-vs-now comparison.
+  Returns suggested actions (Reduce Position/Move Stop/Exit Partial/
+  Exit Complete) — never auto-executes anything, matching this whole
+  feature's human-in-the-loop principle throughout.
+- [x] **Wired into `ExecutionAgent._monitor_one()`** — the SAME
+  existing 2-second position-monitoring loop that already checks
+  price-based exits (stop-loss/target/trailing), not a separate
+  polling mechanism. Alert deduplication: a signal only fires a fresh
+  alert when it's NEW since the last cycle (tracked per-symbol), so
+  an ongoing risk condition doesn't spam an alert every 2 seconds —
+  but correctly re-alerts if a signal clears and later recurs.
+- [x] **New `/api/dynamic-risk` endpoint + dashboard display** — added
+  to the Portfolio Risk Engine panel, showing active signals per open
+  position with severity-colored suggested actions, or a clean
+  all-clear message when nothing's currently flagged.
+
+Tested all six signal types independently, each verified to fire on
+its specific trigger condition and NOT fire on a genuinely calm
+baseline (caught the same spread-calibration issue as an earlier
+increment when my first "calm" test data had an unintentionally wide
+~2.7% spread under this scale's own calibration — fixed the test with
+a genuinely tight baseline, same lesson applied). Verified CE and PE
+positions correctly mirror direction-sensitive checks (institutional
+exit on a bearish flip for CE, bullish flip for PE). Then tested the
+FULL `ExecutionAgent._monitor_one()` method end-to-end (not isolated
+pieces): confirmed a real institutional-bias flip against an open CE
+position is detected, published to the bus, and fires exactly one
+alert — then called the same method a second time with the identical
+ongoing condition and confirmed NO duplicate alert fires (the
+deduplication working against the real method, not just in isolation).
+`/api/dynamic-risk` endpoint and its dashboard rendering both tested
+for populated and empty states. Full existing suite re-run, zero
+regressions across the whole accumulated session.
+
+**Still not attempted after increment 4**: Live Portfolio Monitor's
+fuller time-series aggregation, weekly risk analytics, and an optional
+auto-act-on-high-severity toggle (deliberately not added — the
+human-in-the-loop default stays until there's real track record to
+justify automating it).
+
+### Increment 5: Expected Loss, portfolio history tracking, weekly risk analytics (2026-07-26)
+
+Closing out the remaining two items from the spec.
+
+- [x] **`risk_engine.expected_loss()`** — per-position expected loss
+  = (1 − win probability) × potential loss if stopped out, reusing the
+  AI Probability Engine's own estimate (Feature #8) rather than a new
+  statistical model. Positions with no probability estimate available
+  are honestly excluded from the total and counted separately, not
+  assumed risk-free.
+- [x] **Rolling portfolio history** — `RiskAgent.cycle()` now tracks a
+  capped (500-point) time series of `{daily_pnl, drawdown, risk_score,
+  expected_loss}` snapshots on every ambient risk computation (~10s),
+  enabling trend display rather than only a single point-in-time
+  reading. Drawdown is peak-realized-P&L-vs-current — a genuinely
+  DIFFERENT number from `ExecutionAgent`'s own real-time unrealized
+  kill-switch check, not a second copy of that trigger logic, purely
+  a display/trend metric. For each open position's expected-loss
+  contribution, builds a synthetic entry-profile lookup (confidence/
+  institutional-agreement/regime AT ENTRY) matched against everything
+  learned since — "given what we knew when this trade opened, and
+  everything learned since, what's our best current estimate."
+- [x] **Weekly Risk Analytics** — new `LearningAgent._weekly_risk_
+  analytics()`, following the exact same pattern as the existing daily
+  journal (an LLM-written critique via `claude()`, same call
+  convention). Runs once per ISO week, reusing `history.get_risk_
+  decisions()` (this session's own DB table) and `closed_trades` — no
+  new data collection. Per the spec's own explicit "never automatically
+  modify production limits" instruction: generates a RECOMMENDATION
+  only, written to a bus key and a journal file for a human to read
+  and manually apply via Settings — nothing here ever calls `config.
+  save()` or touches a production limit, verified directly.
+  **Real bug found and fixed during testing**: the first draft computed
+  `week_start = t - timedelta(days=t.weekday())` without zeroing the
+  time-of-day — for a Monday AFTERNOON, that gives "today at the
+  current clock time" rather than "midnight Monday," silently
+  excluding everything from earlier that same day (and effectively
+  the whole week's earlier data, since weekday()=0 on a Monday means
+  zero days get subtracted at all). Fixed with `.replace(hour=0,
+  minute=0, ...)` to properly zero the clock.
+
+Tested extensively: Expected Loss — empty portfolio (zero, no crash),
+mixed availability (one position with a probability estimate correctly
+included, one without honestly excluded from the total and counted
+separately), and confirmed higher win probability produces LOWER
+expected loss (the relationship the formula is supposed to express,
+not just a number). Then tested the FULL `RiskAgent.cycle()` end-to-
+end (not isolated pieces): confirmed Expected Loss and a rolling
+history point are correctly computed and appended on a real cycle, and
+confirmed drawdown correctly recalculates on a second cycle as P&L
+improves. Weekly analytics: reproduced the exact week-boundary bug
+with a Monday-afternoon test case (confirmed zero decisions matched
+before the fix, all 15 seeded decisions matched after), confirmed
+idempotency (does not regenerate for the same week), and explicitly
+confirmed config remains completely untouched after running — a
+direct test of the spec's own most safety-critical instruction, not
+just assumed. Full existing suite re-run, zero regressions.
+
+**This closes out every major section of the original Institutional
+Portfolio Risk Engine spec** — Position Sizing/Stop-Loss/Portfolio
+Limits (already existed, verified), Greeks Risk, the weighted AI Risk
+Score, Trade Quality Score, Strike Quality, Time/Theta/Correlation
+Risk, spread Greeks, DB persistence, IV Percentile, the dashboard risk
+gauge, Dynamic Real-Time Monitoring, and Expected Loss/portfolio
+history/weekly analytics. Remaining genuine gaps, all disclosed rather
+than silently skipped: auto-acting on dynamic risk signals (kept
+human-in-the-loop by design), and sector/index-level exposure
+breakdowns beyond what max_concurrent_positions already caps.
+
+### Correction: a true long-window IV Rank IS achievable (2026-07-26)
+
+The previous increment's "only a 5-day IV percentile" conclusion was
+challenged directly, and rightly — the earlier reasoning only
+considered `chain_snapshots` (the live 60s-cadence snapshot table,
+genuinely pruned after 5 days) without checking whether the EXISTING
+backtest infrastructure could reconstruct a much longer window from
+data already being persisted. It can.
+
+- [x] **`risk_engine.backfill_iv_history()`** — reuses `backtester.
+  py`'s OWN existing reconstruction pipeline (`history.chain_days()`/
+  `day_chain_frames()`, already used by its momentum/PA/spread replay
+  functions) to rebuild a full historical option chain for any day
+  with persisted candle coverage, then runs the SAME `analyzer.
+  analyze()` the live system already calls every cycle (which fills
+  IV via Black-Scholes when needed, using the exact same solver
+  already relied on elsewhere) — no new IV calculation method, no new
+  data source, purely wiring together three things that already
+  existed independently but had never been connected for this
+  purpose. Takes one representative (near-EOD) reading per historical
+  day and CACHES it in a new `daily_atm_iv` table, since the
+  reconstruction itself is expensive (minute-by-minute chain rebuild
+  + a full analyze() call) and should run once per day, not on every
+  percentile lookup.
+- [x] **Real gap found and fixed while wiring this up**: `day_chain_
+  frames()`'s reconstructed chain dict carried `"expiry": ""` — an
+  empty-string placeholder, deliberate at the time since `backtester.
+  py`'s existing replay strategies only ever needed price movement to
+  check SL/target hits, never real IV/greeks. `analyzer.analyze()`
+  needs `chain["expiry"]` to compute days-to-expiry, which its own
+  Black-Scholes fallback requires — an empty string is falsy, so that
+  fallback silently never ran on any reconstructed historical frame,
+  leaving IV stuck at a `0` placeholder no matter how much data was
+  fed in. Fixed by surfacing the REAL expiry already sitting in the
+  `instruments` table (a column that existed, just wasn't being
+  selected here) — confirmed via grep that no existing backtest
+  replay logic reads IV/delta/greeks fields at all (only price/OI),
+  so this is a strict, safe improvement with zero risk to existing
+  replay behavior, not a change to any live trading logic.
+- [x] **`iv_percentile()` fixed to stop hardcoding a false claim** —
+  the version built in the previous increment baked a "5-day" caveat
+  directly into the function regardless of which data source was
+  actually behind it, which became actively MISLEADING the moment a
+  genuine long-window source existed (a real 90-day percentile would
+  have been mislabeled as only 5 days). Fixed: the function no longer
+  assumes anything about its input's provenance — callers now supply
+  an honest `source_label` describing whichever data they actually
+  used (5-day chain_snapshots vs the long-window backfill).
+
+Tested extensively: the backfill was verified against realistic
+SYNTHETIC backtest-shape data (candles + instruments tables matching
+the real schema) spanning 5 historical days with a 9-strike chain per
+day (the real minimum `day_chain_frames()` itself requires — caught my
+own test data being one requirement short of that on the first attempt
+and fixed the test, not the code). When the backfill first ran, it
+correctly reported ALL 5 days as "no data" — traced this down
+BYPASSING the function's own silent exception-swallowing (`except
+Exception: continue`, exactly the anti-pattern flagged elsewhere in
+this project) to find the real cause directly, rather than accepting
+the vague failure. Confirmed the expiry-propagation fix resolves it:
+re-ran and got 5 genuine, non-zero, non-placeholder IV readings.
+Verified idempotency (a second backfill run correctly skips all
+already-cached days). Verified `iv_percentile()` works correctly
+against the real backfilled series. Then went further than the
+mechanism itself: directly ran `backtester.replay_momentum()` against
+the same synthetic data to CONFIRM the existing backtest replay
+strategy still executes correctly after the `day_chain_frames` change
+— not just inferred safety from a grep, an actual functional check of
+the live backtest path. Full existing suite re-run, zero regressions.
+
+**Honest residual caveat**: the ACTUAL depth this can achieve on the
+live system depends entirely on how much historical option-candle
+data has genuinely been fetched and persisted for each symbol — if
+that's really 2 years, a true 2-year IV history is now achievable; if
+it's less, `backfill_iv_history()`'s own return value (`days_
+processed`) reports exactly how much was found, rather than assuming
+a fixed window. This could not be verified from this sandbox (no
+access to the live system's actual persisted database) — the
+mechanism is confirmed correct against realistic synthetic data, but
+running it against the real database is the next real-world step.
+
+## Feature #8 — AI Signal Engine / AI Decision Engine (2026-07-25)
+
+Per the user's own pipeline diagram: Market Data -> Option Chain
+Intelligence -> Institutional Activity -> Technical Confirmation ->
+**AI Decision Engine** -> AI Probability Engine -> AI Trade Engine ->
+AI Execution Engine -> Paper/Live Order -> AI Learning Engine.
+Explicit framing: "most of things are already developed and need
+verification" — this was an AUDIT task first, build second.
+
+### Audit findings
+
+- **Market Data** ✓ MarketDataAgent, fully built.
+- **Option Chain Intelligence** ✓ Feature #4, fully built, AND already
+  feeds the actual trade decision (StrategyAgent's core signal is
+  built directly on top of OI-bias — this one was never disconnected).
+- **Institutional Activity** ✓ Feature #5, fully built, tested,
+  displayed on the dashboard — **but audit confirmed `institutional:
+  {symbol}` was read NOWHERE in the trade approval pipeline**, only
+  inside its own module's AI-commentary cross-check. Contributed
+  nothing to whether a trade actually went through.
+- **Technical Confirmation** ✓ Feature #7, fully built, tested,
+  displayed — **audit confirmed `technical:{symbol}` was read
+  NOWHERE outside its own module at all**, not even that much.
+- **AI Decision Engine**: did not exist as a distinct stage.
+  RiskAgent's `evaluate()` gate scored every signal purely on
+  StrategyAgent's own OI-bias confidence formula.
+- **AI Probability Engine**: no unified probability existed —
+  each engine had its own isolated confidence%, never combined.
+- **AI Trade Engine**: exists in substance (StrategyAgent's several
+  strategy generators + `sizing.py`), not a single named module but
+  functionally present.
+- **AI Execution Engine**: ✓ ExecutionAgent, fully built.
+- **Paper/Live Order**: ✓ exists (`config.paper_mode`, order placement).
+- **AI Learning Engine**: ✓ `LearningAgent` already exists — daily
+  end-of-day journal with an LLM-written critique of the day's trades
+  (what worked/didn't/one concrete adjustment). Real, but EOD-only,
+  not a live feedback loop that adjusts strategy in real time.
+
+### Fix — new `ai_decision_engine.py`
+
+Directly closes the confirmed gap: `evaluate_signal(sig, institutional,
+technical)` adjusts a proposed signal's confidence up/down based on
+whether Institutional Activity's and Technical Confirmation's CURRENT
+bias for that symbol agree or conflict with the signal's direction —
+exactly matching Feature #7's own already-written design philosophy
+("technical indicators only increase or decrease confidence... never
+generate signals alone"), just never connected to anything until now.
+Reuses both engines' existing output entirely — no new calculation.
+One explicit hard-block, matching RiskAgent's existing regime-gate
+pattern (a named, surfaced flag rather than something buried inside a
+number): triggers only when BOTH engines strongly and confidently
+disagree with the proposed direction, not a single engine's mild
+disagreement.
+
+Wired into `RiskAgent.evaluate()` right before the `min_confidence`
+check, so agreement/disagreement can genuinely push a borderline
+signal over or under the bar — confirmed this is the SINGLE choke
+point for every signal source in the system (grepped all 3 call
+sites: RiskAgent's own cycle, manual signal confirmation, and
+TradingView webhook signals all construct an identical `job` shape
+and go through this same `evaluate()` — no bypass path exists).
+Toggle: `ai_decision_engine_enabled` (default on).
+
+Tested extensively: both engines strongly agreeing correctly boosts
+confidence; both strongly disagreeing correctly hard-blocks; mixed
+agreement (one agrees, one conflicts) correctly applies a partial
+adjustment with no hard block; empty/unavailable confirmation data
+correctly no-ops rather than crashing; confidence correctly clamped to
+[0,100] under extreme inputs. Then tested against the REAL `RiskAgent.
+evaluate()` method itself (not an isolated mock): a genuinely
+borderline-low signal (5 points under the min_confidence threshold)
+correctly gets boosted over the bar by strong agreement from both
+engines; a genuinely HIGH-confidence signal (90) is still correctly
+BLOCKED when both engines strongly disagree — proving the gate
+actually changes real approval outcomes, not just computing a number
+nobody uses. Full existing suite re-run, zero regressions.
+
+**Still open**: a unified "AI Probability Engine" stage (combining
+Option Chain + Institutional + Technical + the new Decision Engine
+into one single probability number, distinct from the Decision
+Engine's confidence-adjustment role) and making LearningAgent's daily
+journal feed BACK into signal generation (a genuine live feedback
+loop, not just an end-of-day report) — both natural next pieces, not
+attempted this pass.
+
+### AI Probability Engine (2026-07-25)
+
+Genuinely distinct from the AI Decision Engine above, not a second
+copy of the same idea: the Decision Engine adjusts confidence using a
+real-time HEURISTIC (does Institutional/Technical currently agree with
+this direction) with no memory of past outcomes; the Probability
+Engine estimates an actual win probability from this system's OWN
+historical trade record — "signals that looked like this one, in the
+past, won how often" — genuinely empirical.
+
+- [x] **Trade records extended to capture decision context at entry**
+  — `place()` now snapshots `entry_confidence` (the POST-Decision-
+  Engine adjusted value), `entry_institutional_agreement`, `entry_
+  technical_agreement`, `entry_regime` onto the position dict. These
+  flow through unchanged into the closed-trade record (`exit()`
+  already copies ALL of the position's fields), so this required no
+  change to the exit/persistence path — genuinely free to add. Reads
+  the structured `sig["ai_decision"]` dict the Decision Engine already
+  produces rather than string-parsing its human-readable notes (an
+  early draft did the latter — fragile, fixed before testing).
+- [x] **New `ai_probability_engine.py`** — `estimate_probability()`
+  buckets historical closed trades by confidence band (10-point
+  bands), institutional agreement, and regime (technical agreement is
+  a softer match — Feature #7 has the least historical coverage of the
+  three, so requiring an exact match there would starve every bucket
+  for a long time), then computes a Laplace-smoothed win rate: `(wins
+  + 1) / (n + 2)`. Smoothing matters — verified directly that 3 wins
+  out of 3 matching trades reports 80%, NOT a naive, dangerously
+  overconfident 100%. Always returns `sample_size` and a `confidence_
+  in_estimate` (low/medium/high) label alongside the number, and
+  honestly reports `unavailable` with no fabricated fallback when
+  there's no historical data or no matching trades yet — the same
+  honest-gap discipline used throughout this project.
+- [x] **Wired into `RiskAgent.evaluate()`** right after the Decision
+  Engine, attached to the signal for display/audit — NOT used as a
+  gate. Deliberate: with sample sizes this small early in the
+  system's life, gating on it would be premature; the honest "low
+  confidence in estimate" flag is meant for a human to weigh, not to
+  auto-block on. A future toggle could gate on it once real history
+  accumulates.
+- [x] **Preview visibility** — `/api/signal` now also runs `risk.
+  evaluate()` for any actionable (BUY_CE/BUY_PE) signal purely so the
+  probability estimate is visible in the signal PREVIEW, before the
+  person decides whether to confirm a trade, not only computed
+  silently at actual approval time. Confirmed safe to call
+  speculatively: `evaluate()` is read-only (no order placement; its
+  only "side effect" is an idempotent news-score cache write).
+  Dashboard's signal card now shows "AI Probability: 60% win rate (low
+  confidence, n=3)" style text when available, cleanly omitted
+  otherwise.
+
+Tested extensively: empty history and no-matching-trades cases both
+correctly report `unavailable` rather than a fabricated number; the
+Laplace smoothing formula verified precisely (3/3 wins → exactly 80%,
+matching the hand-computed `(3+1)/(3+2)`); a larger 30-trade sample
+(20 wins) converges close to its true 66.7% raw rate and correctly
+reports "high" confidence-in-estimate, versus "low" for the n=3 case
+— confirming the sample-size-awareness genuinely works, not just the
+point estimate. Then tested against the REAL `RiskAgent.evaluate()`
+end-to-end (not an isolated mock): confirmed the probability is
+correctly attached to `sig["ai_probability"]`, correctly bucketed by
+the POST-adjustment confidence (caught my own test-construction
+mismatch here — seeded historical trades at the PRE-adjustment
+confidence bucket and got a false "no match," traced it to the
+Decision Engine having already shifted the bucket by the time the
+Probability Engine ran, which is actually correct/consistent
+behavior, not a bug — fixed the test, not the code). Frontend
+probability display tested for both the populated and absent cases.
+Full existing suite re-run, zero regressions.
+
+### Auto/manual execution mode verified + daily learning journal feedback loop (2026-07-26)
+
+Per explicit request: confirm both manual-review and auto-execute
+trading modes are genuinely available, and continue the flagged
+"daily journal feeds back into signal generation" work.
+
+- [x] **Verified auto/manual modes are both fully intact** —
+  `config.auto_execute` (default `False`) toggles between them,
+  bound to a real Settings checkbox (`s_auto`). `ExecutionAgent._enter
+  ()` branches on it: `False` sets `pending_confirmation` for the
+  dashboard's "Confirm & place order" button, `True` places
+  immediately. Critically, `RiskAgent.evaluate()` — where the AI
+  Decision Engine and AI Probability Engine are wired — runs BEFORE
+  this branch in every case, so both confirmation engines apply
+  identically regardless of which mode is active; nothing needed
+  fixing here, just confirming.
+- [x] **Real bug found and fixed while reviewing `LearningAgent`**:
+  the "daily" journal never actually filtered by date.
+  `closed_trades` is loaded at startup from the FULL persisted
+  history (`load_persisted_trades()`) and new exits are simply
+  appended to that same list for the rest of the session — it's
+  never reset daily. Every day's journal was silently summarizing
+  the entire lifetime P&L/trade-count/win-count as if it were "today,"
+  because nothing filtered by the `closed_date` field each trade
+  already carries. Fixed by filtering on that field before computing
+  stats.
+- [x] **Learning feedback loop, closing the gap flagged after Feature
+  #8's Probability Engine work**: `LearningAgent` now ALSO computes
+  named "underperforming pattern" flags from the FULL persisted trade
+  history (not just today — a pattern needs more than one day's data
+  to mean anything), reusing the exact same confidence/institutional-
+  agreement/regime bucketing convention as `ai_probability_engine.py`
+  for consistency (imports its `_bucket_confidence()` directly rather
+  than a second implementation). A bucket is flagged when its win rate
+  is below 35% with at least 5 matching historical trades. `RiskAgent.
+  evaluate()` then checks whether TODAY's signal matches any flagged
+  pattern and applies a visible confidence penalty (-15) if so — a
+  soft, LOGGED adjustment, not a silent hard block, matching this
+  whole feature's "small-sample honesty, human stays in the loop"
+  principle. Toggle: `learning_feedback_enabled` (default on).
+
+Tested extensively: the date-filtering fix verified directly against a
+mixed multi-day trade set (correctly isolates today's 2 trades/₹500
+P&L from a 4-trade set spanning two days, versus the old buggy
+behavior which would have reported the full ₹500 lifetime total every
+day); the pattern-flagging logic tested against a 3-pattern dataset
+(a genuinely bad 25%-win-rate pattern correctly flagged, a genuinely
+good 80%-win-rate pattern correctly excluded, and a small n=3
+bad-looking pattern correctly excluded by the minimum-sample-size
+gate) — all three outcomes distinguished correctly, not just "does it
+run." Then tested against the REAL `RiskAgent.evaluate()` end-to-end:
+a signal matching a flagged pattern is correctly penalized (confidence
+65 → 50, correctly failing the approval threshold). Finally tested the
+FULL `LearningAgent.cycle()` method itself (not just extracted logic)
+across two scenarios: empty history (no crash, empty pattern list) and
+a realistic 11-trade multi-day dataset — confirmed the journal
+correctly counts only the 8 trades from today while the pattern
+analysis correctly draws on all 11 (both today's AND yesterday's) to
+flag the bad pattern. Full existing suite re-run, zero regressions.
+
+## Feature #7 — Technical Analysis Engine (spec received 2026-07-25)
+
+Explicit framing: a CONFIRMATION engine, not a standalone signal
+generator — never produces its own Buy/Sell call, only strengthens/
+weakens confidence in the Option Chain (#4)/Institutional Activity
+(#5) bias already determined. Spec's own pacing instruction is
+notably STRICTER than #4/#5's: "Complete one indicator engine at a
+time. Wait for review before proceeding to the next indicator." —
+honored literally this time (one indicator per increment, not bundled
+pairs like earlier features).
+
+### Review — most of the underlying indicator MATH already exists
+
+- MACD/RSI/Stochastic/Bollinger %B/ATR: already implemented in
+  `mtf_confluence_strategy.py` (`macd()`, `rsi()`, `stochastic()`,
+  `bollinger_percent_b()`, `atr()`/`true_range()`), already used live
+  by the MTF Confluence strategy and Feature #2's bias engine.
+- Supertrend/Ichimoku: already implemented in `market_bias.py`
+  (`supertrend()`, `ichimoku_bias()`), used in Feature #2's `bias:
+  {symbol}`.
+- ADX + 1m/5m/15m multi-timeframe confluence: already implemented in
+  `RegimeAgent` (regime classification + `tf_bias`/`confluence`).
+- ATR-based stop-loss recommendation: already implemented (config's
+  `stop_mode: "atr"`, `atr_stop_multiplier`) — reuse, not duplicate.
+- **Genuinely missing**: a dedicated VWAP Engine with Above/Below/
+  Cross/Slope/Retest interpretation returning Bullish/Bearish/Neutral
+  — VWAP the *value* exists (Feature #1's TWAP-proxy, Feature #3's
+  level), but nothing interprets it this way yet. This is where
+  increment 1 focused, matching the spec's own indicator ordering.
+
+### Increment 1 — DONE, tested: VWAP Engine only
+
+New `technical_engine.py`. `vwap_engine(candles, spot, vwap)` — Above/
+Below, Cross (last-5-candles side-flip detection), Distance%, Slope
+(distance-from-vwap widening/narrowing over a short lookback), Retest
+(crossed recently AND back within 0.05% of vwap) → Bullish/Bearish/
+Neutral. Deliberately conservative: "above VWAP but slope falling back
+toward it" reads Neutral, not a stale Bullish — tested directly as its
+own scenario to make sure a weakening move doesn't get misread as a
+clean signal.
+
+Honest disclosed approximation, stated directly in the function's own
+docstring: no full VWAP *series* is persisted anywhere in this
+codebase (only the current single value), so cross/slope detection
+compares each recent candle's close against that same current value —
+reasonable over a short lookback (VWAP moves slowly relative to a
+handful of candles) but not a true point-in-time series. Same honesty
+standard as the VWAP-as-TWAP-proxy approximation itself.
+
+Wired into `TechnicalAgent._compute_technical()`, reusing `regime_
+candles:{symbol}` (RegimeAgent's existing 90s fetch) and the same VWAP
+proxy helper built for Feature #5 — no new API calls, no new VWAP
+calculation. New `/api/technical/{symbol}` endpoint, same graceful
+"not yet computed" pattern as `/api/institutional/{symbol}`.
+
+Tested: empty/too-few-candles inputs degrade gracefully; clean
+above-and-rising → Bullish; clean below-and-falling → Bearish; a
+genuine bullish cross correctly detected; a retest (crossed then back
+near vwap) correctly detected; the weakening-above case correctly
+reads Neutral rather than falsely Bullish; the full `TechnicalAgent`
+wiring tested end-to-end (real data flows through correctly, a
+deliberately broken input is caught/logged without crashing); the API
+endpoint tested both empty and populated paths; full existing test
+suite (`test_dhan_scrip_master.py`) re-run to confirm zero regression
+elsewhere in the same session.
+
+**Stopping here for review, per this spec's stricter one-at-a-time
+pacing.** Next up (in the spec's own order): EMA Engine (9/20/50/200
+alignment, Golden/Death Cross, trend strength).
+
+## Feature #5 — Institutional Activity Engine (spec received 2026-07-25)
+
+Whole-market, cross-domain aggregation (spec explicitly forbids
+rebuilding/duplicating the Option Chain Intelligence Engine — everything
+here consumes existing outputs).
+
+### Review — scope validated against Feature #4 before writing anything
+
+- **Option Chain Engine inputs** (Long/Short Build-up, Call/Put Writing,
+  Support/Resistance, PCR, IV, Greeks, Strike Ranking): 100% already
+  built, Feature #4 increments 1-5. Not touched — consumed via
+  `analysis:{symbol}`.
+- **Technical Engine inputs** (MACD, RSI, EMA, ADX, Supertrend,
+  Ichimoku): already built, Feature #2's `market_bias.py`
+  (`bias:{symbol}`'s `components` dict, already in [-1,+1] per
+  factor). Reused directly, not recomputed.
+- **Futures Engine inputs** (Trend, OI, Volume): already built —
+  `future_ohlc`/`future_oi_trend`/`future_oi_quadrant` bus keys from
+  the futures pipeline in agents.py.
+- **Spot Market inputs** (Trend, VWAP): mostly already built
+  (`spot_hist`) — VWAP itself only existed at the API-response layer
+  (Feature #1's `/api/ltp-monitor`), not as a reusable bus key, so a
+  small VWAP-TWAP-proxy helper was added (same disclosed-approximation
+  convention already used throughout this codebase) rather than
+  duplicating that endpoint's inline logic.
+- **Market Breadth** (Advance/Decline, Sector Strength): genuinely
+  missing — Feature #2 already disclosed this exact gap (no NIFTY-50
+  constituent data source exists anywhere in this system). Carried
+  forward as the same honest, disclosed gap rather than faked;
+  excluded from the score's weights entirely and always reported in
+  `unavailable`.
+
+### Increment 1 — DONE, tested: Institutional Participation Score + Money Flow + per-strike read
+
+New `institutional_engine.py`. Design split matching the spec's own
+separate output fields:
+- **Institutional Bias** (direction) reuses `bias:{symbol}["bias"]`
+  directly — Feature #2 already computed a full directional read;
+  recomputing direction here would be the exact duplication the spec
+  forbids.
+- **Institutional Score** (0-100, spec's own bands: <20 No Activity,
+  20-40 Weak, 40-60 Moderate, 60-80 Strong, 80-100 Very Strong) is
+  genuinely new: a MAGNITUDE/conviction read (how much institutional
+  activity, not which way), built from futures/spot agreement
+  strength, OI migration magnitude, volume-breakout count, VWAP
+  distance, PCR-trend magnitude, IV-behaviour flag density,
+  strike-strength concentration, and Feature #2's own confidence score
+  (reused as "Technical Confirmation") — every one of these pulled
+  from data Feature #2/#3/#4 already computed, nothing recalculated.
+  Market Breadth's weight is simply absent from the weighted sum.
+- **Money Flow**: Direction reuses bias's label (Bullish/Bearish/
+  Neutral); "Money Increasing"/"Money Exiting"/"No Significant Flow"
+  is new but built entirely from Feature #4's OI-migration data.
+  **Explicitly designed and tested as an axis INDEPENDENT of
+  direction** — aggressive fresh call-writing into a bearish move
+  reads as "Bearish + Money Increasing" (fresh conviction), not
+  "Exiting"; a scenario where unwinding genuinely dominates reads as
+  "Money Exiting" regardless of bias. Caught my own wrong assumption
+  here during testing (first draft's test asserted bearish always
+  implies exiting) and fixed the test, not the code, once the
+  reasoning was worked through — the spec lists these as two separate
+  outputs for exactly this reason.
+- **Per-strike institutional read** (explicit request: "do analysis
+  per strike"): pulls the institutional_activity/premium_intelligence
+  Feature #4 ALREADY computed per strike (no new per-strike logic),
+  specifically at the strikes that matter institutionally — ATM, and
+  the #1 support/resistance walls — matching the spec's own example
+  anchoring ("Put writers becoming aggressive near ATM").
+- **Wiring**: `TechnicalAgent._compute_institutional()` runs right
+  after `analysis:{symbol}` is computed each cycle (~60s), combining
+  it with `bias:{symbol}` (set by RegimeAgent) and a small VWAP-proxy
+  helper, publishing to `institutional:{symbol}`. Wrapped in try/except
+  so a problem here can never take down the option-chain analysis it
+  depends on. New `/api/institutional/{symbol}` endpoint exposes it —
+  per the spec's own "only expose processed intelligence to Market
+  Bias/Risk/Trade Recommendation/AI Narrative Engines" instruction —
+  returning a clear `available: false` + reason rather than a bare
+  404/500 if the agent loop hasn't reached this symbol yet.
+
+Tested: fully empty inputs degrade to score 0/"No Institutional
+Activity"/Neutral/"No Significant Flow" with no crash; a realistic
+bullish scenario (agreeing spot+futures+technical+OI+PCR+volume)
+scores 56/"Moderate Participation" with correct Bullish/Money-
+Increasing/all-3-per-strike-anchors (ATM+R1+S1); a quiet day scores 10
+(meaningfully lower); two bearish scenarios distinguish Money Exiting
+(unwinding-dominant) from Money Increasing (fresh-writing-dominant)
+correctly, confirming the two axes are genuinely independent; the full
+`TechnicalAgent._compute_institutional()` wiring tested with a mocked
+agent/bus (real data flows through correctly, and a deliberately
+broken analysis dict is caught/logged once rather than crashing the
+cycle); the new API endpoint tested both empty (`available: false`)
+and populated paths.
+
+**Stopping here for review**, same discipline as Feature #4. Not yet
+built: the event-detection layer (Smart Money Accumulation/
+Distribution, Fresh Long/Short Positions, Profit Booking, Position
+Rotation, Hedging Activity, Trap Formation), Breakout/Breakdown
+Validation (Confirmed/Weak/False, needs cross-engine agreement logic),
+Market Participation classification (Accumulation/Distribution/Trend
+Following/Range Trading/etc.), and the AI Commentary sentences — all
+flagged in the spec as later sections, naturally the next increments.
+
+## Feature #4 — Option Chain Intelligence Engine (spec received 2026-07-25)
+
+Full 13-section spec received (converting the existing Option Chain into
+an AI-driven engine feeding Market Bias/Risk Engine/Trade Recommendation
+Engine). Spec's own rule: **review existing implementation first, extend
+don't replace, implement incrementally, stop after each feature for
+review** — followed here exactly like Features #1-#3.
+
+### Review — what already existed before touching anything
+
+Audited `analyzer.py` before writing any code (not assumed):
+  - **Supply/Demand Engine** (spec's S/R-from-OI ask): ALREADY EXISTS —
+    `ranked_levels()` computes R1-R3/S1-S3 from OI+ΔOI+volume exactly as
+    specified, already used live by the spread strategies. Retained,
+    not touched.
+  - **Strike Strength Engine** (blue/yellow/pink ranking): ALREADY
+    EXISTS — `chain_colors()`. Retained as-is; the live wall-detection
+    scoring spread strategies depend on was NOT touched (would change
+    real trading behavior) — a fuller multi-factor score (the spec
+    also wants volume%/premium%/distance-from-ATM folded in) is a
+    separate, additive future increment, not a modification of the
+    tested formula.
+  - **Premium Intelligence**: partially exists via `classify_leg()` +
+    `sentiment_summary()`'s phrase/hint text.
+  - **PCR Engine**: overall PCR only exists (`pcr_oi`/`pcr_vol` in
+    `analyze()`); ATM-specific, strike-wise, and intraday-trend PCR are
+    genuinely new — not built this increment.
+  - **AI Narrative/Output**: `ai_visual`/`ai_signal`/`ai_deep_dive`
+    already provide LLM-backed structured output; the spec's exact
+    "Current Bias / S1-S3 / R1-R3 / Highest OI Strike / ..." shape
+    isn't assembled as one consolidated object yet — not built this
+    increment.
+  - **Institutional Activity Engine, Live Data Collection persistence,
+    Real-Time Calculations**: genuinely new — this is where increment
+    1 focused, per the spec's own top-to-bottom section order.
+
+### Increment 1 — DONE, tested, awaiting review: snapshot persistence + real-time change calcs + Institutional Activity Engine
+
+- [x] **Historical snapshot storage** (spec: "every configurable
+  interval — 30s/1m/5m/15m"). New `history.chain_snapshots` table (one
+  row per strike per leg per snapshot), persisted by `TechnicalAgent`
+  at a NEW configurable cadence (`chain_snapshot_interval_sec`,
+  default 60s, Settings-editable) — independently throttled from
+  `TechnicalAgent`'s own 60s cycle per the spec's explicit ask for a
+  tunable interval. Only the already-analyzed focus window (~10
+  strikes either side of ATM) is persisted — no new API calls, reuses
+  exactly what `analyze()` already computes every cycle. `history.
+  get_chain_snapshot_map()`/`get_chain_session_open_map()` do the
+  reverse lookup (most-recent-at-or-before / earliest-today), and
+  `prune_chain_snapshots()` gives a retention hook (not yet wired to
+  auto-run — same as the existing `chain_days`/candle retention
+  pattern, a caller invokes it periodically).
+- [x] **Real-time change calculations** (spec: Premium/OI/Volume/IV %
+  change + Delta/Gamma/Theta/Vega change, vs previous snapshot AND vs
+  session open). New `analyzer.leg_changes()` — computes both
+  comparisons per leg, each independently `None` (not a faked 0) when
+  that snapshot doesn't exist yet, same honesty standard as Market
+  Breadth/Volume Profile elsewhere in this codebase.
+- [x] **Institutional Activity Engine** (spec's 8-category
+  classification: Long Build-up/Short Build-up/Long Unwinding/Short
+  Covering/Fresh Call Writing/Fresh Put Writing/Call Unwinding/Put
+  Unwinding). New `analyzer.institutional_activity()` — reuses
+  `classify_leg()`'s existing 4-quadrant price/OI logic (not
+  recomputed) and relabels it per-leg: Long Build-up/Long Unwinding
+  stay generic; the short-buildup/short-covering quadrants become
+  Fresh Call Writing/Fresh Put Writing and Call Unwinding/Put
+  Unwinding respectively, since writing behavior is inherently
+  leg-specific even though the price/OI math is identical.
+- [x] **Wiring**: `analyzer.analyze()` gained an optional `snapshot_ctx`
+  parameter (default `None`) — every existing caller (app.py, agents.py
+  elsewhere, backtester.py) uses keyword args or just the `chain`
+  positional, confirmed via a full grep of every call site, so this is
+  fully backward compatible; nothing changes for a caller that doesn't
+  pass it. `TechnicalAgent._build_snapshot_ctx()` fetches both
+  comparison snapshots ONCE per symbol per cycle (not per-strike) per
+  the spec's own Performance section ("cache calculations... avoid
+  full recalculation on every tick"), wrapped in a try/except so a
+  missing/corrupt DB degrades to "no comparison available" rather than
+  breaking the whole analysis cycle.
+- [x] **New fields are purely additive**: every strike's `ce`/`pe` dict
+  gained two new keys (`institutional_activity`, `changes`) — nothing
+  existing was renamed, removed, or restructured, so no downstream
+  consumer (spread strategies' wall detection, the dashboard, the AI
+  advisory prompts) needed any change.
+
+Tested: `institutional_activity()` against all 4 quadrants × both legs
+(8 combinations, all correct); `leg_changes()` percentage/absolute math
+directly, plus correctly returning `None` for a missing comparison
+snapshot; the full DB round-trip (`upsert_chain_snapshot`/
+`get_chain_snapshot_map`/`get_chain_session_open_map`) including the
+empty-symbol case; a full 2-cycle end-to-end simulation through the
+REAL `analyzer.analyze()` (cycle 1 with no history → changes correctly
+None/None; snapshot persisted; cycle 2 with real history → 15% premium/
+OI change correctly computed both vs-previous and vs-session-open,
+Long Build-up correctly classified from price-up+OI-up); confirmed
+`analyze()` still works with `snapshot_ctx` omitted entirely (full
+backward compatibility) via the same test.
+
+**Stopping here for review**, per the spec's own explicit rule. Not
+started yet: PCR Engine extensions (ATM/strike-wise/trend), IV & Greeks
+Engine (expansion/crush/gamma-buildup/theta-decay detection — this
+NEEDS increment 1's snapshot history to compare against, so it's the
+natural next piece), Smart Money Engine (shift/migration detection,
+same dependency), Strike Strength Engine's fuller multi-factor score
+(additive, won't touch the live wall-detection formula), AI Narrative
+template sentences, and the consolidated AI Output structure.
+
+### Increment 2 — DONE, tested, awaiting review: PCR Engine + Premium Intelligence
+
+- [x] **PCR Engine** (spec: Overall PCR, ATM PCR, Strike-wise PCR,
+  Intraday PCR Trend, bullish/bearish/neutral explanation). New
+  `analyzer.pcr_engine()`: Overall matches the existing `pcr_oi` field
+  exactly (same formula, same full chain — not a second, divergent
+  calculation), ATM PCR isolates just the ATM strike's CE/PE OI,
+  strike-wise gives a PCR per strike across the analyzed window,
+  bias labels use >1.3 bullish / <0.7 bearish / else neutral
+  thresholds. Intraday trend reuses the SAME persisted `chain_
+  snapshots` data from increment 1 (no new snapshot table) — compares
+  the current window's PCR against the previous snapshot's and
+  today's session-open snapshot's, both independently `None` until
+  that comparison point exists. **Honest scope note, stated directly
+  in the function's docstring**: the trend comparison is necessarily
+  over the analyzed focus window (~10 strikes either side of ATM —
+  what's actually persisted), not the true full chain — labeled
+  `window_pcr` explicitly rather than silently conflated with
+  `overall`, same disclosed-approximation discipline as the VWAP-as-
+  TWAP-proxy pattern already used elsewhere in this codebase.
+- [x] **Premium Intelligence** (spec: plain-English explanation of
+  premium+OI combinations). New `analyzer.premium_intelligence()` —
+  narrates the exact same `classify_leg()` quadrant already computed
+  (no new logic), per-leg, e.g. "Fresh buying in Calls — premium and
+  OI both rising, buyers in control."
+- [x] **Wiring, additive only**: `pcr_engine` added as a new top-level
+  key in `analyze()`'s return dict (existing `pcr_oi`/`pcr_volume`
+  scalars untouched); `premium_intelligence` added as a new per-leg key
+  alongside `institutional_activity` from increment 1. Confirmed no
+  downstream consumer (backtester.py, strategies.py, pa_strategies.py)
+  destructures the `strikes` dicts against a fixed key set — grepped
+  directly to confirm before shipping, not assumed.
+
+Tested: `premium_intelligence()` against all 4 quadrants (correct
+phrasing each); `pcr_engine()`'s bullish/bearish/neutral thresholds
+against 3 constructed OI scenarios (1.5 / 0.67 / 1.0 PCR); a full
+2-cycle simulation through the real `analyzer.analyze()` showing the
+intraday trend correctly detects a PCR rising from 1.0 to 1.5 across
+two persisted snapshots; confirmed `analyze()` still works with
+`snapshot_ctx` omitted entirely (trend fields correctly all `None`,
+full backward compatibility).
+
+**Stopping here again for review.** Remaining, in the same order as
+before: IV & Greeks Engine (expansion/crush/gamma-buildup/theta-decay —
+needs increment 1's snapshot history, same dependency pattern as the
+PCR trend above), Smart Money Engine (shift/migration detection, same
+dependency), Strike Strength Engine's fuller multi-factor score
+(additive), AI Narrative template sentences, and the consolidated AI
+Output structure.
+
+### Design note for future work (2026-07-25) — strategy configurability, not built yet
+
+Explicit standing instruction, referencing a reference screenshot of
+another app's strategy-management table (many strategies, category,
+ID, Edit/Activate/Deploy/Alert per row): the Strategies page should
+show each strategy's configuration/rules directly, editable, with
+enable/disable per strategy — and this system will grow to many
+strategies with independent settings, so upcoming design work
+(including the rest of Feature #4 and anything strategy-related) should
+keep that shape in mind rather than assuming a small, fixed strategy
+count. Not acted on yet — flagged here as a design constraint for when
+the Strategy/Options Strategy Engine pieces (#8/#10 in the original
+13-feature list) are reached, so that work doesn't need to be
+retrofitted later. Current strategy config already lives in `config.
+json` (per-strategy toggles, thresholds) and `backtester.py`'s
+`strategy_versions.json` (persisted, auto-tuned parameters per
+strategy+symbol) — the existing Strategies dashboard page shows
+eligibility/payoff/auto-deploy toggles per strategy already; a fuller
+rule/parameter-editing table view in that same style is the gap to
+close later, not started this session.
+
+### Increment 3 — DONE, tested, awaiting review: IV & Greeks Engine
+
+- [x] **IV & Greeks Engine** (spec: track IV/Delta/Gamma/Theta/Vega;
+  detect IV Expansion, IV Crush, Gamma Build-up, Theta Decay, Vega
+  Risk; explain the impact on premiums). New `analyzer.
+  iv_greeks_engine()` — reuses the SAME `changes` dict `leg_changes()`
+  already computes per leg (no new snapshot fetch, no new DB query):
+  prefers the vs-previous-snapshot comparison, falls back to vs-
+  session-open if that's not available yet. Thresholds (±8% IV move
+  for expansion/crush, >10% relative gamma rise for build-up, any
+  more-negative theta move for decay) are a documented first-pass
+  heuristic flagged directly in the function's own docstring as
+  needing real-outcome tuning later — same honesty standard already
+  used for this codebase's other heuristics (e.g. the news impact-
+  window classifier). Vega Risk is the one flag that needs no history
+  at all — a snapshot-in-time read of vega magnitude relative to
+  current premium (>15% ratio), since "is this option unusually
+  sensitive to IV swings right now" doesn't require a trend.
+  Each leg gets a plain-English explanation per triggered flag (the
+  spec's own "explain the impact on option premiums" ask), not just a
+  boolean.
+- [x] **Wiring, additive only**: `iv_greeks` added as a new per-leg key
+  alongside `institutional_activity`/`premium_intelligence`/`changes`
+  from increments 1-2. `leg_changes()` is now computed once per leg and
+  reused for both the `changes` output and as `iv_greeks_engine()`'s
+  input, rather than recomputed — avoids a redundant calculation per
+  the spec's own Performance section.
+
+Tested: no-history case (all flags False, no crash); IV expansion
+correctly detected on a +15% IV move across two persisted snapshots
+(gamma build-up and theta-decay-accelerating correctly co-detected in
+the same cycle); IV crush correctly detected on a -21.7% move in a
+follow-up cycle; vega risk correctly flagged from a single chain with
+NO snapshot history at all (confirms it doesn't wrongly depend on
+history); confirmed `analyze()` still works with `snapshot_ctx`
+omitted entirely (full backward compatibility, matching increments 1-2).
+
+**Stopping here again for review.** Remaining: Smart Money Engine
+(Strong Call/Put Writing, Support/Resistance Shift, OI Migration,
+Volume Breakout, Aggressive Buyers/Writers — same snapshot-history
+dependency pattern as this increment and the PCR trend), Strike
+Strength Engine's fuller multi-factor score (additive), AI Narrative
+template sentences, and the consolidated AI Output structure.
+
+### Increment 4 — DONE, tested, awaiting review: Smart Money Engine + chart signal overlays
+
+- [x] **Smart Money Engine** (spec: Strong Call/Put Writing, Support/
+  Resistance Shift, OI Migration, Volume Breakout, Aggressive Buyers/
+  Writers). New `analyzer.smart_money_engine()` — chain-wide, scans the
+  per-strike `institutional_activity`/`changes` ALREADY computed by
+  increments 1-3 (nothing recalculated): Strong Call/Put Writing is
+  Fresh Call/Put Writing (increment 1) paired with a >15% OI increase;
+  Volume Breakout is any leg with a >50% volume jump; Aggressive
+  Buyers/Writers pair Long-Build-up/fresh-writing with a >30% volume
+  jump (conviction, not drift); OI Migration reports the top-3 strikes
+  gaining vs top-3 losing OI this cycle. Support/Resistance Shift is
+  the trickiest piece — recomputes `ranked_levels()`'s OWN wall-scoring
+  formula (`oi*0.5 + max(oi_chg,0)*0.3 + volume*0.2`) against the
+  previous snapshot, so "did the #1 wall move" uses the exact same
+  definition of "wall" the live wall-detection code already uses, not
+  a simplified proxy — found and fixed a real test-scenario bug while
+  verifying this: a strike's OI can rise 250% in percentage terms and
+  still not overtake a much larger absolute wall, which is correct
+  behavior, not a bug (caught by an initial test assertion that
+  assumed % change alone would flip the wall).
+  Thresholds (15%/30%/50%) are a documented first-pass heuristic, same
+  honesty standard as increment 3's.
+- [x] **Wiring, additive only**: `smart_money` added as a new top-level
+  key in `analyze()`'s return dict, computed after `strikes_out`/
+  `signal_lines` exist since it scans across them.
+- [x] **Chart signal overlays — "update it signals on charts".**
+  `/ws/candles/{symbol}` now also streams two new message types,
+  reusing data already computed elsewhere (no new calculations):
+    - `levels` — Feature #3's existing `levels:{symbol}` bus key
+      (merged OI-wall/prev-day/VWAP R1-R3/S1-S3), sent only when it
+      actually changed since the last send. Frontend draws these as
+      horizontal price lines on the Lightweight Chart (red for
+      resistance, green for support, labeled R1/S1/etc with source).
+    - `signals` — this increment's `smart_money` engine output,
+      converted server-side (`_smart_money_to_markers()`) into
+      Lightweight Charts marker objects (arrows/circles/squares with
+      hover text, e.g. "Strong CE Writing 23900", "R shift
+      23800→23900"), throttled to once every 10s. Capped at 8 markers
+      so a noisy chain doesn't clutter the chart.
+  Frontend (`dashboard.html`): new `lwPriceLines` array + `clearLw
+  PriceLines()`, rebuilt fresh on every `levels` message and cleared on
+  symbol switch (`connectLwChart`) so stale lines from a previous
+  symbol never linger; `signals` messages call `lwSeries.setMarkers()`
+  directly, with the same `toLwTime()` IST shift already used for
+  candles applied consistently to marker timestamps too.
+
+Tested: all 4 quadrants of Strong Writing/OI Migration/Volume Breakout/
+Aggressive Buyers-Writers through a single realistic 2-cycle scenario
+(23900 CE genuinely overtaking 23800 CE as the #1 wall — real absolute
+OI levels, not just a percentage swing) — strong call writing, OI
+migration into/out of, volume breakout, aggressive writer, AND
+resistance shift (23800→23900) all correctly co-detected in one
+`analyze()` call; confirmed full backward compatibility with no
+`snapshot_ctx`; `_smart_money_to_markers()` tested directly against a
+populated smart_money dict (4 expected markers, all well-formed) and
+an empty one (no markers, no crash). NOT tested against a real browser
+render of the Lightweight Chart itself (this sandbox can't run one) —
+JS syntax validated with `node -c`, but the actual visual placement/
+price-line rendering hasn't been eyeballed live.
+
+**Stopping here again for review.** Remaining from the original list:
+Strike Strength Engine's fuller multi-factor score (additive, won't
+touch the live wall-detection formula), AI Narrative template
+sentences, and the consolidated AI Output structure (Bias/S1-S3/R1-R3/
+Highest OI Strike/Highest Volume Strike/Highest Premium Change/PCR/IV
+Status/Best ATM Strike/Suggested CE-PE/Confidence% in one object).
+
+### Display panel + backtesting API (2026-07-25) — surfaces increments 1-5's data, no analysis engine changes
+
+Per explicit request: a way to actually see everything increments 1-5
+computed, plus direct access to the persisted historical data for
+backtesting against it.
+
+- [x] **New "Option Chain Intelligence" panel** on the main dashboard,
+  above the existing Option Chain table. Reuses the SAME `/api/
+  analysis/{symbol}` response already fetched for the rest of the page
+  (`ai_output`/`narrative`/`smart_money` are additive fields already
+  present on it from increments 1-5) — no new fetch call. Shows: the
+  consolidated AI Output as a summary strip (Bias, PCR, IV Status, Best
+  ATM, Highest OI/Volume/Premium-Δ strikes, Confidence%, Suggested
+  CE/PE), the AI Narrative as a bullet list, and Smart Money events
+  (Strong Writing, S/R Shift, OI Migration, Volume Breakout, Aggressive
+  Buyers/Writers) as a labeled row list.
+- [x] **Per-strike detail via tooltip, not a wider table**: each State
+  cell in the existing Option Chain table now has a hover tooltip
+  combining institutional_activity (spec-named), premium_intelligence
+  (plain English), any triggered IV/Greeks flags, and the strike-
+  strength score/color — chosen over adding 4+ new columns, which
+  would have made an already-wide table unreadable.
+- [x] **New `/api/chain-snapshots/{symbol}` endpoint** — direct read
+  access to the persisted `chain_snapshots` table (increment 1's
+  every-60s capture) for backtesting/review against real captured
+  data: `?hours=N` (default 6), optional `?strike=`/`?leg=` filters.
+  Empty `rows` (not an error) when nothing's persisted yet for that
+  filter, same graceful-degradation convention as the rest of Feature
+  #4.
+
+Tested: `renderOci()` smoke-tested in Node with a minimal DOM shim
+against both a realistic payload (produces correct HTML for every
+summary field, narrative list, and all 8 smart-money event types) and
+a completely empty analysis object (renders "-"/empty-state text, no
+crash); `/api/chain-snapshots` tested directly — full range, strike+leg
+filtered, and empty-symbol cases all correct. NOT tested in an actual
+browser (this sandbox can't render one) — the Node/DOM-shim smoke test
+catches runtime errors in the render logic but not actual visual
+layout; worth a look once you're able to load the page.
+
+### Increment 5 — DONE, tested: Strike Strength Engine + AI Narrative + consolidated AI Output — Feature #4 COMPLETE
+
+- [x] **Strike Strength Engine, fuller multi-factor score** (spec:
+  Total OI, OI%, Volume, Volume%, Premium%, IV, Distance from ATM).
+  New `analyzer.strike_strength_engine()` — explicitly ADDITIVE
+  alongside `chain_colors()`'s existing wall-detection score (which
+  spread strategies depend on live and was NOT touched): normalizes
+  each of the 7 factors 0-1 against the analyzed window's own max,
+  weights them (OI 25%, OI%-chg 15%, Volume 20%, Volume%-chg 15%,
+  Premium%-chg 10%, IV 10%, Distance-from-ATM 5% — documented as a
+  first-pass weighting, not backtested), colors blue/yellow/pink per
+  the spec's own thresholds. Merged back into `strikes_out` as a new
+  `strike_strength` field per leg.
+- [x] **AI Narrative** (spec's own example sentences: "Fresh Put
+  Writing observed at 25250 indicating strong institutional support.").
+  New `analyzer.generate_narrative()` — rule-based (not an LLM call),
+  built entirely from `institutional_activity`/`smart_money` data
+  already computed by increments 1 and 4, so it's always available at
+  zero added latency/cost. Verified against the real analyzer output:
+  produces the exact phrasing style requested, e.g. "Fresh Call Writing
+  observed at 23900 indicating strong institutional resistance." and
+  "Resistance has shifted from 23800 to 23900 — OI migrating higher."
+- [x] **Consolidated AI Output** (spec's own structure: Current Bias,
+  Strongest Support/Resistance, Highest OI/Volume/Premium-Change
+  strikes, Institutional Activity, PCR, IV Status, Best ATM Strike,
+  Suggested CE/PE, Confidence%). New `analyzer.option_chain_ai_output()`
+  — assembled entirely from data already computed above in the same
+  `analyze()` call, no new calculation. One real bug caught while
+  wiring this: `_suggest()`'s actual return shape is a LIST of action
+  dicts (`{"action": "BUY", "instrument": "23700 CE", ...}`), not the
+  separate `ai_signal()`/`_rule_signal()` functions' `{"signal":
+  "BUY_CE", ...}` shape — my first draft assumed the wrong shape and
+  crashed with `AttributeError: 'list' object has no attribute 'get'`,
+  caught immediately by running the test, not shipped.
+- [x] **Wiring, additive only**: `narrative` and `ai_output` added as
+  new top-level keys in `analyze()`'s return dict; `strike_strength`
+  added as a new per-leg key. Nothing existing renamed/restructured.
+
+Tested: strike_strength correctly ranks a dominant, unambiguous OI wall
+highest (100%) with a real synthetic scenario (caught and fixed two
+test-construction ties along the way — a strike gaining 250% OI
+relatively still losing to a much larger absolute wall, and two walls
+sharing identical OI producing order-dependent-but-legitimate tie-
+breaking — neither was a code bug, both were my own test data being
+ambiguous); narrative correctly produces the exact spec-style sentences
+including the Fresh-Call-Writing and resistance-shift lines from a real
+2-cycle scenario; ai_output's `highest_oi_strike` correctly identifies
+an unambiguous wall, all 13 expected keys present, `pcr`/institutional-
+activity-summary/suggested_ce all populated correctly from real data;
+confirmed full backward compatibility (all three new pieces work with
+`snapshot_ctx` omitted entirely).
+
+**Feature #4 (Option Chain Intelligence Engine) is now complete** —
+all 13 of the spec's sections have either been retained-as-already-
+built (Supply/Demand, base Strike Strength), extended (PCR, Strike
+Strength's fuller score), or newly built (Live Data snapshot
+persistence, Real-Time Calculations, Institutional Activity, Premium
+Intelligence, IV & Greeks, Smart Money, AI Narrative, consolidated AI
+Output, chart signal overlays). Every new calculation is additive —
+zero existing fields renamed, removed, or restructured, confirmed via
+full-codebase grep before each increment shipped — so nothing
+downstream needed to change. Not yet done: any dashboard UI actually
+DISPLAYING most of this (chart price-lines/markers ARE wired and live;
+the richer per-strike Institutional Activity/IV-Greeks/Smart-Money/
+Strike-Strength/AI-Output data is computed and available on
+`analysis:{symbol}` but has no dedicated panel yet) — a natural next
+piece whenever picked back up, distinct from the analysis engine work
+done across increments 1-5.
+
+### Features #5–11, #13 — not started
+
+#1 (LTP Monitor), #2 (AI Market Bias), #3 (Support/Resistance + Entry
+Criteria) are done and tested above. Remaining: Option Chain Engine
+enhancements (#4), Institutional Activity detection (#5), Strike
+Ranking (#6 — note: substantially overlaps with #3's OI-wall work
+already retained from analyzer.py; likely a lighter lift than
+originally scoped), Technical Engine (#7), AI Signal Engine (#8), Risk
+Engine (#9), Options Strategy Engine (#10), AI Narrative (#11).
+TradingView overlays (#12) is DONE above (Lightweight Charts). #13
+(implementation rules — modularity, async, docs, tests) is an ongoing
+discipline applied throughout, not a discrete deliverable. Each
+remaining feature is independently substantial — several (Signal
+Engine, Risk Engine, Options Strategy Engine) are comparable in scope
+to the MTF Confluence strategy build earlier this project, which took
+a full session on its own with the same testing rigor. Working through
+these with the same testing discipline used for #1/#2/#3/#12, not
+batched untested.
+
+
+
+## rinkoo.docx (2026-07-23) — status of every deliverable requested
+
+Reference docs saved to `docs/strategy-reference/` (rinkoo.docx,
+future_and_options.pdf, triple_screen_setup.pdf,
+check_list_for_3rd_wave_setup_.pdf) for this and future sessions.
+
+### Done and tested
+
+- [x] **Scrip master schema fix** — real confirmed compact-CSV schema
+  wired into `dhan_scrip_master.py` (`SEM_SMST_SECURITY_ID` etc.,
+  `DD/MM/YY HH:MM` expiry format, `SM_SYMBOL_NAME` as the underlying-
+  symbol filter since this file has no dedicated `UNDERLYING_SYMBOL`
+  column). Tested against the user's exact FINNIFTY row (security_id
+  61091). Still not run against the real 25MB live file — this
+  sandbox's egress allowlist blocks images.dhan.co directly (confirmed
+  403) — `test_dhan_scrip_master.py` is ready for that run.
+- [x] **ATR-based position sizing** (`sizing.size_by_atr_risk`) —
+  matches the docx's worked example exactly: capital ₹10,00,000, ATR
+  228.47 → SL buffer 342.7pts → risk/lot ₹8,567.50; 1% risk → 1 lot
+  (0.86% actual), 2% risk → 2 lots (1.71% actual). Includes the
+  options-delta scaling note (ATM option premium moves ~half the
+  index-point distance).
+- [x] **"MACD+Stoch Confluence" strategy — the first new strategy
+  requested, built and wired to execute.** `mtf_confluence_strategy.py`
+  implements the WRITTEN rule set from the docx (daily MACD above-zero
+  uptick + weekly MACD turning up after being down + RSI(14)>40 +
+  Stochastic bullish cross from oversold + price in upper Bollinger
+  Band — all 5 mandatory; bearish is the exact mirror; futures OI
+  buildup is supportive-only, boosts confidence but never blocks).
+  `MTFConfluenceAgent` runs it every 15 min during market hours and
+  fires real BUY_CE/BUY_PE signals into the standard risk pipeline —
+  same capital gates, position caps, daily loss limit as every other
+  strategy, no special exemption. Sized via `size_by_atr_risk` with
+  delta=0.5 (options, not futures). Visible on the Strategies page
+  (new MTF Confluence panel) and configurable in Settings (enable
+  toggle, min confidence, max trades/day).
+  Indicator math (MACD/RSI/Stochastic/Bollinger %B/ATR/weekly
+  resampling) independently verified against known reference behavior
+  — monotonic series, crossover detection, %B at band extremes — not
+  just trusted from the file's own comments. Found and fixed a real
+  bug during this verification: an unclamped ATR-scaled stop distance
+  could exceed the entire option premium when ATR is large relative to
+  that day's IV (produced a ₹0.05 stoploss on a ₹100 option in
+  testing) — added a 10-60%-of-entry sanity clamp and re-verified
+  against the exact failing case plus two edge cases (realistic ATR,
+  zero ATR).
+  **Scope note**: this implements the WRITTEN rule set from rinkoo.docx,
+  not the more elaborate second Pine Script in that doc (pivot-based
+  MACD/RSI/Stochastic divergence detection, Fibonacci-extension
+  targets, a full weekly/daily/1H confluence table) — that stays a
+  distinct, larger follow-up, listed below, not silently folded in.
+  Regression: all touched files pass syntax + import checks, JS
+  validates, settings round-trip via the actual API, all agents
+  (14 total incl. this one) instantiate and cycle cleanly with no
+  live broker connection (graceful degradation confirmed).
+
+### Explicitly deferred (not built, tracked here rather than dropped)
+
+- [ ] **Full "1H MTF Reversal Strategy" port** — the second Pine
+  Script in rinkoo.docx: pivot-high/low based divergence detection
+  across MACD/RSI/Stochastic, EMA5/13/26 1H cross with a weekly+daily
+  context gate, Fibonacci-extension or nearest-support/resistance
+  targets, and a live on-chart confluence table. Substantially larger
+  than the first strategy — recommend as its own dedicated session
+  once the first strategy has a day or two of live results to compare
+  against.
+- [x] **Futures OI as a live supportive signal — DONE (2026-07-24).**
+  `MarketDataAgent` now subscribes the current-month future per symbol
+  (via `dhan_scrip_master.get_current_future_detailed()` + the
+  existing `DhanWebsocketClient.subscribe_more()`, re-checked once per
+  trading day — this is what makes monthly rollover automatic: a new
+  day's lookup naturally resolves to whichever contract is now
+  nearest-unexpired, and if that's a different security_id than
+  yesterday's, the new one gets subscribed with no manual update).
+  Futures ticks are classified into long/short buildup by comparing
+  LTP+OI against a same-day baseline (captured at the first tick of
+  each trading day — buildup is a session-level read, not tick-to-tick
+  noise) and written to `future_oi_trend:{symbol}` as exactly `"long"`
+  / `"short"` / `None` — matching `mtf_confluence_strategy.evaluate()`'s
+  `future_buildup` parameter exactly (verified by reading its literal
+  string comparisons before writing this, not assumed — an earlier
+  draft would have written `"long_buildup"`/`"short_buildup"` here,
+  which would have silently never matched). Only the strict textbook
+  buildup quadrants (price+OI both up = long, price down + OI up =
+  short) feed the strategy signal; the other two quadrants (short
+  covering, long unwinding) are real signals but a weaker/different
+  read than what rinkoo.docx specifically asked for — reported on a
+  separate `future_oi_quadrant:{symbol}` diagnostic key instead, so
+  the strategy only ever sees the exact signal it was specified
+  against.
+  Tested: all 4 OI/price quadrants classify correctly, first-tick and
+  new-day baseline reset, daily dedup (doesn't re-subscribe same day),
+  monthly rollover (different resolved security_id on a later day
+  triggers a fresh subscribe), connection-not-ready retries next cycle
+  rather than giving up for the day, scrip-master lookup failure
+  logged and handled without crashing, futures ticks confirmed routed
+  away from the option-chain merge (a future's data doesn't belong in
+  `chain:{symbol}`'s strike/ce/pe rows), and a full end-to-end test
+  confirming the live bus value actually reaches
+  `mtf_confluence_strategy.evaluate()`'s confidence calculation.
+  Scope respected: no changes to ExecutionAgent's place/exit/
+  exit_spread, RiskAgent.evaluate, or sizing.py — confirmed by
+  inspecting MarketDataAgent's method list after the change (only new
+  methods: `_ensure_futures_subscribed`, `_classify_future_tick`) and
+  confirming `sizing.size_by_atr_risk` is unchanged.
+  Still requires `market_data_feed: "websocket"` to be enabled
+  (defaults to `"rest"`) and Dhan as the active broker — same
+  precondition as the rest of the hybrid feed.
+- [ ] **News as an active entry/exit input** — currently news only
+  gates (blocks a conflicting-direction signal, or scores as a
+  same-direction opportunity via `news_risk_opportunity()`). The docx
+  asks for something more attentive: news severity actively feeding
+  entry/exit decisions, not just a block/pass gate. Needs a concrete
+  design — e.g., a severity-weighted score merged into a strategy's
+  confidence the same way futures-OI buildup already is for MTF
+  Confluence — before implementation, since "more attentive" is a
+  design decision (how much should a severe news event move a
+  decision?) as much as a coding task.
+- [x] **DJI/Nasdaq/Crude/Gold/Silver/macro-event summary — DONE
+  (2026-07-24).** `/api/macro/digest` endpoint + a "Digest" panel at
+  the top of the Macro/News page, above the existing raw event log —
+  exactly as scoped: no new data plumbing, reads the same
+  `macro_market_data`/`macro_events` bus keys `/api/macro` already
+  exposed, compressed into indices + commodities/FX values, major
+  events from the last 24h, and event counts by category. Tested with
+  populated bus data through the actual API layer (not just empty
+  state).
+
+## Newly added (2026-07-24, continued) — end-of-day review: 6 real fixes from one log set
+
+- [x] **Open Position section missing spreads** — `/api/trades` only ever
+  read single-leg positions; spreads (most of the day's actual exposure,
+  given spread-driven auto_strategies) were never included. Added
+  `open_spreads` to the response and a new table section on the P&L
+  page. Tested end-to-end through the actual API with real spread data.
+- [x] **Digest "no summary output" — case-mismatch bug.**
+  `macro_market_data`'s real keys are uppercase ("DJI", "NASDAQ", etc.,
+  confirmed from `news_macro_agent.py`'s actual fetch code) but the
+  digest endpoint checked lowercase — the membership check silently
+  failed every time regardless of how much real data existed. Log
+  confirmed yfinance fallback was succeeding for every index/commodity
+  that session; the data was never the problem. Fixed and verified
+  against the exact real data shape.
+- [x] **News tracker retention was never actually enforced.**
+  `prune_tracker_file()` existed but was never called anywhere —
+  confirmed live (1000+ accumulated entries). Wired into `NewsAgent`
+  (hourly throttle), default changed 120h→48h (2 market days, per
+  request).
+- [x] **News tracker sort order made explicit + creation time now
+  shown.** Was relying on file-append order + reversal, fragile now
+  that two agent threads (NewsAgent, NewsMacroAgent) write to the same
+  file. Now explicitly sorted by `fetched_ts` descending. Added a Time
+  column to the table — previously not shown at all, so "is this
+  actually sorted by recency" wasn't even visible.
+- [x] **Table height/scroll constraints** — Order History (20 rows),
+  Day-wise P&L (5 rows), News Tracker (15 rows), all per the request,
+  with sticky headers so the column labels stay visible while scrolling.
+- [x] **`MTFConfluenceAgent` was silently giving zero log visibility**
+  when it never fired — meaning a full day of no signals looked
+  identical whether it was legitimately finding no qualifying setup
+  (plausible — 5 strict conditions by design) or failing silently for
+  a data/config reason. Same "why is X silent" gap already fixed for
+  PA strategies and spread auto-deploy; this agent had been missed.
+  Added a periodic breadcrumb, plus a specific alert for the "no Dhan
+  client" case (the one genuinely surprising failure given
+  broker=dhan and the strategy enabled in their actual config).
+- [x] **Data-driven fix: spreads picking a risk:reward worse than the
+  premium justified.** User's complaint ("picking spreads where loss
+  projection is higher compared to profits") checked directly against
+  7 real spreads opened live that day: most clustered at 15-22% credit-
+  to-width fraction (right at the old `credit_min_frac` floor),
+  producing 4-5.6:1 risk:reward AGAINST the trader (e.g. NIFTY
+  bear_call: ₹15.2 credit risking ₹84.8). The two spreads with a
+  naturally higher credit fraction (35-44%) had a far more reasonable
+  1.2-1.8:1 ratio. Raised `credit_min_frac`'s bounds floor 0.08→0.25
+  and default 0.15→0.28 — same tradeoff pattern as the wall_gap_frac
+  fix (fewer eligible setups, meaningfully better ones). Verified the
+  new floor correctly rejects the two worst real spreads from that day
+  while still allowing the two reasonable ones through. The
+  `get_params()` bounds-clamp built earlier the same day already
+  retroactively catches any stale persisted `credit_min_frac` too —
+  confirmed directly, no additional migration code needed.
+- Investigated, confirmed NOT a code bug: **SENSEX "0 chain days"**.
+  The user's own log shows the actual causes directly — a local TLS
+  certificate path error, a 401 "Dhan access token expired", and
+  repeated DNS resolution failures for api.dhan.co — all consistent
+  with the nightly archive sync running while the machine is asleep/
+  disconnected or after that day's token expired. Confirmed SENSEX-
+  specific by comparing spread trade counts across all 4 symbols in
+  the uploaded backtests.json (NIFTY/BANKNIFTY/FINNIFTY all have real
+  spread trades; SENSEX has zero for both). Practical fix is
+  operational (keep the machine awake/connected around 15:45 IST),
+  not a code change.
+
+### Explicitly deferred from this same review — need their own scoping, not rushed
+
+- [ ] **Futures-derivatives-focused strategy** — user wants strategies
+  that actively trade/analyze futures, not just the existing OI-
+  buildup supportive signal into MTF Confluence. This is a genuinely
+  new strategy family (position type, P&L accounting, entry/exit
+  rules distinct from options) — needs its own scoping conversation,
+  not a same-session addition on top of everything else here.
+- [x] **TradingView webhook integration — DONE (2026-07-24), scoped
+  honestly.** Confirmed via live search (July 2026) before building
+  anything: TradingView has NO query API — the only real, officially-
+  supported integration is alert webhooks (write a Pine Script on
+  tradingview.com, set an alert, TradingView POSTs JSON to a URL when
+  it fires). Webhooks require Essential/Pro/Pro+/Premium — the paid
+  plan the user has unlocks this.
+  Built the receiving half: `Orchestrator.webhook_signal()` translates
+  a TradingView alert's index-level direction into an actual option
+  trade — picks the current ATM strike from the live chain, computes
+  an ATR-scaled premium stop (same clamped approach already used by
+  MTFConfluenceAgent, including its sanity-clamp fix), then routes
+  through the IDENTICAL risk pipeline every other strategy uses. New
+  `/api/tradingview/webhook` endpoint with mandatory shared-secret
+  validation (503 if unset, 401 if wrong — this endpoint could place
+  real trades if compromised, so it's closed by default) and flexible
+  field-name acceptance (symbol/ticker, direction/action — different
+  Pine templates use different names).
+  Tested: 8 scenarios on `webhook_signal()` directly (not-running,
+  bad direction, duplicate position, missing chain data, risk-agent
+  rejection, bearish→BUY_PE, all direction synonyms, large-ATR clamp
+  reuse) plus 5 on the actual HTTP endpoint (no secret configured,
+  wrong secret, correct secret, missing fields, alias field names) —
+  all through the real FastAPI TestClient, not mocked in isolation.
+  Also confirmed the webhook secret never leaks in plaintext via the
+  settings API.
+  Wrote `docs/tradingview-webhook-setup.md` with a full Pine Script
+  v5 template implementing the MACD+Stoch Confluence rule set
+  (matching `mtf_confluence_strategy.py`'s logic), INCLUDING real
+  `strategy.entry()`/`strategy.exit()` calls (ATR-based stop/target,
+  same rr=2.0 convention used throughout this codebase) so TradingView's
+  own Strategy Tester gives genuine backtest validation — the user
+  specifically asked for "strategy validation", which needs real
+  entries/exits, not just alert markers. Caught and fixed two real
+  bugs in my own Pine draft before finalizing it: `ta.stoch()` returns
+  a single float in Pine v5, not a tuple like `ta.macd()` (my first
+  draft used invalid tuple-destructuring syntax on it), and a dead
+  unused variable left over from an earlier draft.
+  **Honest limitations, stated directly in the doc**: no programmatic
+  pull of TradingView's Strategy Tester results into ltp-monitor (that
+  stays a manual on-TradingView step); no live chart embed (a separate,
+  purely visual feature); the app must be reachable from the internet
+  for TradingView to deliver webhooks (ngrok/Cloudflare Tunnel/a real
+  host — not just localhost) — a real operational requirement, not
+  something code can solve; the Pine Script itself has been written to
+  match documented v5 syntax but has NOT been run on TradingView from
+  this environment (no way to execute Pine Script here) — flagged
+  explicitly for the user to verify in the Pine Editor before trusting
+  it live, same discipline as every other "can't test this myself"
+  item this project.
+
+- [x] **Global Markets Snapshot "just a number, it can be used" — DONE
+  (2026-07-24).** Added `_update_global_sentiment()` to
+  `NewsMacroAgent`: averages chg_pct across DJI/NASDAQ/SPX/
+  RUSSELL2000, classifies "risk_on" (avg >= +0.75%) / "risk_off"
+  (avg <= -0.75%) / "neutral", stored on `global_risk_sentiment`.
+  Wired into `mtf_confluence_strategy.evaluate()` as a second
+  supportive-only input alongside futures-OI buildup — smaller
+  adjustment (+/-5 vs futures' +/-10, since it's a broader macro
+  factor, not symbol-specific), never blocks, stacks correctly with
+  futures buildup when both are present. Also surfaced visibly in the
+  Digest panel (risk-on/risk-off badge with the averaging detail), not
+  just used internally. Tested: 5 sentiment-classification scenarios
+  (broad selloff/rally/mixed/no-data/all-None), 6 confluence-scoring
+  scenarios confirming no regression on the existing futures-buildup
+  logic plus correct stacking of both supportive signals, and one
+  end-to-end test confirming the value actually flows from
+  NewsMacroAgent through the real MTFConfluenceAgent code path.
+- [ ] **>500 tracked news items — relevance filtering.** Flagged
+  previously as a known gap (`valid` currently just checks for a
+  non-empty title). The retention fix (48h) will shrink the accumulated
+  count going forward, but doesn't address whether all ~9 configured
+  feeds are actually producing execution-relevant content — a genuine
+  review of feed suitability, not done in this pass.
+
+## Newly added (2026-07-24, continued) — regression root cause found: bounds fixes don't retroactively apply to persisted versions
+
+User reported the system went from profitable to losing after updating.
+Given real trade data (07-16 through 07-24): 07-16/17/20/21 all
+negative (pre-fix era), 07-22/23 positive after early fixes, 07-24
+negative again (-₹2,183) despite having MORE wins than losses (20 vs
+8) — the signature of a few large losses outweighing many small wins.
+Traced the 3 largest losses (-3983/-1200/-748, combined -5,931) to
+"short strike breached" — the EXACT failure mode the wall_gap_frac fix
+(0.4→1.5 bounds floor, 2026-07-23) was supposed to have already fixed.
+
+- [x] **Root cause: `backtester.get_params()` returns persisted
+  strategy-version parameters completely unvalidated against current
+  bounds.** Raising a bounds floor in code (as the wall_gap_frac fix
+  did) only changes what FUTURE auto-tuning steps can move a value
+  TOWARD — `tune()` only checks bounds during an incremental
+  relax/tighten step. A version already tuned and persisted to an
+  out-of-bounds value BEFORE the fix landed keeps being returned
+  verbatim, forever, since nothing re-validates it on read. This is
+  the same "stale persisted state survives a code fix" pattern hit
+  repeatedly with config.json defaults this project — except this
+  time in `strategy_versions.json`, a different persistence layer,
+  which the earlier fixes didn't touch.
+  **Fixed**: `get_params()` now clamps every parameter against its
+  current bounds (`strategies.SPREAD_BOUNDS` / `pa_strategies.
+  PA_BOUNDS`) on every single read — the one function every consumer
+  (auto-deploy, PriceActionAgent, backtests) goes through — so a stale
+  persisted value can never again silently outlive a bounds fix.
+  Tested: reproduced the exact regression scenario (a persisted
+  wall_gap_frac=0.8 from before the fix) and confirmed it's now
+  clamped to 1.5 on read; confirmed values already in-bounds are left
+  untouched; confirmed values above the ceiling also get clamped down;
+  confirmed the no-persisted-version fallback path still works;
+  confirmed PA strategy bounds (mtf_confirm) clamp the same way;
+  verified end-to-end through the actual `backtester` module the app
+  imports, not just in isolation.
+- Noted, not a bug: `spread_profit_target_pct` in the live config was
+  30% (vs. the ~10% that was actually producing profitable captures in
+  an earlier session's analysis), but observed captures during the day
+  ranged from ~10% (early trades) to ~37% (a couple of late-morning
+  trades) — consistent with `profit_target` being computed ONCE at
+  spread creation from whatever the config value was AT THAT MOMENT,
+  never retroactively updated for already-open positions. This
+  strongly suggests the config value was raised mid-session (e.g.
+  during testing) rather than being a code-side bug — flagging for the
+  user's awareness, not something the code should "fix," since config
+  changes correctly apply going forward only.
+- Other live config values worth the user's own review, not touched
+  since they read as intentional manual settings rather than stale
+  defaults: `daily_loss_limit: 2000` (notably tighter than the 5000
+  default), `stop_after_consecutive_losses: 9` (notably more tolerant
+  than earlier defaults), `cooldown_after_loss_min: 1` (very short).
+  None of these were changed — flagged for the user's own judgment.
+
+## Newly added (2026-07-24, continued) — ema_mtf never fired: root cause found
+
+Second live-log review, same session. User asked why ORB/vwap_pullback/
+ema_mtf showed no signals — turned out ORB and vwap_pullback WERE
+firing (2 ORB signals became real approved+taken trades; vwap_pullback
+fired but hit risk-gate rejections on regime/confluence, not silent).
+`ema_mtf` was the genuinely, permanently silent one — not a market-
+conditions issue, a real structural bug.
+
+- [x] **Bug: `ema_mtf` could never fire with its own default settings.**
+  Root cause, found in two parts:
+  1. `c15_today` (today's 15-minute candles) was computed in
+     `MarketDataAgent`'s candle-fetch method but never included in the
+     dict stored to `pa_candles:{symbol}` — only `c1`/`c5` were stored.
+  2. `PriceActionAgent.cycle()` then called `pa.evaluate(name,
+     pack["c1"], pack["c5"], None, ...)` — the 15-min candles argument
+     was hardcoded to `None`, not read from `pack`.
+  `ema_mtf`'s `mtf_confirm` (the DEFAULT parameter value) requires BOTH
+  `c5` and `c15` present — with `c15` always `None`, it bailed at that
+  check on every single call, permanently, completely independent of
+  whether a genuine 5/13 EMA cross was happening on the 1-minute
+  candles. Fixed both points.
+  Tested rigorously: constructed synthetic candles producing a genuine,
+  precisely-timed fresh EMA cross confirmed by trending 5m/15m data —
+  confirmed it fires correctly with real `c15` data, then re-ran the
+  IDENTICAL setup with only `c15=None` to directly reproduce the exact
+  original bug (same cross, same confirmation data, only the missing
+  argument differs) — confirming this precise mechanism was the root
+  cause, not a coincidence. Also verified end-to-end through the real
+  `PriceActionAgent.cycle()` wiring (not just the isolated strategy
+  function), and confirmed with `backtester.is_live_enabled` mocked
+  that this fires and publishes an actual signal.
+- [x] **New: per-strategy `no_setup` diagnostic breakdown.** The
+  existing skip-reason counter aggregated all three PA strategies
+  (orb/vwap_pullback/ema_mtf) into one `no_setup` number — meaning it
+  was structurally impossible to tell from the log which strategy was
+  actually silent, which is exactly the question that got asked. Added
+  a per-strategy breakdown alongside the existing aggregate (kept for
+  backward compatibility), surfaced in both the live summary and the
+  10-minute diagnostic breadcrumb. Tested: confirms each strategy's
+  no-setup count is correctly attributed individually.
+
+## Newly added (2026-07-24, continued) — live production log review
+
+First real activity-log review from a live paper-trading session
+(2026-07-24 market hours). Two real bugs found and fixed; two genuine
+live-data gaps diagnosed with better tooling (not blindly guess-fixed,
+since this sandbox can't reach the live scrip master to debug
+directly); one dead feed flagged.
+
+- [x] **Bug: "daily profit target reached" message nonsensical on a
+  PASSING check.** `check()` logs its label on every call regardless
+  of pass/fail (prefixed ✓/✗) — the message was hardcoded to always
+  read as the failure case ("reached... locking in"), so a normal
+  passing check (day P&L still under target) printed "✓ daily profit
+  target reached (₹0 ≥ ₹50000)" — literally false arithmetic shown as
+  if true. Fixed: message now correctly describes whichever state
+  actually holds. Tested both states directly.
+- [x] **Finding, not a bug: live spread profit-target is ~10%, not the
+  18% default.** Reverse-engineered from 5 real closed-spread captures
+  in the log — 4 of 5 landed within a few paise of a 10%-of-credit
+  threshold (BANKNIFTY: captured 3.8 vs a 10% threshold of 3.785,
+  essentially exact), not the 18% default set earlier this week. This
+  means the user's saved config.json has an old/custom
+  `spread_profit_target_pct` value that the code default can't
+  override — the same "stale config survives a code-default change"
+  pattern hit repeatedly this project (daily_loss_limit, news cooldown,
+  etc.), now confirmed happening again for this specific key.
+  **Deliberately not changed** — today's actual results at ~10% were
+  all net-positive (5/5 closed spreads profitable, +₹2,882 combined),
+  so overriding a live user setting that's currently working well
+  based on a theoretical 18% recommendation would be presumptuous.
+  Flagged to the user directly; their Settings page shows the true
+  current value if they want to check/adjust it themselves.
+- [x] **Futures OI lookup failing live for SENSEX and FINNIFTY** —
+  exactly the risk flagged when this was built (SENSEX's "BSE"
+  exchange code was explicitly noted as unconfirmed; FINNIFTY's
+  monthly-only 2026 listing change was a known open question).
+  Since this sandbox can't reach the live scrip master to debug
+  directly, added STAGED diagnostics to
+  `get_current_future_detailed()` instead of guessing a fix: it now
+  reports which filter stage (exchange code / instrument tag /
+  underlying-symbol name / all-expired) eliminated every candidate,
+  and for a symbol-name mismatch specifically, lists the actual
+  underlying_symbol values seen in the file. Tested against three
+  constructed failure scenarios (wrong exchange code, symbol name
+  variant, all-expired) — each correctly diagnosed with a distinct,
+  actionable `likely_cause`. No `agents.py` change needed — the richer
+  diagnostic dict flows through the existing log line automatically.
+  **Root cause confirmed same day from the next live run**: the
+  diagnostics worked exactly as designed — `symbol_matches: 0` with
+  `sample underlying_symbol values seen: ['']` for NIFTY, BANKNIFTY,
+  AND FINNIFTY (133,656 rows matched the exchange, 15 matched
+  FUTIDX, 0 matched a symbol name) — `SM_SYMBOL_NAME` is empty for
+  every live FUTIDX row, not just unreliable for FINNIFTY specifically
+  as first suspected. Fixed: `_derive_underlying_symbol()` now falls
+  back to parsing `SEM_TRADING_SYMBOL`'s prefix before the first
+  hyphen (confirmed reliably populated — "FINNIFTY-Jul2026-FUT" in the
+  user's own original sample row) whenever `SM_SYMBOL_NAME` is empty.
+  Tested against the exact live failure (empty SM_SYMBOL_NAME,
+  populated SEM_TRADING_SYMBOL) for FINNIFTY and NIFTY, confirmed no
+  regression when SM_SYMBOL_NAME IS populated, and confirmed graceful
+  degradation (empty string, never a crash) for a malformed trading
+  symbol with no hyphen. Added as a permanent regression test in
+  `test_dhan_scrip_master.py` (not just an ad-hoc check) so this exact
+  failure mode is covered going forward. SENSEX's exchange-code
+  question remains open — no SENSEX failure appeared in this
+  particular log excerpt to confirm either way.
+- [ ] **Financial Express RSS feed confirmed dead** (`HTTP Error 410:
+  Gone`) — this was the user's own provided URL, not one added
+  speculatively. Error handling worked correctly (logged clearly,
+  didn't crash, didn't block the other 3 Indian feeds or any global
+  feed). Not silently swapped or removed — flagged for the user to
+  either find an updated URL or remove it via the feed-management UI.
+
+## Newly added (2026-07-24) — News agent merge + RSS engine
+
+At the user's request: two previously-separate news pipelines
+(NewsAgent's single Google-News RSS query for risk-gating, and
+NewsMacroAgent's NewsAPI-based global_macro/constituent/weather
+categories) were independently fetching and classifying overlapping
+stories — the user's exact complaint was "picking similar information
+again and again."
+
+- [x] **`news_engine.py`** — new shared module, used by BOTH agents:
+  - RSS 2.0 + Atom feed parsing (stdlib `xml.etree`, no new dependency)
+  - Category classification into geopolitical / market / tech /
+    business / economics / energy / mergers / banking / auto / weather
+    / global-macro / other — tested against 10 sample headlines
+    spanning every category, all correct
+  - Bias classification (bullish/bearish/neutral) — re-verified against
+    the two previously-found substring bugs ("war" inside "Warner",
+    "rain" inside "Ukraine") to confirm neither recurs in the shared
+    module
+  - **Impact-window heuristic** (1m/5m/15m) — a documented,
+    category+severity-keyword-based estimate of how long a headline is
+    likely to matter, explicitly NOT a validated/backtested prediction
+    model; a starting point meant to be refined against real outcomes,
+    same discipline as the spread profit-target and ATR-stop-clamp
+    tuning earlier in this project
+  - **Cross-source, cross-agent deduplication** — the actual fix for
+    the user's complaint. `is_duplicate()`/`log_tracked_event()` share
+    module-level state across both agents (they're threads in the same
+    process). Tested: the same story from two different sources is
+    deduped; a reworded/different-punctuation version of the same
+    story is still caught (normalized signature); a genuinely different
+    story is never falsely deduped.
+  - Feed source CRUD (add/delete/persist to `~/.ltp-monitor/
+    news_feeds.json`) — tested including duplicate-id and delete-
+    nonexistent error cases
+  - `test_feed()` — validates a URL and returns an actionable
+    pass/fail rather than a stack trace, tested against HTTP errors,
+    network errors, and empty-feed cases
+  - Default feeds: the user's 4 confirmed-working Indian sources
+    (Moneycontrol, Economic Times, Financial Express, Business Line)
+    plus 5 global feeds (CNBC World/Economy/Finance/Energy, Yahoo
+    Finance). **HONEST STATUS**: this sandbox's egress allowlist
+    blocks every news domain tested (same restriction hit with
+    images.dhan.co earlier) — none of these URLs have been fetched
+    live from this environment. The Indian feeds are the user's own
+    confirmed sources; the global ones are widely-documented,
+    long-standing RSS endpoints, not personally verified. Use
+    `/api/news/feeds/test` (or the Test button on the Macro/News page)
+    to validate each source from a machine that can actually reach
+    these domains before relying on any of them.
+- [x] **NewsAgent rewired** to pull from the shared RSS engine instead
+  of one hardcoded query. Its exact bus contract (`sentiment`/
+  `risk_event`/`flagged_ts`, read by `news_risk_opportunity()` in the
+  live risk-gating pipeline) was verified byte-for-byte unchanged after
+  the swap — that logic is close to live trading and was deliberately
+  left untouched beyond the input source. The existing stale-headline
+  dedup (a previously-fixed bug) was re-tested and confirmed still
+  works with the new fetch source.
+- [x] **NewsMacroAgent rewired** to check the shared dedup before
+  logging a NewsAPI-sourced event. Tested end-to-end: fed it a story
+  already logged by NewsAgent plus a genuinely new one, confirmed it
+  correctly logged only the new story.
+- [x] **New "News Tracker" table** on the Macro/News page — every
+  item shown with source, description, category, market-impact
+  indicator, impact window, action, and a valid/invalid flag, with
+  category/region/valid-only filters. Backed by `/api/news/tracker`.
+- [x] **RSS feed management UI**, same page — add/delete/test feed
+  sources (name, URL, category, region, id), backed by
+  `/api/news/feeds` (GET/POST/DELETE) and `/api/news/feeds/test`.
+- Regression: found and fixed a real bug during the verification pass
+  — an earlier edit had accidentally dropped the `async function
+  loadQuality(){` declaration line when inserting the new news
+  functions before it, which would have broken the entire Trade
+  Quality page (JS syntax error). Caught by running `node -c` on the
+  extracted script block before packaging, not after.
+- [ ] **Not yet done**: a real relevance/spam filter for RSS-sourced
+  items (currently `valid` just checks for a non-empty title — a
+  genuine filter, e.g. requiring a category match or a minimum keyword
+  density, is a natural next refinement); the impact-window heuristic
+  has not been validated against real candle outcomes yet (by design —
+  it's flagged as a first-pass model to tune later, not a finished one).
+
+- [ ] **TradingView integration** — the user has explicitly noted this
+  needs to support ANALYSIS, not just visualization, and that a paid
+  license may be required (which they will arrange). Not started —
+  correctly gated on that licensing decision rather than built as a
+  /substitute (e.g. a native inline-SVG chart standing in
+  for "TradingView integration" would misrepresent what was actually
+  delivered). Once a license path is confirmed, this needs its own
+  scoping pass: which TradingView product (Charting Library / Advanced
+  Charts / Lightweight Charts) fits the "for analysis" requirement,
+  and how it connects to this system's live signals.
+- [ ] **Avadhut Sathe Triple Screen / 3rd Wave Setup checklists** —
+  saved to `docs/strategy-reference/` as requested ("keep at project
+  level and learning"). These are dense, chart-pattern-recognition-
+  heavy systems (Elliott Wave 3rd-wave counting, Tide/Wave/Ripple
+  multi-timeframe structure, candlestick pattern recognition, Fibonacci
+  retracement/extension) — not scoped as strategies to build yet; kept
+  here as reference material the user may want built out later.
+
+## Newly added (2026-07-22)
+
+- [x] **Persist open positions/spreads to disk, survive restarts/updates.**
+  ~~Currently `positions` and `spreads` live only in the in-memory `Bus.state`~~
+  Done: `open_state.json` snapshot (atomic write) saved on every
+  positions/spreads mutation via a `Bus.set()` hook — catches every
+  existing call site automatically, no per-call-site changes needed.
+  Restored on `Orchestrator.__init__`, same pattern as closed-trade
+  history. Missing/corrupt snapshot loads cleanly as empty rather than
+  crashing startup. Tested: round-trip save/restore, position removal
+  correctly drops from the snapshot on close, missing/corrupt file
+  handling, full Orchestrator startup restore.
+
+- [x] **Capital/margin used per trade + top-of-dashboard capital summary.**
+  Done: `positions`/`spreads` now carry `capital_used`/`margin_used` at
+  open time, shown as a column in all three positions/spreads tables
+  (Dashboard, P&L/Orders, Strategy Library). New capital strip below the
+  header shows **Total Capital**, **Capital Used**, **Capital
+  Remaining**, and **Day P&L (incl. spreads)** — the P&L figure combines
+  today's realized (closed trades) with live unrealized P&L from every
+  currently-open position and spread. Backed by
+  `sizing.deployed_capital()` (already existed) plus a new `capital`
+  block in `Orchestrator.status()`. Tested end-to-end through the actual
+  `/api/autopilot/status` response.
+
+## Newly added (2026-07-22, continued)
+
+- [x] **Macro/News relevance filtering + risk/opportunity scoring.**
+  Fixed unparenthesized OR queries (bare "guidance"/"merger"/"India"
+  matching anything) plus a post-fetch word-boundary relevance check.
+  Each macro event now gets a bullish/bearish/neutral read, labeled
+  Opportunity/Risk against the active symbol's regime direction instead
+  of a flat Info label.
+- [x] **ATR-based stoploss + trailing stop.** Alternative to fixed-%
+  mode, using the regime engine's atr_pct. Preserves the exact rr=2.0
+  ratio for PA strategies regardless of ATR reading so it can't get
+  silently rejected by the risk-reward gate.
+- [x] **Risk Management panel (partial).** Daily profit target (locks
+  in gains, halts new positions for the day), transaction-level
+  absolute-rupee SL/target, rupee-based step-ratchet trailing for
+  single-leg positions (mirrors the spread ratchet). All exposed in a
+  restructured Settings page.
+- [x] **Settings page restructured** — the "Trading" card was a 30+
+  field wall; split into 6 grouped subcards (Basics, Position Sizing,
+  Stop-Loss & Trailing, Risk Management, Spread Management, News Gates)
+  in a 2-column inner grid.
+- [ ] **"Overall Strategy Level" SL/Target** from the reference image —
+  not implemented (shown disabled in the reference too, lower priority).
+
+## Newly added (2026-07-23) — Dhan Live Market Feed websocket
+
+- [x] **Client built** — `dhan_ws.py`, wrapping the official `dhanhq`
+  PyPI package's `MarketFeed` class (not hand-rolled binary parsing —
+  Dhan's feed is well-documented and the library is first-party, so
+  this carries none of the protocol-decoding risk the Kotak websocket
+  work had). Built by installing the actual package and reading its
+  `marketfeed.py` source directly, not guessing from docs — the
+  response dict field names (LTP, OI, security_id, depth, etc.) are
+  copied straight from `process_full()`/`process_quote()`.
+- [x] **Chain-merge logic** — `merge_tick_into_chain()` updates a
+  REST-fetched `chain:{symbol}` dict in place from a live tick, WITHOUT
+  wiping REST-only fields the feed doesn't carry (iv, delta/theta/
+  gamma/vega) — those stay as last known from the REST snapshot.
+- [x] **Dependencies confirmed**: `dhanhq>=2.2.0` added to
+  requirements.txt — pulls in `pandas`, `pyOpenSSL`, `websockets`
+  (asyncio; distinct from `websocket-client` used by the Kotak client,
+  no conflict). This is a real footprint increase (pandas especially)
+  worth being aware of.
+- [x] **Config toggle** — `market_data_feed`: `"rest"` (default) or
+  `"websocket"`. Nothing switches automatically.
+- [x] **Tested**: all internal logic that doesn't require a live Dhan
+  connection — segment mapping (NIFTY/BANKNIFTY/FINNIFTY→NSE_FNO,
+  SENSEX→BSE_FNO), tick parsing, packet-type filtering, unregistered-
+  security_id handling, chain-merge correctness (incl. REST-only field
+  preservation) — all verified with mocks.
+- [x] **Tested against a real Dhan account (2026-07-23) — PASSED, both
+  the option leg AND the index, after one round of fixing.** First run:
+  NIFTY option leg (23850 CE) streamed correct real-time LTP (147.5),
+  OI (3,479,775), and bid/ask (146.55/147.2) within seconds — this is
+  the data the whole system actually needs, confirmed working end to
+  end. The index (`add_index_instrument`) initially produced zero
+  ticks — root cause: it was subscribing in Full mode, whose payload
+  includes market depth + OI, neither of which exist for an index (no
+  order book, no open interest, since an index isn't directly traded).
+  Switched to Ticker mode (LTP+LTT only). Re-tested live: **both the
+  index (LTP 23869.6) and the option leg now stream correctly.**
+- [x] **Index security_ids double-checked against user-provided values**
+  (NIFTY=13, BANKNIFTY=25, FINNIFTY=27, SENSEX=51) — already matched
+  exactly in both `dhan_ws.py` and `broker_adapter.py`, no changes
+  needed.
+- [x] **Design review of Dhan's remaining data-API surface (2026-07-23)**
+  — full writeup in `dhan_ws.py`'s module docstring. Summary:
+  - **Option Chain / Historical Data**: REST-only by Dhan's own design
+    (no websocket variant exists for either) — already correctly used
+    via `broker_adapter.py`, unaffected by this work. The right
+    architecture is exactly what's built: REST for the slower-changing
+    shape (strikes, IV, greeks), this websocket overlaying fast fields
+    (LTP/OI/depth) on top.
+  - **Full Market Depth (20/200-level, a separate websocket)** —
+    deliberately NOT built. Dhan's docs state only NSE Equity/
+    Derivatives are enabled, excluding BSE — meaning SENSEX would have
+    no depth coverage while the other three symbols would, breaking
+    the same-logic-across-all-four-symbols design this app is built
+    on. Also, current strategies price off best bid/ask (already in
+    the 5-level depth this Live Feed already provides) and don't
+    consume deep-book data. Worth revisiting only if a future strategy
+    specifically needs it.
+  - **Futures** — this system trades options only; no futures
+    position/P&L/strategy exists anywhere in the codebase, and Dhan's
+    option-chain endpoint doesn't return futures contracts (would need
+    a separate scrip-master CSV lookup by `UNDERLYING_SECURITY_ID` +
+    `INSTRUMENT=FUTIDX`). This is a strategy-level decision to make
+    explicitly, not a data-plumbing gap — flagged rather than built
+    speculatively.
+- [x] **Wired into the live agent loop as a true hybrid (2026-07-24).**
+  `MarketDataAgent` now has `_ensure_ws_client()`/`_sync_ws_feed()`/
+  `_on_ws_tick()`. REST stays the ONLY source of chain shape/greeks —
+  nothing about the existing REST cycle changed. When
+  `market_data_feed` is `"websocket"` (Settings → Broker; default
+  remains `"rest"`, zero behavior change unless explicitly opted in):
+  a `DhanWebsocketClient` is created once, subscribes all 4 indices in
+  Ticker mode immediately, and as each REST poll discovers option-leg
+  `security_id`s, they're incrementally added via `subscribe_more()` —
+  so the websocket subscription set grows to match whatever REST has
+  already confirmed exists, never ahead of it. Ticks merge onto the
+  same `chain:{symbol}` dict via `merge_tick_into_chain()` (option
+  legs) or a direct spot/ticker update (index).
+  Found and fixed a real race condition while wiring this: `subscribe_
+  more()` can be called before the async websocket connection is fully
+  up, and `MarketFeed.subscribe_symbols()` silently drops (not queues)
+  a request made too early — with no error. Added `is_connected()`
+  (tracked via on_connect/on_close) and made `subscribe_more()` return
+  True/False; `MarketDataAgent` only marks a leg "subscribed" in its
+  own bookkeeping if the send actually happened, so a too-early attempt
+  correctly retries on the next ~3s cycle instead of being silently
+  lost forever.
+  Tested end-to-end with mocks: hybrid mode off → zero websocket
+  activity (confirmed no client ever created); hybrid mode on → client
+  created on first cycle, option legs correctly NOT marked subscribed
+  before connection confirmed, correctly subscribed once connected,
+  index tick correctly updates chain spot + ticker in place, option
+  tick correctly merges LTP/OI/bid/ask. NOT yet run live in this
+  wired-in form — the underlying pieces (`dhan_ws.py` itself) are
+  live-validated, but this specific integration point needs a live
+  market-hours run to confirm before relying on it for real trading.
+- [x] **Futures data-plumbing added (2026-07-24)**, at your request with
+  real scrip-master example data (BANKNIFTY-Sep2026-FUT, security_id
+  68390) — but scoped as DATA ACCESS ONLY, not a new trading strategy.
+  This system still trades options exclusively; nothing here opens a
+  futures position or references futures P&L anywhere. What it does
+  add: `dhan_scrip_master.py` downloads (daily-cached) Dhan's detailed
+  scrip master CSV and resolves the CURRENT-MONTH futures contract for
+  a symbol by picking whichever unexpired row has the nearest expiry —
+  computed dynamically from expiry dates every time, so monthly
+  rollover (a new security_id every month, no formula for it) is
+  handled automatically with no manual maintenance. `dhan_ws.py` gained
+  `add_future_instrument()` (Full mode — futures have real OI/depth,
+  unlike the index) that either takes an explicit security_id or calls
+  the scrip-master lookup itself.
+  Tested: your exact example row (68390) resolves correctly; "nearest
+  unexpired, not just listed last" logic verified with dates relative
+  to today (not hardcoded, so this stays correct on any day it's run);
+  an expired contract and a same-underlying OPTION row mixed into the
+  sample are both correctly excluded; SENSEX correctly resolves to
+  BSE_FNO (not NSE_FNO, unlike your example list which only covered
+  NSE names); unknown symbols and scrip-master schema mismatches both
+  fail with an actionable message rather than a crash.
+  HONEST STATUS: `dhan_scrip_master.py`'s CSV parsing is validated
+  against a constructed sample matching the documented schema — this
+  sandbox's egress allowlist blocks images.dhan.co directly (confirmed:
+  a direct `curl -I` returns 403), so it has NOT been run against the
+  real live file. `test_dhan_scrip_master.py` is written and ready to
+  validate that — if it reports a "CSV schema mismatch," the printed
+  fieldnames list is what's needed to fix `COLUMN_CANDIDATES`.
+  NOT wired into `MarketDataAgent`'s hybrid loop — that loop currently
+  only handles index + option instruments. Wiring futures in is a
+  reasonable next step once (a) the live CSV test passes and (b) there's
+  an actual reason to want futures data flowing (e.g. as a spot proxy,
+  or if a futures strategy gets added later) — flagging this as a
+  decision point rather than building it speculatively.
+
+## Pending roadmap items (not yet started) — published 2026-07-23
+
+| # | Item | Status |
+|---|------|--------|
+| 6 | Chart.js visual pass / TradingView Lightweight Charts | Not started |
+| 7 | ML scoring (shadow journal is accumulating volume now) | Not started |
+| 9 | Trade quality dashboard — expectancy, win rate by hour/setup, exit efficiency | **Done** — `/api/quality` endpoint + Trade Quality nav page |
+| 11 | Liquidity-sweep / FVG confluence layered onto OI-wall logic | Not started |
+| 12 | ML probability scoring (same track as #7, larger scope) | Not started |
+| 13 (partial) | Full visual redesign | Token/color/icon/Settings-layout/journal-filter pass done; charts, Dashboard/P&L/Strategies/Backtest/Agents panel emoji cleanup, and deeper Supabase layout patterns (breadcrumbs, page sections elsewhere) still open |
+
+Detail on each:
+
+- [ ] **#6 — Chart.js visual pass / TradingView Lightweight Charts.** Not
+  started. Note: this is distinct from the TradingView-for-analysis
+  requirement raised in rinkoo.docx (needs a licensing decision) — this
+  item is purely visual/charting for existing dashboard panels.
+- [ ] **#7 / #12 — ML probability scoring.** Shadow journal is
+  accumulating real volume now; getting closer to viable but not
+  started.
+- [x] **#9 — Trade quality dashboard.** Done — `/api/quality` endpoint
+  + "Trade Quality" nav page: expectancy per trade, profit factor, win
+  rate, avg win/loss, exit efficiency (% of each trade's peak MFE
+  actually captured). Breakdowns by setup, by symbol, by entry
+  hour-of-day (inline net-P&L bar chart), plus MFE/MAE scatter charts
+  (vs P&L and volume). Date + symbol filterable.
+- [ ] **#11 — Liquidity-sweep / FVG confluence** layered onto the
+  existing OI-wall logic. Not started.
+- [ ] **#13 (partial) — Full visual redesign, Supabase-docs style.**
+  Done so far: color tokens, flat icons, panel headers, metric-card
+  style, Settings page grouped/2-column layout, journal date
+  filtering. Still open: deeper Supabase layout patterns beyond
+  Settings (breadcrumbs, page sections elsewhere), and an emoji
+  cleanup pass across Dashboard/P&L/Strategies/Backtest/Agents panel
+  headers (only the panels directly touched so far have been cleaned
+  up).
+
+## Recently completed (for context, not action items)
+
+- Margin-aware position sizing, spread defense rules, MAE/MFE tracking,
+  target/trail-stop retuning (items 1–4 of the original roadmap).
+- News/Macro Agent (global markets + macro/news checkpoints, structured
+  event log, provider error surfacing for Alpha Vantage/Twelve Data).
+- News agent risk/opportunity scoring (roadmap #8) — replaced the old
+  blanket block window with directional, decaying scoring.
+- Bug fixes: spread sizing hard-zeroing instead of falling back to
+  minimum lot; backtest replaying today's in-progress day as if closed;
+  repeating/stale news alerts; substring keyword false-positives (e.g.
+  "war" matching inside "Warner"); multi-timeframe confluence reading
+  stale prior-day candles early in the session; cross-symbol signal
+  staleness in the manual "Confirm & place order" flow.

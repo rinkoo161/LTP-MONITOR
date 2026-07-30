@@ -1,0 +1,252 @@
+// Strategy 8 (EW-Reversal) -- PARITY ORACLE, not a trading script.
+//
+// Purpose, following the precedent set for Strategy 7: every marker the
+// server plots for S8 must have a matching triangle here on the SAME
+// BAR. This script applies NO gates -- no Tide filter, no daily cap, no
+// risk-reward floor, no auto-deploy. It draws the raw pattern geometry
+// so a disagreement is unambiguously a geometry bug rather than a
+// difference in gating.
+//
+// Direction of the check is one-way, deliberately: every server marker
+// needs a Pine triangle on the same bar, but NOT the reverse. Pine will
+// legitimately show extra triangles, because the server suppresses them
+// with gates this script does not implement.
+//
+// PARITY HAZARD -- read before trusting a comparison
+// -------------------------------------------------
+// This does NOT use ta.pivothigh/ta.pivotlow. Those confirm a pivot from
+// a fixed number of bars either side, which is a different definition
+// from the server's structure.zigzag_series(), which confirms once price
+// RETRACES by a percentage. Using the built-in would produce pivots on
+// different bars and every downstream comparison would be meaningless
+// while looking plausible. The percentage zigzag below is a direct port.
+//
+// Set devPct to the same value as s8_zigzag_deviation_pct (default 0.5).
+//
+// ASCII ONLY. Em-dashes, smart quotes, non-breaking spaces and a BOM all
+// cause Pine lexer failures; this file is deliberately plain.
+
+//@version=5
+indicator("S8 EW-Reversal Parity Oracle", overlay=true, max_labels_count=500)
+
+devPct        = input.float(0.5,  "ZigZag deviation %",      minval=0.05, step=0.05)
+minBars       = input.int(12,     "Min pattern span (bars)",  minval=3)
+shoulderTol   = input.float(1.5,  "Shoulder tolerance %",     minval=0.1, step=0.1)
+neckBufPct    = input.float(0.05, "Neckline break buffer %",  minval=0.0, step=0.01)
+requireMacd   = input.bool(true,  "Require MACD-hist confirmation")
+showDiagonal  = input.bool(true,  "Ending diagonal")
+showHS        = input.bool(true,  "Head and shoulder")
+showFailedHS  = input.bool(true,  "Failed H&S")
+
+// MACD histogram, same 12/26/9 as ew_reversal._macd_hist(). Computed
+// BEFORE the zigzag so each extreme's histogram value can be captured as
+// it happens -- see pushPivot().
+[mLine, mSig, mHist] = ta.macd(close, 12, 26, 9)
+
+// ---------------------------------------------------------------- //
+// Percentage ZigZag -- a direct port of structure.zigzag_series().    //
+// Only CONFIRMED pivots are stored, matching the server: the running  //
+// extreme is never emitted. That is what makes the server's own       //
+// replay non-repainting, so the oracle must behave identically or it  //
+// would "see" pivots the server had not confirmed yet.                //
+// ---------------------------------------------------------------- //
+var float[] pvPrice = array.new_float()
+var int[]   pvBar   = array.new_int()
+var int[]   pvType  = array.new_int()      // 1 = high, -1 = low
+var float[] pvHist  = array.new_float()    // MACD hist AT the extreme
+
+var float curExt   = na
+var int   curBar   = na
+var float curHistV = na                    // hist captured with the extreme
+var int   dir      = 0                     // 0 = undecided, 1 = up, -1 = down
+
+// 2026-07-30 -- the histogram value is CAPTURED when the extreme forms
+// and stored beside the pivot, rather than looked up afterwards with
+// mHist[bar_index - pivotBar].
+//
+// That lookup was the cause of BOTH remaining failures:
+//
+//   Error on bar 4395: The requested historical offset (403) is beyond
+//   the historical buffer's limit (402).
+//
+// Pine sizes its history buffer at COMPILE time from the largest offset
+// it can see. `bar_index - pivotBar` grows without bound as the chart
+// advances, so no fixed buffer can satisfy it -- the script works for a
+// few hundred bars and then dies. It is not a tunable limit; the
+// approach is simply wrong for Pine.
+//
+// It also explains the warnings "The function 'histAt' should be called
+// on each calculation for consistency": histAt() was invoked inside
+// `if showDiagonal and n >= 6`, so on bars where that was false it was
+// not called at all and its history was inconsistent. Capturing the
+// value up front removes the conditional call entirely.
+pushPivot(float p, int b, int t, float h) =>
+    array.push(pvPrice, p)
+    array.push(pvBar,   b)
+    array.push(pvType,  t)
+    array.push(pvHist,  h)
+    if array.size(pvPrice) > 40
+        array.shift(pvPrice)
+        array.shift(pvBar)
+        array.shift(pvType)
+        array.shift(pvHist)
+
+if na(curExt)
+    curExt   := high
+    curBar   := bar_index
+    curHistV := mHist
+    dir      := 0
+else
+    if dir >= 0
+        if high > curExt
+            curExt   := high
+            curBar   := bar_index
+            curHistV := mHist
+        else if (curExt - low) / curExt * 100.0 >= devPct
+            pushPivot(curExt, curBar, 1, curHistV)
+            curExt   := low
+            curBar   := bar_index
+            curHistV := mHist
+            dir      := -1
+    if dir < 0
+        if low < curExt
+            curExt   := low
+            curBar   := bar_index
+            curHistV := mHist
+        else if (high - curExt) / curExt * 100.0 >= devPct
+            pushPivot(curExt, curBar, -1, curHistV)
+            curExt   := high
+            curBar   := bar_index
+            curHistV := mHist
+            dir      := 1
+
+n = array.size(pvPrice)
+
+// BOUNDS-SAFE accessors. The first version guarded at the CALL SITE
+// (`n > 0 and bx(1) == bar_index`) and crashed on bar 0 with
+// "Index -1 is out of bounds, array size is 0".
+//
+// Why the call-site guard does not work: Pine evaluates EVERY argument
+// of a plot*() call on every bar, and does not reliably short-circuit a
+// user-defined function sitting behind an `and`. So bx(1) runs even when
+// n > 0 is false, and on bar 0 the pivot arrays are still empty. The
+// guard has to live INSIDE the accessor, where it cannot be bypassed.
+//
+// Returning na rather than a sentinel keeps every downstream comparison
+// honest: `na == -1` is false and `na >= minBars` is false, so a missing
+// pivot silently fails a pattern test instead of accidentally passing one.
+px(int fromEnd) =>
+    int sz = array.size(pvPrice)
+    int i  = sz - fromEnd
+    i >= 0 and i < sz ? array.get(pvPrice, i) : na
+bx(int fromEnd) =>
+    int sz = array.size(pvBar)
+    int i  = sz - fromEnd
+    i >= 0 and i < sz ? array.get(pvBar, i) : na
+tx(int fromEnd) =>
+    int sz = array.size(pvType)
+    int i  = sz - fromEnd
+    i >= 0 and i < sz ? array.get(pvType, i) : na
+hx(int fromEnd) =>
+    int sz = array.size(pvHist)
+    int i  = sz - fromEnd
+    i >= 0 and i < sz ? array.get(pvHist, i) : na
+
+// A break must be an EVENT, not a LEVEL. `close < level` stays true on
+// every bar after the break, which is why this overlay marked fHS on
+// ~12 of 30 bars. The server had the identical flaw in all six of its
+// break/reclaim tests (ew_reversal._crossed) -- this oracle is what
+// surfaced it.
+crossedDn(float level) => close < level and close[1] >= level
+crossedUp(float level) => close > level and close[1] <= level
+
+// ---------------------------------------------------------------- //
+// Detector 1: ending diagonal                                        //
+// Six pivots p0..p5. Signature is the OVERLAP: wave (iv) enters wave  //
+// (i)'s territory, which a normal impulse forbids. Plus contracting   //
+// legs and histogram divergence at p5 vs p3.                          //
+// ---------------------------------------------------------------- //
+edBear = false
+edBull = false
+if showDiagonal and n >= 6
+    p0 = px(6), p1 = px(5), p2 = px(4), p3 = px(3), p4 = px(2), p5 = px(1)
+    spanOk = (bx(1) - bx(6)) >= minBars
+    if tx(6) == -1 and tx(1) == 1
+        rising  = p5 > p3 and p3 > p1 and p4 > p2
+        overlap = p4 < p1
+        w1 = p1 - p0, w2 = p3 - p2, w3 = p5 - p4
+        contracting = w3 > 0 and w3 < w2 and w2 < w1
+        div = not requireMacd or (hx(1) < hx(3))
+        edBear := spanOk and rising and overlap and contracting and div and crossedDn(p4)
+    if tx(6) == 1 and tx(1) == -1
+        falling = p5 < p3 and p3 < p1 and p4 < p2
+        overlap = p4 > p1
+        w1 = p0 - p1, w2 = p2 - p3, w3 = p4 - p5
+        contracting = w3 > 0 and w3 < w2 and w2 < w1
+        div = not requireMacd or (hx(1) > hx(3))
+        edBull := spanOk and falling and overlap and contracting and div and crossedUp(p4)
+
+// ---------------------------------------------------------------- //
+// Detector 2: head and shoulder                                      //
+// FIVE pivots, not six -- the server uses p1..p5 and reads no origin   //
+// pivot. An earlier server version demanded six and thereby made      //
+// every early-session H&S undetectable; the oracle must match the     //
+// five-pivot form or it will disagree exactly where that bug lived.   //
+// Neckline is INTERPOLATED to the current bar, not a flat min/max:    //
+// a sloping neckline is the common case and a flat approximation      //
+// triggers early on one slope and late on the other.                  //
+// ---------------------------------------------------------------- //
+hsBear = false
+hsBull = false
+if showHS and n >= 5
+    q1 = px(5), q2 = px(4), q3 = px(3), q4 = px(2), q5 = px(1)
+    b2 = bx(4), b4 = bx(2)
+    spanOk = (bx(1) - bx(5)) >= minBars
+    slope  = b4 == b2 ? 0.0 : (q4 - q2) / (b4 - b2)
+    neck   = q4 + slope * (bar_index - b4)
+    if tx(5) == 1 and tx(3) == 1 and tx(1) == 1
+        headOk = q3 > q1 and q3 > q5
+        sym    = math.abs(q1 - q5) / q3 * 100.0 <= shoulderTol
+        power  = not requireMacd or (mHist > hx(2))
+        hsBear := spanOk and headOk and sym and power and crossedDn(neck * (1 - neckBufPct / 100.0))
+    if tx(5) == -1 and tx(3) == -1 and tx(1) == -1
+        headOk = q3 < q1 and q3 < q5
+        sym    = math.abs(q1 - q5) / q3 * 100.0 <= shoulderTol
+        power  = not requireMacd or (mHist < hx(2))
+        hsBull := spanOk and headOk and sym and power and crossedUp(neck * (1 + neckBufPct / 100.0))
+
+// ---------------------------------------------------------------- //
+// Detector 3: failed H&S -- a CONTINUATION trade, not a reversal.      //
+// Three pivots A-B-C: a false break beyond A, then a reclaim past B.  //
+// The server also requires the Tide to be against the failed pattern; //
+// that gate is NOT replicated here, so expect extra Pine triangles.   //
+// ---------------------------------------------------------------- //
+fhsBull = false
+fhsBear = false
+if showFailedHS and n >= 3
+    a = px(3), b = px(2), c = px(1)
+    spanOk = (bx(1) - bx(3)) >= minBars
+    if tx(3) == -1 and tx(2) == 1 and tx(1) == -1
+        fhsBull := spanOk and c < a and crossedUp(b)
+    if tx(3) == 1 and tx(2) == -1 and tx(1) == 1
+        fhsBear := spanOk and c > a and crossedDn(b)
+
+// ---------------------------------------------------------------- //
+// Markers. One triangle per detector firing on this bar.             //
+// ---------------------------------------------------------------- //
+plotshape(edBear,  title="ED bear",   style=shape.triangledown, location=location.abovebar, color=color.red,    size=size.small, text="ED")
+plotshape(edBull,  title="ED bull",   style=shape.triangleup,   location=location.belowbar, color=color.green,  size=size.small, text="ED")
+plotshape(hsBear,  title="HS bear",   style=shape.triangledown, location=location.abovebar, color=color.maroon, size=size.small, text="HS")
+plotshape(hsBull,  title="HS bull",   style=shape.triangleup,   location=location.belowbar, color=color.teal,   size=size.small, text="iHS")
+plotshape(fhsBear, title="fHS bear",  style=shape.triangledown, location=location.abovebar, color=color.orange, size=size.small, text="fHS")
+plotshape(fhsBull, title="fHS bull",  style=shape.triangleup,   location=location.belowbar, color=color.blue,   size=size.small, text="fHS")
+
+// Confirmed pivots, so a parity disagreement can be attributed to the
+// zigzag rather than to the pattern logic.
+plotchar(n > 0 and bx(1) == bar_index and tx(1) == 1,  title="pivot high", char="H", location=location.abovebar, color=color.gray, size=size.tiny)
+plotchar(n > 0 and bx(1) == bar_index and tx(1) == -1, title="pivot low",  char="L", location=location.belowbar, color=color.gray, size=size.tiny)
+
+// Webhook template. Pine string rules: OUTER single quotes so the inner
+// JSON can use double quotes without escaping.
+// alertcondition(edBear or hsBear or fhsBear or edBull or hsBull or fhsBull,
+//   title="S8 pattern", message='{"strategy":"ew_reversal","symbol":"{{ticker}}","price":"{{close}}"}')

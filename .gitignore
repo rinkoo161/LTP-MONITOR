@@ -1,3 +1,9 @@
 # Broker/LLM credentials — plaintext API keys, never commit.
 # The live copy lives in ~/.ltp-monitor/config.json (see config.py).
 config.json
+
+# macOS / Python / build output
+.DS_Store
+__pycache__/
+*.pyc
+*.zip
