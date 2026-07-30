@@ -4,6 +4,61 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v58.69 — the futures archive never ran either, and S10's first real numbers (2026-07-31)
+
+Asked to test S10 against TradingView. It cannot be, and saying so
+precisely matters more than attempting it: every Pine file here
+(`S8`, `S9`, `parity_sg_ema`) computes from PRICE — Bollinger, MACD,
+RSI, ADX, pivots, EMA — because those are derivable from OHLC and can
+therefore be recomputed independently on TradingView's own data. S10
+reads per-strike PE/CE OI quadrants, per-leg churn and the futures OI
+quadrant. TradingView has no NSE per-strike option OI, so a parity
+oracle would have nothing to compute. This is not a porting problem;
+the data does not exist on that side. The webhook path is directional
+(`symbol` + `direction`) and cannot express a composite either.
+
+### `future_oi_snapshots` did not exist
+
+Six days after v58.66 said futures OI "is now archived", the table was
+absent from the live DB. Distinguishing "never called" from "called and
+throwing" needed a probe against a scratch DB — `except Exception:
+pass` makes those look identical. `log_future_oi()` works correctly in
+isolation, so the call had simply never executed: it landed after the
+close on 30 July and the Dhan token expired before the next session.
+
+That swallow is now loud — throttled by reason via a shared
+`should_log_throttled()` (extracted from
+`ExecutionAgent._should_log_entry_fail` rather than copied, since two
+copies of a rule is how the market-session check and the sentiment
+regexes drifted), plus a ONE-TIME "futures OI archive active" line so a
+live session gives positive evidence rather than silence that could
+mean either thing.
+
+### S10's first numbers, and a caveat that turns out not to bite
+
+    2026-07-30  595 snapshots   0 setups
+    2026-07-29  651 snapshots   2 setups   {'short_condor': 2}
+    2026-07-28  628 snapshots   0 setups
+    2026-07-27 1396 snapshots   5 setups   {'short_condor': 5}
+
+Seven setups in five days, ALL short_condor, all between 09:22 and
+09:57. **The directional composite — the operator's primary stated rule
+— fired zero times.** Worth knowing before any of it is traded.
+
+Re-running with a synthetic futures series (real chain, invented
+quadrant, so the pipeline is proven without polluting the archive)
+returns mode="full" and *the same seven setups regardless of the
+quadrant*. The reason is in the rule: `detect_setup` checks the condor
+branch FIRST, on `pe_short_build and ce_short_build` alone, and returns
+before consulting the futures leg at all. So for every setup in the
+archive, "chain_only OVERSTATES" — true in general — made no
+difference. The caveat applies only to the directional composites,
+which have not fired.
+
+Real mode="full" numbers still need one live session with a valid
+token. What changed is that the session will now say whether its
+archive is working instead of leaving it to be discovered weeks later.
+
 ## v58.68 — S10 never ran at all, and 100 passing checks said otherwise (2026-07-31)
 
 Found by starting the app and reading its log, not by running the suite:

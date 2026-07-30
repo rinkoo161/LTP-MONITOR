@@ -598,6 +598,26 @@ def warn_zero_fees(bus, agent_name, kind, lots, fees):
         pass
 
 
+def should_log_throttled(agent, attr, key, reason, window=600):
+    """Log-once-per-changed-reason, else at most every `window` seconds.
+
+    2026-07-31 — extracted from ExecutionAgent._should_log_entry_fail so
+    a second caller (the futures-OI archive) throttles by the SAME rule
+    rather than growing a near-copy that drifts. State lives in a dict
+    on the agent under `attr`, keyed by `key`.
+
+    A changed reason always logs immediately: the point is to surface
+    something NEW, not to rate-limit information away.
+    """
+    last = getattr(agent, attr, {})
+    prev_reason, prev_ts = last.get(key, (None, 0))
+    should_log = reason != prev_reason or time.time() - prev_ts > window
+    if should_log:
+        last[key] = (reason, time.time())
+        setattr(agent, attr, last)
+    return should_log
+
+
 def data_age_of(bus, *keys, label="data"):
     """Age of a bus timestamp, distinguishing MISSING from STALE.
 
@@ -1174,12 +1194,36 @@ class MarketDataAgent(Agent):
         # the FUTURES half of Strategy 10's trigger could not be
         # backtested at all while the option half had 5 days of 60s
         # snapshots. One row per symbol per cycle.
+        # 2026-07-31 — this was `except Exception: pass`. On 31 July the
+        # table did not exist at all, which could only mean the call had
+        # never run; proving that took a probe against a scratch DB,
+        # because a silent failure and a never-executed line look
+        # identical from the outside. Same swallow that hid the S9 `mcs`
+        # NameError (v58.47), the undefined `oi_chg`/`chg` here (v58.66)
+        # and S10's own AttributeError (v58.68). A failure that cannot be
+        # observed is indistinguishable from a feature that was never
+        # wired, and both take a version or more to notice.
+        #
+        # Throttled by reason so a persistent fault (disk full, locked
+        # DB) does not spam once per symbol per cycle, and announced ONCE
+        # on first success so a live session gives positive evidence the
+        # archive is running rather than silence that could mean either.
         try:
             import history as _h
             _h.log_future_oi(sym, time.time(), oi, oi - b["oi"],
                              ltp, ltp - b["ltp"], quadrant)
-        except Exception:
-            pass
+            if not getattr(self, "_foi_archive_ok", False):
+                self._foi_archive_ok = True
+                self.bus.log(self.name,
+                             "futures OI archive active — S10 backtests can "
+                             "run mode=full once a session is recorded")
+        except Exception as e:
+            if should_log_throttled(self, "_foi_archive_fail", sym,
+                                    f"{type(e).__name__}: {e}"):
+                self.bus.log(self.name,
+                             f"⚠ {sym}: futures OI archive FAILED "
+                             f"({type(e).__name__}: {e}) — S10 backtests "
+                             f"stay mode=chain_only")
         self.bus.set(f"future_tick:{sym}",
                      {"ltp": ltp, "oi": oi, "baseline_ltp": b["ltp"],
                       "baseline_oi": b["oi"]})
@@ -4057,14 +4101,14 @@ class ExecutionAgent(Agent):
         this exact reason was logged — otherwise returns False,
         silently. A persistent condition like "already open on X"
         would otherwise log identically every single cycle for as
-        long as the existing position stays open."""
-        last = getattr(self, "_entry_fail_last", {})
-        prev_reason, prev_ts = last.get(fail_key, (None, 0))
-        should_log = reason != prev_reason or time.time() - prev_ts > 600
-        if should_log:
-            last[fail_key] = (reason, time.time())
-            self._entry_fail_last = last
-        return should_log
+        long as the existing position stays open.
+
+        2026-07-31 — body moved to the module-level
+        should_log_throttled() so the futures-OI archive can throttle
+        identically instead of growing a second copy of the same rule.
+        Behaviour here is unchanged; test_entry_fail_log_throttle.py
+        still covers it through this method."""
+        return should_log_throttled(self, "_entry_fail_last", fail_key, reason)
 
     def enter_spread(self, spread):
         """Open a 2-leg credit spread. Refuses in live mode (phase 1)."""
