@@ -7,6 +7,7 @@ versions can be validated before deployment (requirements 8-11).
 """
 import json
 import os
+import store
 from datetime import datetime, timezone, timedelta
 IST = timezone(timedelta(hours=5, minutes=30))
 def _now(): return datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S IST")
@@ -34,7 +35,7 @@ import strategies as slib
 import pa_strategies as pa
 import ta_elliott as _ta
 
-VERS_PATH = os.path.expanduser("~/.ltp-monitor/strategy_versions.json")
+VERS_PATH = store.path("strategy_versions.json")
 
 DEFAULT_PARAMS = {
     # wall_gap_frac raised 0.8 -> 2.0 on 2026-07-23. At 0.8 the short

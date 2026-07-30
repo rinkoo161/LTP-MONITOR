@@ -65,12 +65,13 @@ etc.) at full scale.
 import csv
 import io
 import os
+import store
 import time
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
 IST = timezone(timedelta(hours=5, minutes=30))
-STORE_DIR = os.path.expanduser("~/.ltp-monitor")
+STORE_DIR = store.home()
 CACHE_PATH = os.path.join(STORE_DIR, "scrip_master_detailed.csv")
 CACHE_TTL_HOURS = 20   # refresh roughly daily — this file is large and
                        # doesn't change intraday; new-month contracts

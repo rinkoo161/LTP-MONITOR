@@ -41,6 +41,7 @@ reach these domains before relying on any of them.
 """
 import json
 import os
+import store
 import re
 import time
 import urllib.error
@@ -49,7 +50,7 @@ import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
 
 IST = timezone(timedelta(hours=5, minutes=30))
-STORE_DIR = os.path.expanduser("~/.ltp-monitor")
+STORE_DIR = store.home()
 FEEDS_FILE = os.path.join(STORE_DIR, "news_feeds.json")
 
 

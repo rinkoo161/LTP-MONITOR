@@ -26,6 +26,7 @@ market hours (09:15-15:30 Mon-Fri).
 
 import json
 import os
+import store
 import re
 import threading
 import time
@@ -62,7 +63,7 @@ IST = timezone(timedelta(hours=5, minutes=30))
 BASE = os.path.dirname(os.path.abspath(__file__))
 # Persist trade history + logs in the user's home dir so a code-folder
 # update / re-zip never wipes them.
-STORE_DIR = os.path.expanduser("~/.ltp-monitor")
+STORE_DIR = store.home()
 os.makedirs(STORE_DIR, exist_ok=True)
 JOURNAL = os.path.join(STORE_DIR, "journal.json")
 WEEKLY_RISK_JOURNAL = os.path.join(STORE_DIR, "weekly_risk_journal.json")
@@ -2618,7 +2619,7 @@ class StrategyAgent(Agent):
             self.summary = f"scanned {len(jobs)} indices — WAIT"
 
 
-SHADOW_PATH = os.path.expanduser("~/.ltp-monitor/shadow_signals.jsonl")
+SHADOW_PATH = store.path("shadow_signals.jsonl")
 
 
 def log_futures_shadow(bus, sym, side, gates, taken, why=None, ltp=None,
@@ -5318,7 +5319,7 @@ class BacktestAgent(Agent):
     roll back, with reasons logged per requirement 8-11)."""
     name, interval = "backtest", 20
 
-    RESULTS = os.path.expanduser("~/.ltp-monitor/backtests.json")
+    RESULTS = store.path("backtests.json")
 
     def cycle(self):
         import backtester, history

@@ -5,6 +5,7 @@ Credentials are managed in the dashboard's Settings panel (gear icon).
 """
 
 import os
+import store
 import time
 import traceback
 
@@ -24,7 +25,7 @@ from agents import Orchestrator, compute_momentum
 import agents
 
 BASE = os.path.dirname(os.path.abspath(__file__))
-APP_VERSION = "v58.70"   # maintained per explicit request; last delivered was v49
+APP_VERSION = "v58.71"   # maintained per explicit request; last delivered was v49
 
 app = FastAPI(title="LTP Option Chain Monitor")
 
@@ -4035,7 +4036,7 @@ def api_backtest_range_candles(symbol: str, days: str):
 @app.get("/api/backtest/status")
 def api_backtest_status():
     import backtester, history, os, json as _j
-    p = os.path.expanduser("~/.ltp-monitor/backtests.json")
+    p = store.path("backtests.json")
     ran_at = None
     if os.path.exists(p):
         try:
@@ -4096,7 +4097,7 @@ def api_backtest_sync_log(days: int = 14):
 
 def _load_bt_results():
     import os, json as _j
-    p = os.path.expanduser("~/.ltp-monitor/backtests.json")
+    p = store.path("backtests.json")
     return _j.load(open(p))["results"] if os.path.exists(p) else {}
 
 

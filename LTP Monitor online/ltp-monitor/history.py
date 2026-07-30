@@ -11,12 +11,13 @@ archive builds forward from the first sync). Compact + indexed: a year
 of 4 indices with chains is roughly 1 GB.
 """
 import os
+import store
 import threading
 import sqlite3
 import time
 from datetime import date, datetime, timedelta
 
-DB = os.path.expanduser("~/.ltp-monitor/history.db")
+DB = store.path("history.db")
 
 
 _SCHEMA_LOCK = threading.Lock()
@@ -939,15 +940,59 @@ def prune_chain_snapshots(days=5):
     c.commit(); c.close()
 
 
-def upsert_candles(security_id, candles):
+DROPPED_OUT_OF_SESSION = {}   # security_id -> count dropped this process
 
+
+def upsert_candles(security_id, candles, session_only=True):
+    """Persist intraday candles, DROPPING out-of-session bars by default.
+
+    2026-07-31 — this used to write whatever it was handed. Correctness
+    depended on every read path filtering plus a manual prune, and that
+    held for the 1m series (its producer was gated in the 2026-07-26
+    keepalive fix) but never for the others:
+
+        NIFTY_SPOT_15m   64% of rows out of session
+        NIFTY_FUT_1m     57%
+        NIFTY_SPOT_5m    40%
+
+    13,577 rows database-wide, drawing flat evening/weekend bars on the
+    chart. Gating each producer separately is what produced that split,
+    so the gate belongs at the single write boundary they all share.
+
+    Every current caller writes MINUTE data (sync_index_history fetches
+    interval "1"; daily bars live in daily_ohlc), so in-session is the
+    right invariant for all of them. `session_only=False` exists for a
+    caller that genuinely needs to store out-of-hours bars — it must ask
+    for it explicitly rather than getting it by default.
+
+    Dropping silently would repeat this session's own recurring bug, so
+    the first drop per security_id per process announces itself and the
+    running total is readable in DROPPED_OUT_OF_SESSION.
+
+    Returns the number of rows actually WRITTEN, not the number offered.
+    """
+    import agents
+    rows = list(candles or [])
+    if session_only:
+        kept = [x for x in rows if agents.in_market_session(int(x["ts"]))]
+        dropped = len(rows) - len(kept)
+        if dropped:
+            seen = DROPPED_OUT_OF_SESSION.get(security_id, 0)
+            DROPPED_OUT_OF_SESSION[security_id] = seen + dropped
+            if not seen:
+                print(f"  [history] {security_id}: dropped {dropped} "
+                      f"out-of-session candle(s) at write — keepalive "
+                      f"contamination, not persisted")
+        rows = kept
+    if not rows:
+        return 0
     c = _conn()
     c.executemany(
         "INSERT OR REPLACE INTO candles VALUES (?,?,?,?,?,?,?,?)",
         [(security_id, int(x["ts"]), x.get("o"), x.get("h"), x.get("l"),
-          x.get("c"), x.get("v"), x.get("oi")) for x in candles])
+          x.get("c"), x.get("v"), x.get("oi")) for x in rows])
     c.commit(); c.close()
-    return len(candles)
+    return len(rows)
 
 
 def upsert_instrument(security_id, symbol, kind, leg=None, strike=None, expiry=None):

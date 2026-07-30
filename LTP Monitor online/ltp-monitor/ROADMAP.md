@@ -4,6 +4,64 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v58.71 — straight candles were real; the 11 "signals" were mine (2026-07-31)
+
+Two symptoms reported together, one a product bug and one self-inflicted.
+
+### The straight candles: gate the WRITE, not every read
+
+    NIFTY_SPOT_15m  236/365 out of session (64%)
+    NIFTY_FUT_1m   1953/3407              (57%)
+    NIFTY_SPOT_5m   209/515               (40%)
+    NIFTY_SPOT_1m     0/775               ( 0%)
+
+13,577 rows database-wide. On 30 July the NIFTY index series ran
+09:15 -> 19:36, and the three post-close bars (15:45, 19:28, 19:36)
+were exactly the three flat o=h=l=c ones.
+
+**The 1m series being clean is the whole diagnosis.** Its producer was
+gated by the 2026-07-26 keepalive fix; the other producers never were.
+`upsert_candles` wrote whatever it was handed, so correctness depended
+on every read path filtering plus a manual prune — and gating producers
+one at a time is precisely what produces a 0%/40%/57%/64% split.
+
+The gate now lives at the single write boundary they all share. Safe
+for every caller: they all write MINUTE bars (`sync_index_history`
+fetches interval "1"; daily bars live in `daily_ohlc`).
+`session_only=False` is an explicit opt-out. Drops announce themselves
+once per security_id and tally in `DROPPED_OUT_OF_SESSION` — discarding
+data silently would repeat the exact bug this session kept finding.
+
+Existing 13,577 rows pruned via the endpoint (0 remaining). Read
+filters and the prune tool stay as defence in depth.
+
+### The 11 futures signals were test pollution
+
+Reported as "11 future signals not even triggered today". All 11 were
+stamped 00:04:05-00:04:54 on a night with no session, entry 23800.0,
+one rejected for margin against a capital of Rs 1,000. Fixture values:
+that window is when the suite reached the test_futures_* files, and
+`log_futures_shadow()` writes the OPERATOR'S shadow journal.
+
+Every module resolved `~/.ltp-monitor` for itself, so any test that
+built a real Bus, deployed a paper future or persisted a candle wrote
+into live state. The fake signals were then read back as real trading
+activity, which is the actual cost: **test data indistinguishable from
+production data is worse than no test data.**
+
+`store.py` is now the single resolver, honouring `LTP_MONITOR_HOME`;
+ten modules use it and the default path is unchanged. `run_tests.py`
+points the whole application at a fresh temp store, with a per-test
+timeout. Both were learned the hard way in the same session:
+`test_kotak_ws.py` blocks forever with no Kotak credentials, and
+results otherwise vary with the operator's own config (`fee_per_lot`
+30 vs a hardcoded 40) and the time of day (deploy tests gate on market
+hours). A suite whose result depends on who runs it and when is not a
+baseline.
+
+Injected rows removed: shadow_signals.jsonl 738 -> 727,
+activity.log 27,757 -> 27,723.
+
 ## v58.70 — "token expired" could be caused by a price (2026-07-31)
 
 `note_failure` classified failures with `"401" in text` and `"429" in

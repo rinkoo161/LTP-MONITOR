@@ -32,6 +32,7 @@ Design notes (carried over from planning):
 
 import json
 import os
+import store
 import re
 import threading
 import time
@@ -44,7 +45,7 @@ import config
 import news_engine as ne
 
 IST = timezone(timedelta(hours=5, minutes=30))
-STORE_DIR = os.path.expanduser("~/.ltp-monitor")
+STORE_DIR = store.home()
 os.makedirs(STORE_DIR, exist_ok=True)
 EVENTS_FILE = os.path.join(STORE_DIR, "macro_events.jsonl")
 

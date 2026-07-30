@@ -18,6 +18,7 @@ serializes and caches requests to stay inside that.
 """
 
 import os
+import store
 import time
 import threading
 import requests
@@ -603,7 +604,7 @@ class KotakNeoClient:
             return
         import csv, io, os
         from datetime import date
-        cache = os.path.expanduser("~/.ltp-monitor/kotak_master_urls.json")
+        cache = store.path("kotak_master_urls.json")
         today = date.today().isoformat()
         urls = None
         if os.path.exists(cache):

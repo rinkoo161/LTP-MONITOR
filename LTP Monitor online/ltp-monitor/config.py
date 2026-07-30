@@ -9,12 +9,13 @@ Keep the folder private; don't sync it to cloud drives or git.
 
 import json
 import os
+import store
 import threading
 
 import pa_strategies
 
 BASE = os.path.dirname(os.path.abspath(__file__))
-PATH = os.path.join(os.path.expanduser("~/.ltp-monitor"), "config.json")
+PATH = os.path.join(store.home(), "config.json")
 _OLD_PATH = os.path.join(BASE, "config.json")
 os.makedirs(os.path.dirname(PATH), exist_ok=True)
 # one-time migration: settings previously lived inside the app folder and

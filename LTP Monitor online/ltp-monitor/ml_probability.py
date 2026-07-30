@@ -27,10 +27,11 @@ permanent assumption inherited from when this was first scoped.
 import json
 import math
 import os
+import store
 import time
 
 
-SHADOW_PATH = os.path.expanduser("~/.ltp-monitor/shadow_signals.jsonl")
+SHADOW_PATH = store.path("shadow_signals.jsonl")
 
 # Feature order is fixed and documented here once — every function
 # that builds or consumes a feature vector must agree on this order.
