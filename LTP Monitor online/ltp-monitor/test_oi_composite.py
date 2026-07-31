@@ -11,6 +11,8 @@ Rs 72,321 on 2026-07-30 while spreads made money.
 """
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import store as _store
+_store.require_isolated("deletes rows")
 results = []
 def check(l, c, d=""):
     results.append((l, bool(c)))

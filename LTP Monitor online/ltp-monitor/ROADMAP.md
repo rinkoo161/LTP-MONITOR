@@ -4,6 +4,91 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v58.73 — a test destroyed the live token; risk cap; the floor that lied (2026-08-01)
+
+### A test overwrote the operator's Dhan token
+
+`test_display_endpoints_and_auth.py:208` posts
+
+    {"dhan_access_token": "fresh-token-xyz"}
+
+to `/api/settings`. Run directly — not through `run_tests.py` — during a
+regression check, it replaced a working token with a 15-character
+fixture. Trading data stopped loading and it took eight hours to find,
+because the app correctly reported an expired token and the token
+really was expired: a test had written it.
+
+`store.py` (v58.71) made isolation possible but optional, which
+protects only whoever remembers the runner. `store.require_isolated()`
+now REFUSES to run without `LTP_MONITOR_HOME`, and sits at the top of
+the 28 tests that write settings, call `config.save`, run DROP/DELETE,
+or rewrite `open_state.json`. Replaying the exact command now raises
+`NotIsolated` instead of destroying credentials.
+
+### "The setting keeps rolling back"
+
+It never rolled back. `reset_dhan()` cleared `_dhan` but not
+`_dhan_fallback` — the dedicated client SENSEX uses — and
+`DhanClient.__init__` snapshots client_id/token into its headers at
+construction. After a fresh token was pasted, the fallback kept sending
+the OLD one: every SENSEX `prev_close_for()` 401'd, each 401 re-armed
+the 30-minute AUTH backoff, and the alert re-fired seconds after the
+operator had fixed it. **A cached object outliving the value it was
+built from is indistinguishable, from outside, from a setting that
+reverts.** Both clients are cleared now, and a test enumerates every
+module-level `_dhan*` cache so the next one cannot be forgotten.
+
+### Per-trade futures risk cap now binds
+
+`futures_risk_per_trade_rupees` was already ₹2,500 and
+`cap_by_rupee_risk()` already existed — inside `sizing.size_future()`,
+one of THREE entry paths. `/api/futures/enter` passes request lots
+straight through. On 2026-07-30, against a ₹20,000 daily limit:
+
+    BANKNIFTY  8 lots  -₹18,240   91% of the DAILY limit in ONE trade
+    FINNIFTY   4 lots  -₹15,840   79%
+    FINNIFTY   6 lots  -₹12,840   64%
+
+The cap moved to `enter_future()`, the choke point all three share.
+That required moving the stop geometry ABOVE the order placement — it
+was computed ~40 lines below, so size could not be checked against the
+risk it implied until the position already existed. **Sizing a position
+you have already bought is not sizing.** Replayed on the three trades
+with a recoverable stop: -₹36,942 becomes -₹6,240.
+
+### The profit floor reported a level it had not achieved
+
+    "gave back to ₹2310 of peak ₹4200"  ->  booked gross -₹3,000
+    "gave back to ₹495  of peak  ₹900"  ->  booked gross -₹2,340
+
+`rupee_profit_floor` fires when `pnl <= floor` and says nothing about
+how far below it lands, evaluated once per monitor cycle. A P&L level
+has no representation in the market, so it cannot act between cycles.
+An armed floor is now converted to a stop PRICE (one-way ratchet), so
+the stop — first in the exit chain — exits AT the level. The message
+states the realised P&L and names the shortfall.
+
+### The entry-filter work that was ABANDONED, and why
+
+The forensic replay (`forensic_replay.py`, candle-by-candle against the
+real backfill) suggested two entry gates: require 5/13 EMA agreement,
+and refuse entries at range extremes. Both were derived from six
+losers. Tested against all 44 replayable futures trades they FAIL:
+
+    EMA agreement   keeps 26 trades -₹60,721 win 23%
+                    blocks 18 trades -₹35,537 win 44%
+
+The filter keeps the worse trades. A sweep of 1,216 EMA/RMA pairs
+(periods 3-45) found ZERO profitable combinations; the best (EMA 3/6)
+is beaten by 21% of random subsets of the same size (p ~ 0.21). The
+current 5/13 is in the bottom third, but replacing it is not a fix.
+
+The reason no entry filter helps: **winners average ₹963, losers
+₹2,510 — break-even needs a 72% win rate against an actual 24%.** The
+payoff shape, not entry selection, is the problem. Recorded here
+because a negative result that cost a day is worth exactly as much as a
+positive one, and rediscovering it would cost another.
+
 ## v58.72 — a test that only works Mon-Thu, and one that dropped a live table (2026-07-31)
 
 The three failures the isolated runner exposed, fixed. Two were worse

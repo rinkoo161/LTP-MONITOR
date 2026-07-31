@@ -38,3 +38,38 @@ def is_isolated():
     """True when redirected away from the operator's real store — used by
     tests that want to assert they are not about to write to it."""
     return bool(os.environ.get(ENV_VAR))
+
+
+class NotIsolated(RuntimeError):
+    pass
+
+
+def require_isolated(what="writes persisted state"):
+    """Refuse to run unless the store has been redirected.
+
+    2026-07-31, from a real incident: running
+    test_display_endpoints_and_auth.py directly — not through
+    run_tests.py — executed its
+
+        POST /api/settings {"dhan_access_token": "fresh-token-xyz"}
+
+    against the LIVE config, replacing the operator's working Dhan token
+    with a 15-character fixture. Trading data stopped loading and the
+    cause was not visible for eight hours; the app correctly reported an
+    expired token, and the token really was expired, because a test had
+    written it.
+
+    LTP_MONITOR_HOME (v58.71) made isolation possible but still optional
+    — it protected anyone who remembered to use the runner, which is
+    exactly the kind of guarantee that fails under time pressure. A test
+    that can destroy live credentials must refuse to run without it, so
+    put this at the TOP of any test that writes credentials, deletes
+    rows, or rewrites a journal.
+    """
+    if is_isolated():
+        return
+    raise NotIsolated(
+        f"REFUSING TO RUN: this test {what} and the store is NOT isolated "
+        f"({home()}). It would modify real credentials/data.\n"
+        f"Run it through:  python3 run_tests.py <name>\n"
+        f"or set {ENV_VAR} to a scratch directory.")

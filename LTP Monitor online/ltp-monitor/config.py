@@ -304,6 +304,13 @@ DEFAULTS = {
     "rupee_profit_floor_arm_rupees": 750,    # arm once peak P&L reaches this
     "rupee_profit_floor_keep_pct": 60,       # keep this % of the peak
     "rupee_profit_floor_min_rupees": 300,    # floor must be worth exiting for
+    # 2026-08-01 — express an armed futures floor as a stop PRICE rather
+    # than leaving it a per-cycle P&L comparison. As a P&L test it fires
+    # wherever the cycle lands once pnl <= floor: four exits quoted the
+    # floor they were protecting (₹2310, ₹1551, ₹825, ₹495) while booking
+    # -₹3,000, -₹1,980, -₹1,500 and -₹2,340 gross. As a price it becomes
+    # the stop, which is evaluated first in the exit chain.
+    "rupee_profit_floor_as_stop": True,
     "ai_exit_advisory_logging": True,        # log every advisory, acted on or not
     # ---- AI advisory cadence (v58.36) ----
     # Event-driven, not clock-driven. A flat 5-minute poll was too slow

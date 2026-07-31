@@ -10,6 +10,8 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import store as _store
+_store.require_isolated("writes config")
 import agents
 # See test_futures_trading.py for why this redirect exists — same
 # module-level disk-append behavior, same pollution risk.

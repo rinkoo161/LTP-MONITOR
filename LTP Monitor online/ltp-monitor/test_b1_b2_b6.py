@@ -14,6 +14,8 @@ B6  Two INDEPENDENT cooldowns guarded the same Dhan quote surface, so
 """
 import os, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import store as _store
+_store.require_isolated("writes config, rewrites open positions")
 results = []
 def check(l, c, d=""):
     results.append((l, bool(c)))

@@ -9,6 +9,8 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import store as _store
+_store.require_isolated("writes config")
 import agents
 # 2026-07-26 (v53 hygiene) — _append_trade() writes to agents.TRADES_FILE
 # unconditionally, regardless of which Bus instance a test uses (it's a
@@ -75,7 +77,19 @@ agents.market_open = real_mo
 check("market closed -> blocked", "closed" in str(r.get("error", "")))
 r = with_market_open(lambda: ag.enter_future(SYM, "SIDEWAYS", 1))
 check("invalid side rejected", "LONG or SHORT" in str(r.get("error", "")))
+# 2026-08-01 — the per-trade rupee cap now binds inside enter_future()
+# BEFORE the margin check, deliberately: a risk ceiling has to apply
+# before size is tested against available margin, or the only thing
+# stopping an oversized trade is whether the account happens to be able
+# to afford it. With the cap live, 99 lots is reduced to what the cap
+# allows and the margin gate never trips. This check is about the MARGIN
+# gate, so it disables the cap for the duration rather than asserting on
+# whichever gate happens to fire first — the cap has its own suite in
+# test_futures_risk_cap.py.
+_cap_before = config.load().get("futures_risk_per_trade_rupees", 0)
+config.save({"futures_risk_per_trade_rupees": 0})
 r = with_market_open(lambda: ag.enter_future(SYM, "LONG", 99))
+config.save({"futures_risk_per_trade_rupees": _cap_before})
 check("margin gate blocks oversize entry",
       "insufficient margin" in str(r.get("error", "")), str(r.get("error"))[:70])
 bus.set("portfolio_halt_until", time.time() + 60)

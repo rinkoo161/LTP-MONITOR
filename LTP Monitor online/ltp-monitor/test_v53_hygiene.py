@@ -11,6 +11,8 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import store as _store
+_store.require_isolated("writes config, deletes rows")
 import config
 import history
 import agents

@@ -16,6 +16,8 @@ import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import store as _store
+_store.require_isolated("writes settings via the API, writes config")
 import config
 
 results = []

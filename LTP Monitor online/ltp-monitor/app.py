@@ -25,7 +25,7 @@ from agents import Orchestrator, compute_momentum
 import agents
 
 BASE = os.path.dirname(os.path.abspath(__file__))
-APP_VERSION = "v58.72"   # maintained per explicit request; last delivered was v49
+APP_VERSION = "v58.73"   # maintained per explicit request; last delivered was v49
 
 app = FastAPI(title="LTP Option Chain Monitor")
 
@@ -59,8 +59,27 @@ def dhan_client():
 
 
 def reset_dhan():
-    global _dhan
+    """Drop EVERY cached broker client so the next call rebuilds with the
+    credentials currently in Settings.
+
+    2026-07-31 — this cleared only `_dhan`. `_dhan_fallback` — the
+    dedicated Dhan client SENSEX falls back to when the active broker
+    cannot serve it — was left alone, and DhanClient.__init__ snapshots
+    client_id/token into its request headers at construction. So after
+    pasting a fresh token the fallback kept sending the OLD one: every
+    SENSEX prev_close_for() 401'd, each 401 re-armed the 30-minute AUTH
+    backoff, and the "Dhan token expired" alert re-fired seconds after
+    the operator had already fixed it.
+
+    From outside that is indistinguishable from the setting rolling
+    back, which is exactly how it was reported. The stored token was
+    correct the whole time; a cached object was not.
+
+    Any future cached client belongs in this function, not beside it.
+    """
+    global _dhan, _dhan_fallback
     _dhan = None
+    _dhan_fallback = None
 
 
 def orders_factory():

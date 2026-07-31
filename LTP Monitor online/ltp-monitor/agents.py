@@ -367,9 +367,19 @@ def rupee_profit_floor(state, pnl_rupees, cfg, label="position"):
             state["rpf_floor"] = candidate
     floor = float(state.get("rpf_floor", 0.0))
     if floor >= min_worth and pnl_rupees <= floor:
-        return (f"profit floor: gave back to ₹{floor:.0f} of peak "
-                f"₹{peak:.0f} (keeping {keep * 100:.0f}%"
-                + (f", {kls} settings" if kls else "") + ")")
+        # 2026-08-01 — report the P&L ACTUALLY REALISED, not the floor.
+        # The old text ("gave back to ₹2310 of peak ₹4200") quoted the
+        # protected level on trades that booked -₹3,000, because the
+        # check only requires pnl <= floor and says nothing about how
+        # far below it landed. A message that cannot report a failure
+        # is not a report — it read as "the floor worked" on the four
+        # exits where it most conspicuously had not.
+        shortfall = ("" if pnl_rupees >= floor - 1 else
+                     f" — MISSED the floor by ₹{floor - pnl_rupees:,.0f}")
+        return (f"profit floor: exited at ₹{pnl_rupees:,.0f} against a "
+                f"₹{floor:.0f} floor of peak ₹{peak:.0f} "
+                f"(keeping {keep * 100:.0f}%"
+                + (f", {kls} settings" if kls else "") + ")" + shortfall)
     return None
 
 
@@ -3369,6 +3379,78 @@ class ExecutionAgent(Agent):
                              f"rate-limited)"}
         lots = max(1, int(lots))
         lot_size = cfg["lot_sizes"].get(symbol, 75)
+
+        # ---------------------------------------------------------------
+        # 2026-08-01 — PER-TRADE RUPEE RISK CAP, applied here because this
+        # is the one function every futures entry passes through.
+        #
+        # `futures_risk_per_trade_rupees` was already set to ₹2,500 and
+        # sizing.cap_by_rupee_risk() already existed, but the cap lived in
+        # sizing.size_future() — one of THREE entry paths. The auto-deploy
+        # and manual_deploy paths size through it; /api/futures/enter takes
+        # `body.lots` straight from the request and never did. On
+        # 2026-07-30 that produced, against a ₹20,000 daily loss limit:
+        #
+        #     BANKNIFTY  8 lots   -₹18,240   (91% of the DAILY limit, one trade)
+        #     FINNIFTY   4 lots   -₹15,840   (79%)
+        #     FINNIFTY   6 lots   -₹12,840   (64%)
+        #
+        # 19 futures trades lost ₹73,115 that day while the spread book
+        # made ₹1,202. A limit one trade can consume 91% of is not a limit.
+        #
+        # The stop had to move above the order placement to do this: it
+        # was computed ~40 lines BELOW, so the size could never be checked
+        # against the risk it implied until after the order existed.
+        # Sizing a position you have already bought is not sizing.
+        # ---------------------------------------------------------------
+        sl_pct = cfg.get("futures_sl_pct", 0.4)
+        tgt_pct = cfg.get("futures_target_pct", 0.8)
+        sign = 1 if side == "LONG" else -1
+        # v58.39 — ATR geometry, same source as the entry gate above so
+        # the stop the signal was sized against is the stop the position
+        # actually gets. Target is a MULTIPLE OF THE STOP, which keeps
+        # the designed payoff ratio intact across volatility regimes;
+        # the old fixed 0.4%/0.8% pair produced a realised payoff of
+        # 0.77 against a designed 2.0 because no trade ever reached it.
+        import sizing as _sz
+        _atr = None
+        if cfg.get("futures_stop_mode", "atr") == "atr":
+            _pk = self.bus.get(f"pa_candles:{symbol}") or {}
+            _atr = _sz.atr_points(_pk.get("c5") or [],
+                                  cfg.get("futures_atr_period", 14))
+        if _atr:
+            _stop_pts = _atr * cfg.get("futures_atr_stop_mult", 1.5)
+            _tgt_pts = _atr * cfg.get("futures_atr_target_mult", 2.75)
+            _sl_px = round(ltp - sign * _stop_pts, 2)
+            _tg_px = round(ltp + sign * _tgt_pts, 2)
+        else:
+            _sl_px = round(ltp * (1 - sign * sl_pct / 100), 2)
+            _tg_px = round(ltp * (1 + sign * tgt_pct / 100), 2)
+
+        _capped, _cap_why = _sz.cap_by_rupee_risk(cfg, symbol, ltp, _sl_px, lots)
+        if _capped < lots:
+            _risk_per_lot = abs(ltp - _sl_px) * lot_size
+            if _capped <= 0:
+                # Refusing is the correct answer: at this stop distance even
+                # one lot breaches the cap. Silently taking it anyway is how
+                # a ₹2,500 ceiling produced an ₹18,240 loss.
+                self.bus.log(self.name,
+                             f"⛔ {symbol} FUT {side} REFUSED — 1 lot risks "
+                             f"₹{_risk_per_lot:,.0f} (stop {abs(ltp - _sl_px):.1f} "
+                             f"pts × {lot_size}), over the ₹"
+                             f"{cfg.get('futures_risk_per_trade_rupees', 0):,.0f} "
+                             f"per-trade cap. {_cap_why}")
+                return {"error": f"per-trade risk cap: 1 lot would risk "
+                                 f"₹{_risk_per_lot:,.0f} against a ₹"
+                                 f"{cfg.get('futures_risk_per_trade_rupees', 0):,.0f} "
+                                 f"cap — no size is permissible at this stop "
+                                 f"distance"}
+            self.bus.log(self.name,
+                         f"{symbol} FUT {side} sized DOWN {lots}→{_capped} lot(s) "
+                         f"by the ₹{cfg.get('futures_risk_per_trade_rupees', 0):,.0f} "
+                         f"per-trade cap (₹{_risk_per_lot:,.0f} risk/lot). {_cap_why}")
+            lots = _capped
+
         margin_per_lot = cfg.get("margin_per_lot_future", 110000)
         # 2026-07-26 (v52) — margin-aware against REAL deployed capital.
         # Phase 1 read a "capital_deployed" bus key that nothing in the
@@ -3408,29 +3490,9 @@ class ExecutionAgent(Agent):
             order_id = resp.get("orderId", "?")
             self.bus.log(self.name, f"\U0001f534 LIVE FUT {side} {symbol} "
                          f"\u00d7{lots} lot(s) @ {ltp} \u2014 order {order_id}")
-        sl_pct = cfg.get("futures_sl_pct", 0.4)
-        tgt_pct = cfg.get("futures_target_pct", 0.8)
-        sign = 1 if side == "LONG" else -1
-        # v58.39 — ATR geometry, same source as the entry gate above so
-        # the stop the signal was sized against is the stop the position
-        # actually gets. Target is a MULTIPLE OF THE STOP, which keeps
-        # the designed payoff ratio intact across volatility regimes;
-        # the old fixed 0.4%/0.8% pair produced a realised payoff of
-        # 0.77 against a designed 2.0 because no trade ever reached it.
-        import sizing as _sz
-        _atr = None
-        if cfg.get("futures_stop_mode", "atr") == "atr":
-            _pk = self.bus.get(f"pa_candles:{symbol}") or {}
-            _atr = _sz.atr_points(_pk.get("c5") or [],
-                                  cfg.get("futures_atr_period", 14))
-        if _atr:
-            _stop_pts = _atr * cfg.get("futures_atr_stop_mult", 1.5)
-            _tgt_pts = _atr * cfg.get("futures_atr_target_mult", 2.75)
-            _sl_px = round(ltp - sign * _stop_pts, 2)
-            _tg_px = round(ltp + sign * _tgt_pts, 2)
-        else:
-            _sl_px = round(ltp * (1 - sign * sl_pct / 100), 2)
-            _tg_px = round(ltp * (1 + sign * tgt_pct / 100), 2)
+        # (stop/target geometry and the rupee cap were computed above,
+        # BEFORE the order was placed — see the block after `lot_size`.
+        # _sl_px/_tg_px are already bound here.)
         # v58.49 (roadmap B1) — futures had NO chart markers while
         # options and S7 both did, so the one instrument class that was
         # losing money was also the only one you could not see on the
@@ -3555,6 +3617,39 @@ class ExecutionAgent(Agent):
             self.bus.set("futures_positions", futs)
             hm = now_ist().hour * 60 + now_ist().minute
             _rpf_fut = rupee_profit_floor(p, p.get("pnl", 0), cfg, "futures")
+            # 2026-08-01 — translate the ARMED floor into a stop PRICE.
+            #
+            # The floor was a P&L comparison evaluated once per monitor
+            # cycle: it fires when pnl <= floor, but nothing holds pnl
+            # NEAR the floor. When price ran between cycles it fired at
+            # whatever P&L existed by then, and the reason string quoted
+            # the floor rather than the fill. From the journal:
+            #
+            #   "gave back to ₹2310 of peak ₹4200"  ->  booked gross -₹3,000
+            #   "gave back to ₹495  of peak  ₹900"  ->  booked gross -₹2,340
+            #   "gave back to ₹1551 of peak ₹2820"  ->  booked gross -₹1,980
+            #
+            # Four such exits cost ₹10,620 while reporting that they had
+            # protected a profit. A floor expressed in P&L can only be
+            # observed at cycle granularity; expressed as a PRICE it
+            # becomes the stop, which is checked first in this chain and
+            # exits AT the level rather than wherever the cycle lands.
+            #
+            # Ratchets one way only — it may tighten the stop toward the
+            # floor, never loosen it — so it composes with the ATR trail
+            # and the defense-zone tightening above.
+            if cfg.get("rupee_profit_floor_as_stop", True):
+                _fl = float(p.get("rpf_floor", 0) or 0)
+                _q = (p.get("lot_size") or 0) * (p.get("lots") or 0)
+                if _fl > 0 and _q:
+                    _fpx = round(p["entry"] + sign * (_fl / _q), 2)
+                    if (_fpx - p["sl"]) * sign > 0:
+                        _old = p["sl"]
+                        p["sl"] = _fpx
+                        self.bus.log(self.name,
+                                     f"{sym} profit floor → stop {_old} → {_fpx} "
+                                     f"(locks ₹{_fl:,.0f} of peak "
+                                     f"₹{float(p.get('rpf_peak', 0)):,.0f})")
             if (ltp - p["sl"]) * sign <= 0:
                 self.exit_future(sym, f"stoploss ({p['sl']})")
             elif (ltp - p["target"]) * sign >= 0:

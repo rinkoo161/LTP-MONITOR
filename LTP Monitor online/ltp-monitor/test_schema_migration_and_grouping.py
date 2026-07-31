@@ -21,6 +21,8 @@ name, and one strategy's record was split five ways.
 """
 import os, sqlite3, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import store as _store
+_store.require_isolated("deletes rows")
 results = []
 def check(l, c, d=""):
     results.append((l, bool(c)))

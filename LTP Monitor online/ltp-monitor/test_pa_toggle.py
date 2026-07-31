@@ -10,6 +10,8 @@ import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import store as _store
+_store.require_isolated("writes config")
 from fastapi.testclient import TestClient
 import app
 import config
