@@ -40,7 +40,22 @@ class FakeClient:
 
 
 def last_friday_from(now):
-    d = now.replace(hour=15, minute=15, second=0, microsecond=0)
+    """The most recent Friday STRICTLY BEFORE today.
+
+    2026-07-31 — this walked back from TODAY, so run on a Friday it
+    returned today. The fixture then puts the "previous session" on the
+    current date: prev_close_for finds no prior-day candle and correctly
+    returns None, and resolve_anchor is handed a today-timestamp it is
+    right to keep. Four checks failed for reasons that had nothing to do
+    with the code under test.
+
+    It passed at 23:5x on Thursday and failed at 02:00 the same night,
+    which is the tell — a test that only works Mon-Thu reports the
+    calendar, not the code. Starting the walk a day back makes the
+    fixture mean what it says on every weekday.
+    """
+    d = (now.replace(hour=15, minute=15, second=0, microsecond=0)
+         - _dt.timedelta(days=1))
     while d.weekday() != 4:
         d -= _dt.timedelta(days=1)
     return d

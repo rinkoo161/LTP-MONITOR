@@ -27,7 +27,11 @@ import config
 # project's own rule is that tests touching persisted files must
 # snapshot and restore; this one never did.
 import json as _json, os as _os, atexit as _atexit
-_OPEN_STATE = _os.path.expanduser("~/.ltp-monitor/open_state.json")
+import store as _store
+# 2026-07-31 — was a hardcoded ~/.ltp-monitor path, so the snapshot and
+# restore below operated on the OPERATOR'S open positions even when the
+# runner had redirected the store. store.path() follows LTP_MONITOR_HOME.
+_OPEN_STATE = _store.path("open_state.json")
 _open_state_backup = None
 if _os.path.exists(_OPEN_STATE):
     try:

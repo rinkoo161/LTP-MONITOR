@@ -48,7 +48,13 @@ check("a non-existent table is a no-op, not an error",
 c.close()
 
 print("\n2) The real table is migrated on open")
-dbp = os.path.expanduser("~/.ltp-monitor/history.db")
+# 2026-07-31 — was os.path.expanduser("~/.ltp-monitor/history.db"), a
+# hardcode that ignored LTP_MONITOR_HOME. This section runs DROP TABLE
+# against whatever it points at, so under the isolated runner it was
+# both looking at the wrong database AND dropping a table in the
+# operator's live one. history.DB is resolved through store.py, so it
+# follows the redirect.
+dbp = history.DB
 cc = sqlite3.connect(dbp)
 cc.execute("DROP TABLE IF EXISTS ta_calibration")
 cc.execute("""CREATE TABLE ta_calibration(ts INTEGER, day TEXT, symbol TEXT,
@@ -105,7 +111,7 @@ check("the raw-distribution query is wrapped in try/except",
 
 print("\n3b) A PK-less table is REBUILT, not just widened")
 import sqlite3 as _sq, importlib as _il2
-_dbp = os.path.expanduser("~/.ltp-monitor/history.db")
+_dbp = history.DB   # see the note above — never hardcode the store path
 _cx = _sq.connect(_dbp)
 _cx.execute("DROP TABLE IF EXISTS ta_calibration")
 _cx.execute("CREATE TABLE ta_calibration(ts INTEGER, as_of INTEGER, day TEXT, "

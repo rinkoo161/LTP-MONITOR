@@ -4,6 +4,52 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v58.72 — a test that only works Mon-Thu, and one that dropped a live table (2026-07-31)
+
+The three failures the isolated runner exposed, fixed. Two were worse
+than "a wrong path".
+
+### test_prevclose_and_marker_anchor only worked Monday to Thursday
+
+    def last_friday_from(now):
+        d = now.replace(hour=15, minute=15, ...)
+        while d.weekday() != 4:      # today IS Friday -> returns TODAY
+            d -= 1 day
+
+Run on a Friday, the fixture's "previous session" lands on the current
+date. `prev_close_for` then correctly returns None (there is no
+prior-day candle in the fixture) and `resolve_anchor` correctly keeps a
+today-timestamp. All four failures were the test reporting the
+calendar. It passed at 23:5x on Thursday and failed at 02:00 the same
+night, which is the only reason it was caught at all.
+
+Worth stating because the first diagnosis was wrong: it was attributed
+to the store isolation, on the strength of it changing state at roughly
+the same time. It fails identically with isolation off and with each of
+that session's other changes reverted. **Correlation with the thing you
+just changed is the easiest false lead there is.**
+
+### test_schema_migration_and_grouping was DROPping a table in the live DB
+
+It hardcoded `~/.ltp-monitor/history.db` and runs
+
+    DROP TABLE IF EXISTS ta_calibration
+
+against it. Under the isolated runner it therefore read the temp
+database while destroying a table in the OPERATOR'S one — the failure
+was the visible half of a data-safety bug. Now `history.DB`, which
+resolves through store.py and follows the redirect.
+
+`test_manual_deploy` had the same hardcode for `open_state.json`,
+meaning its snapshot-and-restore was operating on real open positions.
+It was passing, so nothing flagged it.
+
+### Baseline
+
+68/85 isolated, no timeouts. The remaining 17: 11 need playwright, 3
+are broker/websocket (`test_ws_leak` fails on Python 3.14 removing
+`get_event_loop` from a non-async thread), 3 predate this session.
+
 ## v58.71 — straight candles were real; the 11 "signals" were mine (2026-07-31)
 
 Two symptoms reported together, one a product bug and one self-inflicted.
