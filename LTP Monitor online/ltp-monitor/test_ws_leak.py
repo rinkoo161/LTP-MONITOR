@@ -51,12 +51,17 @@ check("an object with no state is treated as ALIVE, not muted",
       "failing closed here costs real functionality for a case a real "
       "Starlette socket cannot produce")
 
+# 2026-08-01 — this used asyncio.get_event_loop(), which RAISES on
+# Python 3.14 ("no current event loop"). The file died here, so every
+# check below — the entire dead-peer section, i.e. the leak itself —
+# silently stopped running while the file merely looked "already red".
+# The product code was verified sound; this restores the coverage.
 print("\n2) ws_send refuses to write to a dead peer")
 async def _t():
     ok_live = await app.ws_send(live, {"a": 1})
     ok_dead = await app.ws_send(dead, {"a": 1})
     return ok_live, ok_dead, live.sent, dead.sent
-ok_live, ok_dead, n_live, n_dead = asyncio.get_event_loop().run_until_complete(_t())
+ok_live, ok_dead, n_live, n_dead = asyncio.run(_t())
 check("send to a live peer succeeds", ok_live is True and n_live == 1)
 check("send to a dead peer returns False", ok_dead is False)
 check("and does NOT write -- this is the leak, closed",
@@ -68,7 +73,7 @@ class Raiser(FakeWS):
 async def _t2():
     return await app.ws_send(Raiser(), {"a": 1})
 check("a raising transport is also handled",
-      asyncio.get_event_loop().run_until_complete(_t2()) is False)
+      asyncio.run(_t2()) is False)
 
 print("\n3) The push loop reaps rather than spinning")
 SRC = open("app.py").read()

@@ -53,9 +53,15 @@ check("new view-futures div exists",
       '<div id="view-futures" class="view" style="display:none">' in h)
 check("new nav rail button exists, wired to showView('futures')",
       'id="rail-futures" onclick="showView(\'futures\')"' in h)
+# 2026-08-01 — this matched the ENTIRE array literal, so adding any new
+# view broke it even though `futures` was still registered. v59.0 added
+# "fstrat" and this failed; nobody saw it, because the file was already
+# red from a missing `playwright` and the whole result was being read as
+# one accepted-red line. Now asserts what the check is actually about:
+# that `futures` is a member of showView's toggle array.
+_arr = h.split('function showView(v){', 1)[-1].split(']', 1)[0]
 check("futures registered in showView's view-toggle array",
-      '["dash","futures","pnl","strat","inst","bt","journal","agents","macro","quality"]'
-      in h)
+      '"futures"' in _arr and '"dash"' in _arr, _arr.strip()[-90:])
 check("showView triggers loadFuturesPage on navigating to futures",
       'if(v==="futures")loadFuturesPage();' in h)
 

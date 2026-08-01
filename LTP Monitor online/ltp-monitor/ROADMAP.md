@@ -95,6 +95,116 @@ never be the reason a trade happens. Rejections surface through the same
 `<strategy>_require_basis_agreement` overrides the global key; both
 default False.
 
+## v59.0 items 29-36 — sizing reality, the research page, and un-reddening the suite (2026-08-01)
+
+### Item 32 — the config lot map was STALE, and it is load-bearing
+
+The Dhan scrip master says **NIFTY 65 / FINNIFTY 60**; config carried
+**75 / 65**. Corrected in `DEFAULTS` and in the live
+config (no open positions at the time). `futures_costs.reconcile_lot_sizes()`
+now runs daily in LearningAgent's maintenance slot and logs LOT SIZE DRIFT
+loudly, because this map will go stale again — exchange lot sizes are revised
+periodically to hold contract value in a band.
+
+**Blast radius.** ~24 call sites read `cfg["lot_sizes"].get(sym, 75)` —
+`sizing.py` (5), `backtester.py` (5), `agents.py` (7), `regression.py`,
+`promotion_gate.py`. Only `futures_costs.lot_size()` ever asked the scrip
+master. Effects of a 15% inflated lot:
+
+  - **Paper P&L for NIFTY was 15% overstated** (paper books qty = lots x 75).
+    Every journal-derived metric inherits it.
+  - **Sizing was CONSERVATIVE, not aggressive** — and correcting it is
+    risk-INCREASING, which is the counter-intuitive direction. At 2%/₹200k
+    and a 30-point stop: lot 75 → 1 lot, ₹2,250 risk; lot 65 → 2 lots,
+    ₹3,900 risk. The stale value was under-deploying against the budget.
+  - **Rupee-absolute thresholds are unaffected in value but shift in
+    meaning**: `futures_risk_per_trade_rupees` 2500, `portfolio_max_drawdown`
+    5000, `daily_loss_limit` 20000 are absolute ₹, so they do not rescale —
+    but the position they now permit is larger, so a kill-switch calibrated
+    against inflated position values fires later in real terms.
+  - **The gate verdict does NOT change: 0 of 11 either way.** t is
+    scale-invariant (net and sd both scale with lot), and `required` moves
+    only 1-3% (e.g. vwap NIFTY 462 → 452). Verified per-strategy.
+
+### Item 33 — `lots_per_trade` is REAL, not decorative
+
+`dynamic_sizing_enabled` is False, so `size_option_buy()` returns
+`lots_per_trade` verbatim. No cap silently overrides it. The 70%-at-1-lot
+figure is a HISTORY artefact, not an override: sizes grew as the setting was
+raised — 100% at 1 lot on 2026-07-16..19, then 2-3 lots, and 5 lots on the
+last session. Sizes above 5 come from the separate `size_by_atr_risk()` path
+(mtf_confluence signals only), which is dynamic and bounded by
+`max_lots_per_trade`=10; the observed maximum is exactly 10.
+
+So: changing `lots_per_trade` DOES have an effect, and the current value 5
+means future trades sit where the cost bias is ~35-60% worse per lot than
+the 1-lot backtests assume.
+
+### Item 29 — the 1-lot assumption vs live
+
+30% of executed trades exceed one lot (mean 1.82, max 10). Per-lot cost bias
+under spread impact `hs x n^alpha`: at n=1.82, alpha=0.5 the NIFTY bias rises
+₹56 → ₹73; at n=10 it reaches ₹162 (alpha=0.5) or ₹495 (alpha=1). **No
+strategy flips** — all eleven already fail at one lot. `size_aware_cost.py`.
+
+### Item 30 — the Futures Research page
+
+View `fstrat`, six GET endpoints, panels 1/2/7/8 plus a new **Panel 9
+promotion-gate table** carrying the OPTIONS finding (Panel 3's chips only
+cover futures, which are already off). Deliberately NO `hedge/toggle` and no
+deploy control: the spec listed one, but a toggle on an evidence page is how
+"not deployable yet" gets forgotten. Provisional labels RENDER as a visible
+footnote. The S11 worked example is hard-coded permanent.
+
+Building it surfaced two real bugs: `futures_postmortem.report()` called
+`atr_units()` without `cfg` (TypeError on any run with trades), and Panel 8
+immediately flagged the stale lot map above — which is exactly what that
+panel was specified to catch.
+
+### Items 35, 36 — the suite went 90/106 → 102/106
+
+  - `test_ws_leak` used `asyncio.get_event_loop()`, which RAISES on Python
+    3.14. The file died after 4 checks, so **13 checks — the entire
+    dead-peer section, i.e. the leak itself — had silently stopped running**
+    while the file merely looked "already red". Product code verified sound
+    independently before the fix. Now 17/17.
+  - `playwright` + its chromium binary installed: **ten UI tests unmasked at
+    once, all passing.**
+  - `test_futures_trading_page` matched the ENTIRE `showView` array literal,
+    so adding "fstrat" broke it — **a regression introduced this session that
+    hid inside an accepted-red file.** Exactly the cost the red baseline was
+    imposing. Assertion now checks membership.
+
+Remaining 4: `test_dhan_ws` and `test_kotak` need live broker credentials;
+`test_staleness_and_docs` fails on one drifted doc string;
+`test_news_relevance_filter` is item 34 below.
+
+### Item 34 — news filter: DIAGNOSED, fix NOT applied
+
+Not a regression in the news engine. The keyword relevance gate is correct
+and would pass: for *"Local team's morale suffers crash after tough loss"*,
+`category == "other"` and `FINANCIAL_CONTEXT_RE` does not match, so the
+fallback forces neutral / no windows / action none.
+
+**The AI path overrides it.** With `ai_engine: local`, Ollama qwen2.5:3b
+returns `relevant=True, bias=bearish`, reasoning *"Negative headline
+suggesting local team performance impact on investor sentiment"* — which is
+nonsense. `process_item()` trusts AI relevance unconditionally, so the
+headline gets bearish bias and the full `[1m,5m,15m]` window.
+
+Consequences: the test is non-deterministic (passes when Ollama is DOWN,
+fails when it is up), and more importantly a 3B local model can inject a
+false "Risk" read into the `news` bus key that gates strategy decisions.
+
+**Proposed fix, not applied:** make the keyword layer a VETO on relevance
+rather than a fallback — `is_relevant = ai_relevant AND (category != "other"
+OR FINANCIAL_CONTEXT_RE)`. AI may then downgrade relevance but never upgrade
+a headline with zero financial signal. This matches the veto-only pattern
+already used for the basis gate. **Trade-off:** it costs AI recall on
+genuinely relevant headlines phrased without financial keywords. Given the
+asymmetry — a false Risk read gates real trades, a missed story does not —
+the conservative direction looks right, but it is a judgement call.
+
 ## Credential audit — CLOSED (2026-08-01)
 
 Full-history audit of the public repo (github.com/rinkoo161/LTP-MONITOR).

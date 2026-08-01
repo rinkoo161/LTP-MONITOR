@@ -268,8 +268,8 @@ def report(trades, as_json=False):
         stopx = (abs(float(t["entry"]) - float(r["stop"])) / a) if (a and r.get("stop")) else 0
         print(f"    {str(t.get('symbol')):10} {str(t.get('side')):5} "
               f"{str(r.get('lots')):>4} {a:>6.1f} {stopx:>6.2f} "
-              f"{(atr_units(t, float(t.get('mfe') or 0)) or 0):>6.2f} "
-              f"{(atr_units(t, float(t.get('mae') or 0)) or 0):>6.2f} "
+              f"{(atr_units(t, float(t.get('mfe') or 0), cfg) or 0):>6.2f} "
+              f"{(atr_units(t, float(t.get('mae') or 0), cfg) or 0):>6.2f} "
               f"{pnl(t):>9,.0f}  {classify_exit(t.get('reason'))}")
 
     if as_json:

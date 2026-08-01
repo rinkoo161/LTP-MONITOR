@@ -402,6 +402,9 @@
   <button id="rail-quality" onclick="showView('quality')" title="Trade Quality">
     <span class="rail-icon"><svg viewBox="0 0 24 24"><path d="M4 20V10"/><path d="M10 20V4"/><path d="M16 20v-7"/><path d="M22 20H2"/></svg></span><span class="lbl">Trade Quality</span>
   </button>
+  <button id="rail-fstrat" onclick="showView('fstrat')" title="Futures Research">
+    <span class="rail-icon"><svg viewBox="0 0 24 24"><path d="M4 19h16"/><path d="M4 19V5"/><path d="M8 16l4-6 3 3 5-7"/><circle cx="8" cy="16" r="1"/></svg></span><span class="lbl">Futures Research</span>
+  </button>
   <button id="rail-agents" onclick="showView('agents')" title="Agents">
     <span class="rail-icon"><svg viewBox="0 0 24 24"><rect x="4" y="8" width="16" height="12" rx="2"/><path d="M12 8V4"/><circle cx="12" cy="3" r="1"/><circle cx="9" cy="14" r="1"/><circle cx="15" cy="14" r="1"/><path d="M2 13h2M20 13h2"/></svg></span><span class="lbl">Agent System</span>
   </button>
@@ -999,6 +1002,40 @@
 </div>
 
 <!-- ============================================================ TRADE QUALITY VIEW -->
+<div id="view-fstrat" class="view" style="display:none">
+  <div class="panel full">
+    <h2>&#128300; Futures Research <span class="sub">evidence record — this page reads state and changes nothing</span>
+      <button class="ivbtn" style="margin-left:auto" onclick="loadFuturesResearch()">refresh</button></h2>
+    <div id="fr_banner" class="sub" style="padding:6px 0"></div>
+  </div>
+
+  <div class="panel full">
+    <h2>1 &middot; Post-mortem <span class="sub">why futures were switched off</span></h2>
+    <div id="fr_pm"></div>
+    <div id="fr_s11" style="margin-top:10px"></div>
+  </div>
+
+  <div class="panel full">
+    <h2>9 &middot; Promotion gate <span class="sub">the OPTIONS finding — these strategies trade now</span></h2>
+    <div id="fr_gate"></div>
+  </div>
+
+  <div class="panel full">
+    <h2>2 &middot; Futures state <span class="sub">basis residual, z-scored</span></h2>
+    <div id="fr_state"></div>
+  </div>
+
+  <div class="panel full">
+    <h2>7 &middot; Hedge monitor <span class="sub">Phase D shadow — nothing placed, live or paper</span></h2>
+    <div id="fr_hedge"></div>
+  </div>
+
+  <div class="panel full">
+    <h2>8 &middot; Cost model readout <span class="sub">a stale lot size corrupts every number above without throwing</span></h2>
+    <div id="fr_costs"></div>
+  </div>
+</div>
+
 <div id="view-quality" class="view" style="display:none">
   <div class="panel full">
     <h2>Trade Quality <span class="sub">expectancy, win rate by hour/setup, exit efficiency</span>
@@ -1336,7 +1373,7 @@ setInterval(function(){document.getElementById("clock").textContent=
 /* ---------------- view switching ---------------- */
 function showView(v){
   currentView=v;
-  ["dash","futures","pnl","strat","inst","bt","journal","agents","macro","quality"].forEach(function(k){
+  ["dash","futures","pnl","strat","inst","bt","journal","agents","macro","quality","fstrat"].forEach(function(k){
     const view=document.getElementById("view-"+k);
     if(view) view.style.display=k===v?"block":"none";
     const btn=document.getElementById("rail-"+k);
@@ -1351,6 +1388,124 @@ function showView(v){
   if(v==="agents")loadAgentsFull();
   if(v==="macro"){loadMacroAndNews();loadMacroDigest();loadNewsFeeds();}
   if(v==="quality")loadQuality();
+  if(v==="fstrat")loadFuturesResearch();
+}
+
+
+/* ---------------- Futures Research (v59.0 item 30) ----------------
+   EVIDENCE RECORD. Every call here is a GET. Nothing on this page
+   mutates gating, and there is deliberately no deploy control: the
+   finding is that nothing here should be deployable yet, and a button
+   on an evidence page is how that gets forgotten.
+   Provisional labels RENDER — a caveat that only lives in the payload
+   is the same as no caveat, because the number hardens anyway. */
+function frEsc(x){return String(x==null?"":x).replace(/[&<>]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;"}[c];});}
+function frNum(v,d){return v==null?"&mdash;":Number(v).toLocaleString(undefined,{minimumFractionDigits:d||0,maximumFractionDigits:d||0});}
+
+function loadFuturesResearch(){
+  fetch("/api/futures/research/state").then(function(r){return r.json();}).then(function(d){
+    try{ frRender(d); }
+    catch(e){ document.getElementById("fr_banner").innerHTML =
+      '<span style="color:var(--red)">Futures Research failed to render: '+frEsc(e.name+": "+e.message)+'</span>'; }
+  }).catch(function(e){
+    document.getElementById("fr_banner").innerHTML =
+      '<span style="color:var(--red)">Futures Research unreachable: '+frEsc(e)+'</span>';
+  });
+}
+
+function frRender(d){
+  document.getElementById("fr_banner").innerHTML =
+    '<b>futures_strategy_enabled</b> '+(d.futures_strategy_enabled?'<span style="color:var(--red)">ON</span>':'<span style="color:var(--green)">off</span>')+
+    ' &nbsp;&middot;&nbsp; <b>futures_live_enabled</b> '+(d.futures_live_enabled?'<span style="color:var(--red)">ON</span>':'<span style="color:var(--green)">off</span>')+
+    ' &nbsp;&middot;&nbsp; this page is <b>read-only</b>';
+
+  /* -- panel 1: post-mortem -- */
+  var pm=d.postmortem||{}, h="";
+  if(pm.available){
+    h += '<div class="sub">'+frNum(pm.n)+' futures trades, net &#8377;'+frNum(pm.net)+'</div>';
+    if(pm.exits){ h+='<table class="tbl"><tr><th>exit reason</th><th>n</th></tr>';
+      Object.keys(pm.exits).forEach(function(k){h+='<tr><td>'+frEsc(k)+'</td><td>'+frNum(pm.exits[k])+'</td></tr>';});
+      h+='</table>'; }
+  } else { h = '<div class="sub">'+frEsc(pm.reason||"no futures trades — disabled since Phase 0")+'</div>'; }
+  document.getElementById("fr_pm").innerHTML=h;
+
+  /* -- the S11 worked example is PERMANENT -- */
+  var w=(pm.worked_example)||{};
+  document.getElementById("fr_s11").innerHTML =
+    '<div class="panel" style="border-left:3px solid var(--red);padding:10px">'+
+    '<b>Worked example &mdash; the same 325 trades, two cost models</b><br>'+
+    '<table class="tbl"><tr><th>cost model</th><th>P&amp;L</th><th>verdict</th></tr>'+
+    '<tr><td>flat fee_per_lot</td><td style="color:var(--green)">&#8377;'+frNum(w.flat_model_pnl)+'</td><td>'+frEsc(w.flat_model_verdict)+'</td></tr>'+
+    '<tr><td>notional-aware</td><td style="color:var(--red)">&#8377;'+frNum(w.notional_model_pnl)+'</td><td>'+frEsc(w.notional_model_verdict)+'</td></tr>'+
+    '</table><div class="sub" style="margin-top:6px">'+frEsc(w.note)+'</div></div>';
+
+  /* -- panel 9: the promotion gate, the live finding -- */
+  var g=d.gate||{}, rows=g.rows||[], t="";
+  t += '<div class="sub" style="margin-bottom:6px"><b>'+frEsc(g.headline||"")+'</b></div>';
+  t += '<div class="sub">'+frEsc(g.formula||"")+' &nbsp;&middot;&nbsp; passing <b>'+
+       frNum(g.passing)+'/'+frNum(g.total)+'</b> &nbsp;&middot;&nbsp; highest t <b>'+
+       (g.max_t==null?"&mdash;":g.max_t)+'</b> vs <b>'+g.expected_max_t_pure_noise+
+       '</b> expected from pure noise</div>';
+  t += '<table class="tbl"><tr><th>strategy</th><th>symbol</th><th>n</th><th>net/trade</th>'+
+       '<th>cost bias</th><th>stat margin</th><th>required</th><th>headroom</th><th>t</th><th>verdict</th></tr>';
+  rows.forEach(function(r){
+    var col = r.verdict==="PASS" ? "var(--green)" : "var(--red)";
+    t += '<tr><td>'+frEsc(r.strategy)+'</td><td>'+frEsc(r.symbol)+'</td><td>'+frNum(r.trades)+'</td>'+
+         '<td>&#8377;'+frNum(r.net_per_trade)+'</td><td>&#8377;'+frNum(r.cost_bias)+'</td>'+
+         '<td>&#8377;'+frNum(r.stat_margin)+'</td><td>&#8377;'+frNum(r.required)+'</td>'+
+         '<td style="color:'+col+'">&#8377;'+frNum(r.headroom)+'</td><td>'+(r.t==null?"&mdash;":r.t)+'</td>'+
+         '<td><span class="badge" style="color:'+col+'">'+frEsc(r.verdict)+'</span></td></tr>';
+  });
+  t += '</table>';
+  /* PROVISIONAL LABELS RENDER — see the module docstring on why. */
+  t += '<div class="sub" style="margin-top:8px;border-top:1px dashed var(--bd);padding-top:6px">'+
+       '<b>PROVISIONAL.</b> sd: '+frEsc(g.sd_provenance||"")+'<br>cost: '+frEsc(g.cost_provenance||"")+'</div>';
+  document.getElementById("fr_gate").innerHTML=t;
+
+  /* -- panel 2: state strip -- */
+  var st=d.state||[], s2='<table class="tbl"><tr><th>index</th><th>spot</th><th>future</th>'+
+      '<th>basis</th><th>fair</th><th>residual</th><th>z</th><th>regime</th></tr>';
+  if(!st.length) s2='<div class="sub">no futures state — agents idle or market closed</div>';
+  else{ st.forEach(function(r){
+    var z=r.residual_z, zc = z==null?"":(z>=1.5?"var(--green)":(z<=-1.5?"var(--red)":""));
+    s2 += '<tr><td>'+frEsc(r.symbol)+(r.approx?' <span title="dividend yield is an estimate, not a calendar" style="color:#e0a800">&#9679;</span>':'')+
+          '</td><td>'+frNum(r.spot)+'</td><td>'+frNum(r.future)+'</td><td>'+frNum(r.basis,2)+'</td>'+
+          '<td>'+frNum(r.fair_basis,2)+'</td><td>'+frNum(r.residual,2)+'</td>'+
+          '<td style="color:'+zc+'">'+(z==null?('&mdash; <span class="sub">('+frNum(r.z_samples)+'/'+frNum(r.z_window)+')</span>'):z)+'</td>'+
+          '<td>'+frEsc(r.regime)+'</td></tr>';
+  }); s2+='</table>'; }
+  document.getElementById("fr_state").innerHTML=s2;
+
+  /* -- panel 7: hedge shadow -- */
+  var hd=d.hedge||{}, rp=hd.report||{}, hh="";
+  hh += '<div class="sub"><b>SHADOW ONLY</b> &middot; orders placed: <b>'+frNum(hd.orders_placed)+
+        '</b> &middot; sessions <b>'+frNum(rp.sessions)+'/'+frNum(rp.sessions_required)+'</b></div>';
+  hh += '<table class="tbl"><tr><th>parent closes</th><th>with hedge open</th><th>forced-close load-bearing</th>'+
+        '<th>violations</th><th>closest near-miss</th><th>max over-hedge</th></tr><tr>'+
+        '<td>'+frNum(rp.parent_closes)+'</td><td>'+frNum(rp.closes_with_hedge_open)+'</td>'+
+        '<td>'+frNum(rp.forced_only)+'</td>'+
+        '<td style="color:'+((rp.violations>0)?"var(--red)":"var(--green)")+'">'+frNum(rp.violations)+'</td>'+
+        '<td>'+(rp.closest_near_miss_pts==null?"&mdash;":frNum(rp.closest_near_miss_pts,1)+" pts")+'</td>'+
+        '<td style="color:'+((rp.over_hedged>0)?"var(--red)":"")+'">'+(rp.max_over_hedge_ratio==null?"&mdash;":rp.max_over_hedge_ratio)+'</td></tr></table>';
+  hh += '<div class="sub" style="margin-top:6px">'+frEsc(hd.note||"")+'</div>';
+  document.getElementById("fr_hedge").innerHTML=hh;
+
+  /* -- panel 8: cost readout -- */
+  var c=d.costs||{}, cs=c.symbols||[], cc='<table class="tbl"><tr><th>symbol</th><th>lot (scrip master)</th>'+
+      '<th>source</th><th>option round trip</th><th>of which spread</th><th>flat model charges</th><th>understated by</th></tr>';
+  cs.forEach(function(r){
+    cc += '<tr><td>'+frEsc(r.symbol)+'</td><td>'+frNum(r.lot_size)+'</td><td class="sub">'+frEsc(r.lot_source)+'</td>'+
+          '<td>&#8377;'+frNum(r.option_rt_rupees)+'</td><td>&#8377;'+frNum(r.option_rt_spread)+'</td>'+
+          '<td>&#8377;'+frNum(r.flat_model_rupees)+'</td>'+
+          '<td style="color:var(--red)">&#8377;'+frNum(r.understatement)+'</td></tr>';
+    if(r.lot_mismatch)
+      cc += '<tr><td colspan="7" style="color:var(--red)">&#9888; '+frEsc(r.symbol)+': '+frEsc(r.lot_mismatch)+'</td></tr>';
+  });
+  cc += '</table>';
+  var sd=c.spread_distribution||{};
+  cc += '<div class="sub" style="margin-top:6px">measured bid-ask: median '+sd.median_points+
+        ', mean '+sd.mean_points+', max '+sd.max_points+' pts (n='+sd.n+'). '+frEsc(sd.note||"")+'</div>';
+  document.getElementById("fr_costs").innerHTML=cc;
 }
 
 /* ---------------- theme ---------------- */

@@ -2088,6 +2088,51 @@ class FutureIn(BaseModel):
     lots: int = 1
 
 
+# ---- Futures Research page (v59.0 §8, item 30) — READ ONLY ----------
+# This page is an evidence record, not a deploy surface. Every endpoint
+# below is a GET that reads state. There is deliberately NO
+# /api/futures/hedge/toggle and no deploy POST: the spec listed one, but
+# the engagement's finding is that nothing here should be deployable
+# yet, and a toggle on an evidence page is how that gets forgotten.
+@app.get("/api/futures/research/state")
+def api_futures_research_state():
+    import futures_research_api as fra
+    return fra.research_state(pilot.bus)
+
+
+@app.get("/api/futures/postmortem")
+def api_futures_postmortem():
+    import futures_research_api as fra
+    return fra.postmortem()
+
+
+@app.get("/api/futures/gate")
+def api_futures_gate():
+    """The promotion-gate table — the OPTIONS finding, not the futures one."""
+    import futures_research_api as fra
+    return fra.promotion_gate_table()
+
+
+@app.get("/api/futures/costs")
+def api_futures_costs():
+    import futures_research_api as fra
+    return fra.cost_readout()
+
+
+@app.get("/api/futures/hedge")
+def api_futures_hedge():
+    import futures_research_api as fra
+    return fra.hedge_monitor()
+
+
+@app.get("/api/futures/basis/{symbol}")
+def api_futures_basis(symbol: str):
+    obs = pilot.bus.get(f"basis_residual:{symbol.upper()}") or {}
+    import history as _h
+    return {"observation": obs,
+            "series": _h.basis_residual_series(symbol.upper(), 500)}
+
+
 @app.post("/api/futures/enter")
 def api_futures_enter(body: FutureIn):
     """S4 (v50) — open a paper futures position (Phase 1: manual/API

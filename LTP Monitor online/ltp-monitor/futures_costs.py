@@ -115,6 +115,47 @@ def lot_size(symbol, cfg=None):
     return ls, "dhan scrip master"
 
 
+def reconcile_lot_sizes(cfg=None, symbols=("NIFTY", "BANKNIFTY", "FINNIFTY",
+                                           "SENSEX")):
+    """Compare config["lot_sizes"] against the scrip master. REPORT ONLY.
+
+    v59.0 item 32. `lot_size()` already prefers the scrip master, but it
+    is called from exactly ONE module. The other ~24 readers — sizing.py,
+    backtester.py, agents.py, regression.py, promotion_gate.py — all do
+    `cfg["lot_sizes"].get(symbol, 75)` and never learn that the contract
+    was revised. On 2026-08-01 config carried NIFTY 75 / FINNIFTY 65 while
+    the live contracts were 65 / 60, and nothing threw.
+
+    Exchange lot sizes are revised periodically to hold contract value in
+    a band, so a static map going stale is the expected case, not an
+    unlucky one. This exists so the drift is SURFACED on a schedule
+    rather than discovered by someone building an unrelated panel.
+
+    Returns a list of mismatch dicts (empty when clean). It deliberately
+    does NOT write config: changing a contract size silently rescales
+    every open position's notional, and that is a decision, not
+    maintenance.
+    """
+    cfg = cfg if cfg is not None else config.load()
+    stale = cfg.get("lot_sizes") or {}
+    out = []
+    for sym in symbols:
+        have = stale.get(sym)
+        if not have:
+            continue
+        try:
+            real, src = lot_size(sym, cfg)
+        except Exception as e:
+            out.append({"symbol": sym, "config": have, "scrip": None,
+                        "error": f"{type(e).__name__}: {e}"})
+            continue
+        if int(have) != int(real):
+            out.append({"symbol": sym, "config": int(have), "scrip": int(real),
+                        "source": src,
+                        "pct": round(100 * (int(have) - int(real)) / int(real), 1)})
+    return out
+
+
 def cost_round_trip(symbol, entry, exit_px, lots=1, cfg=None, lot=None):
     """Total round-trip cost in RUPEES for `lots` lots.
 

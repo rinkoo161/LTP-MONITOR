@@ -604,7 +604,12 @@ DEFAULTS = {
     "kotak_auth_token": "",           # ₹ brokerage+charges per lot per transaction
                                  # (entry and exit each count as one transaction)
     # verify lot sizes with your broker; exchanges revise them periodically
-    "lot_sizes": {"NIFTY": 75, "BANKNIFTY": 30, "FINNIFTY": 65, "SENSEX": 20},
+    # v59.0 item 32 (2026-08-01) — corrected to the Dhan scrip master.
+    # Was NIFTY 75 / FINNIFTY 65 while the live contracts were 65 / 60.
+    # Exchange lot sizes are revised periodically to hold contract value
+    # in a band, so this map goes stale silently; futures_costs.
+    # reconcile_lot_sizes() now surfaces the drift on a daily schedule.
+    "lot_sizes": {"NIFTY": 65, "BANKNIFTY": 30, "FINNIFTY": 60, "SENSEX": 20},
     # ---- AI engine + cost controls ----
     "ai_engine": "local",        # local (Ollama) | online (Anthropic) | auto | off
     "ollama_model": "qwen2.5:3b", # DEFAULT: lightweight ~2GB. Safer options:

@@ -5475,6 +5475,18 @@ class LearningAgent(Agent):
                 history.prune_ta_calibration(config.load().get('ta_calibration_retention_days', 10))
                 self.bus.set("chain_prune_done", today)
                 self.bus.log(self.name, f"chain_snapshots retention: {res}")
+                # v59.0 item 32 — contract sizes drift silently. ~24 call
+                # sites read cfg["lot_sizes"]; only futures_costs asks the
+                # scrip master. Surface the divergence daily rather than
+                # letting someone find it while building an unrelated panel.
+                import futures_costs as _fc
+                for _mm in _fc.reconcile_lot_sizes():
+                    self.bus.log(self.name,
+                                 f"\u26a0 LOT SIZE DRIFT {_mm['symbol']}: config "
+                                 f"{_mm.get('config')} vs scrip master "
+                                 f"{_mm.get('scrip')} ({_mm.get('pct')}%) — every "
+                                 f"notional, margin and P&L figure for this "
+                                 f"symbol is wrong by that factor")
             except Exception as e:
                 # Fail loud, not silent — same convention as every other
                 # maintenance task in this codebase. A failed prune
