@@ -283,6 +283,60 @@ headline), so the veto logic is what is under test. 19/19.
 A green suite is the point. On 2026-08-01 a live regression hid inside an
 already-failing file for exactly as long as the red was being tolerated.
 
+## The risk ladder is now coherent end to end (2026-08-02) — with one caveat
+
+`option_risk_per_trade_rupees` 4,000 -> **2,000** and
+`risk_pct_per_trade` 2.0 -> **1.0**, live. Both configs report CLEAN, and
+the live config now matches DEFAULTS on every risk key except
+`daily_loss_limit` (7,000 live vs 5,000 shipped).
+
+    per-trade cap  options       ₹ 2,000  = risk_pct 1% x capital 200,000
+    class budget   option        ₹ 2,000  = one full-risk trade per day
+    per-trade cap  futures       ₹ 2,500
+    class budget   futures       ₹ 2,500
+    class budget   spread        ₹ 3,000
+    daily_loss_limit REALISED    ₹ 7,000  < ₹7,500 of class budgets
+    portfolio cap  UNREALISED    ₹12,000  = 6 full-risk trades
+
+Every rung is now ordered against the one below it, and every ordering is
+enforced by `sizing.risk_coherence()` rather than by anyone remembering.
+
+### THE CAVEAT — this refuses 58% of historical option signals
+
+    refused at ₹2,000:  61 of 106 clean trades (58%)
+    median option risk: ₹2,519 — above the cap
+
+This is the level previously argued against as "not a risk control, a
+shutdown". The reasoning that changed is not the number but the BASIS: it
+is now derived from the 1% risk budget and the option class budget, not
+chosen from which historical trades happened to lose. A principled cap
+that refuses a lot of trades is a statement that the strategy's natural
+risk exceeds the configured budget — which is a real finding, not a
+tuning artefact.
+
+**The refusals are concentrated, not uniform**: NIFTY 42 of 47 refused,
+BANKNIFTY 10 of 15, SENSEX only 9 of 43. The cap effectively turns the
+option book into a SENSEX book, because SENSEX's lot is 20 against
+NIFTY's 65. That is a side effect nobody chose and it should be revisited
+before reading anything into future per-symbol results.
+
+**The cost to learning.** Nothing has demonstrated an edge (0 of 11), and
+answering that question needs trades. Refusing 58% of signals roughly
+halves the rate at which the archive fills, which pushes out item 16 and
+the re-measurement of the ₹1,143. Risk down, evidence slower — a real
+trade-off, recorded so it is a choice rather than a surprise.
+
+Do NOT read the in-sample P&L split as validation: refused trades lost
+₹27,762 at a 49% win rate while kept trades lost ₹16,938 at 13%. Both
+lost money, the win rates move in opposite directions, and n is 106 with
+no demonstrated edge. It is noise, and selecting on it is the thing this
+engagement exists to refuse.
+
+**`risk_pct_per_trade` has no direct effect today** —
+`dynamic_sizing_enabled` is False, so `size_option_buy()` returns
+`lots_per_trade` verbatim. It is the invariant partner of the cap and
+matters the moment dynamic sizing is enabled.
+
 ## daily_loss_limit 20,000 -> 7,000, and the ladder below it (2026-08-02)
 
 Applied to the live config (DEFAULTS stays 5,000; both are internally
