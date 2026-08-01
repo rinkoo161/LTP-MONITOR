@@ -5557,6 +5557,12 @@ class LearningAgent(Agent):
                 # scrip master. Surface the divergence daily rather than
                 # letting someone find it while building an unrelated panel.
                 import futures_costs as _fc
+                # 2026-08-02 — same idea, different numbers: the per-trade
+                # budget, the two per-trade caps and the portfolio cap are
+                # set independently and silently disagree. Surface it.
+                import sizing as _szc
+                for _rc in _szc.risk_coherence():
+                    self.bus.log(self.name, f"\u26a0 RISK CONFIG: {_rc}")
                 for _mm in _fc.reconcile_lot_sizes():
                     self.bus.log(self.name,
                                  f"\u26a0 LOT SIZE DRIFT {_mm['symbol']}: config "

@@ -73,14 +73,27 @@ DEFAULTS = {
     "regime_gate_enabled": True,   # block trades in choppy/rangebound regimes
     "require_tf_confluence": True, # require 1m/5m/15m to agree with signal direction
     # v59.0 (2026-08-02) — per-trade rupee cap on the OPTIONS path.
-    # Set at the portfolio cap, not tighter, and that is deliberate:
-    # at 1 lot the cap can only BLOCK (there is nothing to size down
-    # to), and measured against 500 real trades a ₹2,500 cap would
-    # block 69% of them while ₹5,000 blocks ~8%. The motivated line is
-    # "no single trade may consume the whole portfolio allowance".
-    # Tightening further needs narrower STOPS first — median option
-    # stop is 69 points, so 1 lot already risks a median ₹3,198.
-    "option_risk_per_trade_rupees": 5000,
+    #
+    # RE-DERIVED on clean data. The first value (₹5,000) was calibrated
+    # against a population that pooled spread legs with option buys, and
+    # a tail figure computed by applying NIFTY's lot size to every
+    # symbol — which inflated SENSEX risk 3.25x. On the clean 106-trade
+    # single-leg population at each symbol's OWN lot size, per-lot risk
+    # is median ₹2,519 and maxes at ₹4,059, so ₹5,000 never bound at all.
+    #
+    # ₹4,000 is not a new free parameter: it IS the existing per-trade
+    # risk budget, risk_pct_per_trade (2%) x backtest_capital (200,000).
+    # That budget is currently dead configuration, because
+    # dynamic_sizing_enabled is False and size_option_buy() therefore
+    # returns lots_per_trade without ever consulting it. This cap makes
+    # the 2% budget actually bind.
+    #
+    # Deliberately NOT chosen by which historical trades lost. A ₹2,500
+    # cap would have avoided ₹27,383 of losses in sample — and blocked
+    # 57% of trades on n=106 with no demonstrated edge anywhere. Picking
+    # a risk limit by back-fitted outcomes is the thing this engagement
+    # exists to refuse.
+    "option_risk_per_trade_rupees": 4000,
     "lots_per_trade": 1,
     "max_concurrent_positions": 1,   # allow >1 to trade multiple indices at once
     "fee_per_lot": 40,

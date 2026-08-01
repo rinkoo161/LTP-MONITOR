@@ -283,6 +283,75 @@ headline), so the veto logic is what is under test. 19/19.
 A green suite is the point. On 2026-08-01 a live regression hid inside an
 already-failing file for exactly as long as the red was being tolerated.
 
+## Options risk cap, RE-DERIVED on clean data (2026-08-02)
+
+The ₹5,000 cap shipped earlier the same day was calibrated twice wrong.
+Both errors are recorded because each is a distinct failure mode.
+
+  1. **Population**: it pooled SPREAD legs with single-leg option buys,
+     and until the stop-basis fix a spread leg's `stoploss` was a
+     negative P&L floor rather than a price.
+  2. **Lot size**: the tail figures applied NIFTY's lot (65) to EVERY
+     symbol. SENSEX's lot is 20, so its risk was inflated 3.25x. That
+     single mistake produced the reported "p90 ₹7,608, max ₹9,484".
+
+On the clean 106-trade single-leg population, at each symbol's OWN lot
+size:
+
+    per-lot risk   median ₹2,519   p75 ₹4,059   p90 ₹4,059   max ₹4,059
+    stop width     median 30% of premium
+
+**The ₹5,000 cap never bound at all** — nothing in the clean history
+reaches it. Not "blocks 18%", as previously stated: blocks 0%.
+
+### The new value: ₹4,000, and why it is not a free parameter
+
+₹4,000 IS the existing per-trade risk budget —
+`risk_pct_per_trade` (2%) x `backtest_capital` (200,000). That budget is
+currently DEAD configuration: `dynamic_sizing_enabled` is False, so
+`size_option_buy()` returns `lots_per_trade` verbatim and never consults
+it. The cap makes the 2% budget actually bind, rather than introducing a
+new number to disagree with it.
+
+### What was deliberately NOT done
+
+A ₹2,500 cap would have avoided **₹27,383** of in-sample losses. It also
+blocks 57% of trades, on n=106, in a system where nothing has
+demonstrated an edge. Choosing a risk limit by which historical trades
+happened to lose is curve-fitting, and the refused-trade table shows why
+the temptation is a trap:
+
+    cap      refused   their net P&L   win rate
+    ₹2,500        60        -27,383       50%
+    ₹3,000        40         -6,990       75%
+    ₹4,000        30         +1,200      100%
+
+At ₹4,000 the refused trades were 100% winners. Read as optimisation
+that argues for a LOOSER cap; read correctly it says the cap should not
+be chosen from outcomes at all.
+
+### The inconsistency this exposed — `sizing.risk_coherence()`
+
+Four numbers are set independently and silently disagree:
+
+    risk_pct_per_trade x backtest_capital   per-trade budget   ₹4,000
+    option_risk_per_trade_rupees            per-trade cap      ₹4,000
+    futures_risk_per_trade_rupees           futures cap        ₹2,500
+    portfolio_max_drawdown                  whole-book cap     ₹5,000
+
+The live config currently reports: *portfolio cap ₹5,000 permits only
+**1.25** concurrent trades at the ₹4,000 per-trade cap*. A portfolio
+limit that survives one position is not a portfolio limit. **Not changed
+— it needs a decision**, and raising it is only defensible now that
+sizing is back at 1 lot.
+
+`config.DEFAULTS` also disagrees with the running config
+(`risk_pct_per_trade` 1.0 vs 2.0), so the cap can equal only one of them.
+Rather than pin either into a test, `sizing.risk_coherence()` reports any
+divergence and runs daily alongside `reconcile_lot_sizes()`. Duplicating
+a number across two keys and hoping they stay equal is this codebase's
+most repeated failure; it is now checked rather than hoped.
+
 ## Unreachable stops — a P&L stored in a price field (2026-08-02)
 
 **385 of 500 journal rows carried a stop price of ≤ 0, median -32.0.**

@@ -314,3 +314,46 @@ def size_future(cfg, symbol, entry, stoploss, deployed=0):
     if cap_why:
         return capped, why + " | " + cap_why
     return lots, why
+
+
+def risk_coherence(cfg=None):
+    """Are the per-trade and portfolio risk numbers consistent?
+
+    2026-08-02. These four are set independently and silently disagree:
+
+        risk_pct_per_trade x backtest_capital   the per-trade budget
+        option_risk_per_trade_rupees            the per-trade cap
+        futures_risk_per_trade_rupees           the futures per-trade cap
+        portfolio_max_drawdown                  the whole-book cap
+
+    The cap was derived to EQUAL the budget, because a budget that
+    dynamic sizing never applies (dynamic_sizing_enabled is False, so
+    size_option_buy returns lots_per_trade verbatim) is dead
+    configuration. But the two live in different keys and DEFAULTS
+    already disagrees with the live config — risk_pct_per_trade is 1.0
+    in DEFAULTS and 2.0 in the running config. Duplicating a number in
+    two places and hoping they stay equal is this codebase's most
+    repeated failure, so it is checked rather than hoped.
+
+    REPORTS ONLY. Returns a list of problem strings, empty when clean.
+    """
+    import config as _c
+    cfg = cfg if cfg is not None else _c.load()
+    out = []
+    budget = (cfg.get("backtest_capital", 0) or 0) * \
+             (cfg.get("risk_pct_per_trade", 0) or 0) / 100.0
+    cap = cfg.get("option_risk_per_trade_rupees", 0) or 0
+    kill = cfg.get("portfolio_max_drawdown", 0) or 0
+    if budget and cap and abs(cap - budget) > 1:
+        out.append(f"option cap ₹{cap:,.0f} != per-trade budget ₹{budget:,.0f} "
+                   f"(risk_pct_per_trade x backtest_capital) — one of them is "
+                   f"not what anyone thinks it is")
+    if cap and kill and cap >= kill:
+        out.append(f"option cap ₹{cap:,.0f} >= portfolio cap ₹{kill:,.0f} — a "
+                   f"single trade can trip the whole book, which makes the "
+                   f"portfolio cap meaningless exactly when it is needed")
+    if cap and kill and kill / cap < 2:
+        out.append(f"portfolio cap ₹{kill:,.0f} permits only {kill/cap:.2f} "
+                   f"concurrent trades at the ₹{cap:,.0f} per-trade cap — a "
+                   f"portfolio limit should survive more than one position")
+    return out

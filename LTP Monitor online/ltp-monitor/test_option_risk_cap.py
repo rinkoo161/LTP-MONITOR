@@ -3,11 +3,18 @@
 
 v59.0 (2026-08-02). The futures path got this cap on 2026-08-01; options
 had none, so `portfolio_max_drawdown` was the only thing between one
-option trade and the whole book — and measured against 500 real trades,
-a single 1-lot trade already risks a median ₹3,198 against a ₹5,000
-portfolio cap, with a maximum of ₹6,435. That maximum is the case this
-closes: one trade exceeding the entire portfolio allowance makes the
-portfolio cap meaningless exactly when it is needed.
+option trade and the whole book.
+
+RE-DERIVED the same day. The first figures here (median ₹3,198, max
+₹6,435) were wrong twice over: the population pooled SPREAD legs with
+option buys, and the tail applied NIFTY's lot size to every symbol,
+inflating SENSEX 3.25x. On the clean 106-trade single-leg population at
+each symbol's own lot size: median ₹2,519, max ₹4,059.
+
+So the cap is ₹4,000 — which is not a new number but the EXISTING
+per-trade risk budget (risk_pct_per_trade 2% x backtest_capital
+200,000), currently dead configuration because dynamic_sizing_enabled is
+False and size_option_buy() never consults it. The cap makes it bind.
 
 What these check, in order of what would actually go wrong:
 
@@ -42,6 +49,39 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 AG = open(os.path.join(HERE, "agents.py")).read()
 CFG = open(os.path.join(HERE, "config.py")).read()
 
+print("0) the cap IS the per-trade risk budget, not a new free parameter")
+_budget = (config.DEFAULTS["backtest_capital"]
+           * config.DEFAULTS["risk_pct_per_trade"] / 100)
+# NOT asserted as an equality. DEFAULTS carries risk_pct_per_trade 1.0
+# while the running config uses 2.0, so the cap can only equal ONE of
+# them — and hard-coding either into a test just pins whichever the
+# author happened to look at. What must hold is that a divergence is
+# DETECTED, so sizing.risk_coherence() is the thing under test.
+_div = sizing.risk_coherence(dict(config.DEFAULTS, risk_pct_per_trade=1.0))
+check("a cap that diverges from the budget is REPORTED",
+      any("per-trade budget" in x for x in _div),
+      f"₹{config.DEFAULTS['option_risk_per_trade_rupees']:,.0f} "
+      f"vs DEFAULTS budget ₹{_budget:,.0f} — flagged, not silent")
+_ok = sizing.risk_coherence({"backtest_capital": 200000,
+                             "risk_pct_per_trade": 2.0,
+                             "option_risk_per_trade_rupees": 4000,
+                             "portfolio_max_drawdown": 12000})
+check("a coherent set reports nothing", _ok == [], str(_ok))
+_one = sizing.risk_coherence({"backtest_capital": 200000,
+                              "risk_pct_per_trade": 2.0,
+                              "option_risk_per_trade_rupees": 4000,
+                              "portfolio_max_drawdown": 4000})
+check("a portfolio cap one trade can trip is REPORTED",
+      any("meaningless" in x for x in _one), str(_one))
+check("and it sits BELOW the portfolio kill-switch",
+      config.DEFAULTS["option_risk_per_trade_rupees"]
+      < config.DEFAULTS["portfolio_max_drawdown"],
+      "otherwise one trade can trip the whole portfolio on its own")
+check("it was NOT fitted to which historical trades lost",
+      "back-fitted" in CFG or "back-fitted outcomes" in CFG,
+      "a 2,500 cap would have avoided 27,383 in sample on n=106 with no "
+      "demonstrated edge — that is curve-fitting a risk limit")
+
 print("1) registered, or config.save() drops it silently")
 check("option_risk_per_trade_rupees in DEFAULTS",
       "option_risk_per_trade_rupees" in config.DEFAULTS)
@@ -62,7 +102,7 @@ check("no second cap function was written",
 print("\n3) the cap only ever reduces")
 cfg = dict(config.DEFAULTS)
 cfg["lot_sizes"] = {"NIFTY": 65}
-cfg["option_risk_per_trade_rupees"] = 5000
+cfg["option_risk_per_trade_rupees"] = 5000   # explicit, not the default
 # 1 lot, 40-point stop on a 65 lot = ₹2,600 — under the cap, untouched.
 lots, why = sizing.cap_by_rupee_risk(cfg, "NIFTY", 200.0, 160.0, 1,
                                      key="option_risk_per_trade_rupees")
