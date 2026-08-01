@@ -366,6 +366,21 @@ def risk_coherence(cfg=None):
                    f"₹{daily:,.0f} — they become the binding constraint and the "
                    f"global ceiling can never fire. class_budget_blocked() "
                    f"requires them to sum ABOVE it.")
+    # A class's DAILY budget must be at least its PER-TRADE cap, or one
+    # permitted trade exceeds the whole day's allowance for that class and
+    # the class shuts down before a single full-size trade can complete.
+    # Same defect as a portfolio cap sized below single-position risk,
+    # one rung down the ladder. Surfaced 2026-08-02 when lowering
+    # daily_loss_limit made the ordering visible.
+    per_trade = {"option": cfg.get("option_risk_per_trade_rupees", 0) or 0,
+                 "futures": cfg.get("futures_risk_per_trade_rupees", 0) or 0}
+    for k, cap_k in per_trade.items():
+        b = subs.get(k, 0)
+        if b and cap_k and b < cap_k:
+            out.append(f"budget_{k}_daily_loss ₹{b:,.0f} < per-trade cap "
+                       f"₹{cap_k:,.0f} — one permitted {k} trade exceeds the "
+                       f"whole day's {k} allowance, so the class blocks after "
+                       f"{b/cap_k:.1f} trades")
     for k, v in subs.items():
         if v and daily and v >= daily:
             out.append(f"budget_{k}_daily_loss ₹{v:,.0f} >= daily_loss_limit "

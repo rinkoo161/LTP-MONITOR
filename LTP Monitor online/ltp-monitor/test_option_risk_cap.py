@@ -106,6 +106,12 @@ check("a single class able to eat the whole day is REPORTED",
           {"daily_loss_limit": 5000, "budget_futures_daily_loss": 5000,
            "budget_spread_daily_loss": 3000, "budget_option_daily_loss": 2000})),
       "that is exactly what per-class budgets exist to prevent")
+check("a class budget below its per-trade cap is REPORTED",
+      any("whole day's option allowance" in x for x in sizing.risk_coherence(
+          {"daily_loss_limit": 7000, "option_risk_per_trade_rupees": 4000,
+           "budget_futures_daily_loss": 2500, "budget_spread_daily_loss": 3000,
+           "budget_option_daily_loss": 2000})),
+      "one permitted trade must not exceed its class's whole daily allowance")
 check("the shipped DEFAULTS satisfy the class-budget invariant",
       sum(config.DEFAULTS.get(f"budget_{k}_daily_loss", 0)
           for k in ("futures", "spread", "option"))

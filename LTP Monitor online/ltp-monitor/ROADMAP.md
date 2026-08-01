@@ -283,6 +283,50 @@ headline), so the veto logic is what is under test. 19/19.
 A green suite is the point. On 2026-08-01 a live regression hid inside an
 already-failing file for exactly as long as the red was being tolerated.
 
+## daily_loss_limit 20,000 -> 7,000, and the ladder below it (2026-08-02)
+
+Applied to the live config (DEFAULTS stays 5,000; both are internally
+coherent, and the difference is an operator choice). The global ceiling
+can now fire: per-class budgets sum to ₹7,500 against a ₹7,000 global,
+and no single class budget reaches it.
+
+The full ladder, live:
+
+    per-trade cap  options       ₹ 4,000   refuses one trade
+    per-trade cap  futures       ₹ 2,500   refuses one trade
+    class budget   option        ₹ 2,000   blocks that class for the day
+    class budget   futures       ₹ 2,500
+    class budget   spread        ₹ 3,000
+    daily_loss_limit REALISED    ₹ 7,000   blocks ALL new orders
+    portfolio cap  UNREALISED    ₹12,000   force-closes the book
+
+Against the real clean population (median option risk ₹2,519, n=106):
+the option class budget bites after 0.8 losers, the daily limit after
+2.8, the portfolio cap after 4.8 concurrent.
+
+### It exposed the same defect one rung down — NOT fixed, needs a decision
+
+    budget_option_daily_loss ₹2,000  <  option_risk_per_trade_rupees ₹4,000
+
+**One permitted option trade exceeds the whole day's option allowance**,
+so the class blocks after 0.5 trades. This is structurally identical to
+a portfolio cap sized below single-position risk — the defect that
+force-closed the BANKNIFTY winner — just at the class level. It was
+invisible while `daily_loss_limit` was 20,000 because the global ceiling
+dominated everything.
+
+`sizing.risk_coherence()` now checks it. Two ways out, and they differ in
+intent rather than correctness:
+
+  - raise `budget_option_daily_loss` to >= 4,000, accepting more option
+    loss per day; or
+  - lower `option_risk_per_trade_rupees` to <= 2,000, which also means
+    lowering `risk_pct_per_trade` to 1% so the cap still equals the
+    budget — the DEFAULTS configuration.
+
+The second is the conservative one and makes the live config match
+DEFAULTS. Left for a decision.
+
 ## DEFAULTS aligned — and a bogus coherence rule retracted (2026-08-02)
 
 Both flagged DEFAULTS problems are closed, but fixing the second one
