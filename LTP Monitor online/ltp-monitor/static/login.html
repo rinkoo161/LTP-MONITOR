@@ -38,7 +38,7 @@
   .code-input{letter-spacing:.32em;text-align:center;font-family:'Roboto Mono',ui-monospace,monospace}
   .qr{display:none;margin:12px auto 6px;background:#fff;padding:10px;border-radius:8px;
       width:max-content;line-height:0}
-  .qr svg{display:block;width:190px;height:190px}
+  .qr svg{display:block;width:min(230px,60vw);height:auto}
 </style>
 </head>
 <body>
@@ -63,6 +63,23 @@
   </form>
 
   <div class="msg" id="msg"></div>
+  <div class="hint" style="text-align:center;margin-top:14px">
+    <a href="#" id="forgot" style="color:var(--dim)">Forgot password?</a>
+  </div>
+  <div class="secret" id="forgotBox">
+    <b>Password recovery</b>
+    <div class="hint" style="margin-top:8px">
+      There is no email on this machine, so recovery is done by whoever
+      controls it:
+      <ol style="margin:8px 0 0 16px;padding:0">
+        <li>Ask an admin to reset it for you, or</li>
+        <li>on the machine running the app:<br>
+          <code style="margin-top:6px">python3 manage_users.py passwd &lt;username&gt;</code>
+          Lost your phone instead? <code style="margin-top:6px">python3 manage_users.py mfa-reset &lt;username&gt;</code>
+        </li>
+      </ol>
+    </div>
+  </div>
 
   <div class="secret" id="secretBox">
     <b>Scan with Google Authenticator</b>
@@ -107,6 +124,12 @@
     }
   }).catch(function(){});
 
+  $("forgot").addEventListener("click", function(e){
+    e.preventDefault();
+    var b=$("forgotBox");
+    b.style.display = b.style.display==="block" ? "none" : "block";
+  });
+
   $("form").addEventListener("submit", async function(e){
     e.preventDefault(); say(""); $("go").disabled=true;
     try{
@@ -130,7 +153,24 @@
                                      code:$("c").value});
         location.href="/";
       }
-    }catch(err){ say(err.message||"sign-in failed", false); }
+    }catch(err){
+      var m=err.message||"sign-in failed";
+      // An account whose enrollment never completed cannot log in and
+      // cannot reach /setup. Offer the way out with the credentials the
+      // user has just typed, rather than leaving a dead end.
+      if(m.indexOf("MFA is required")>=0){
+        try{
+          var e=await api("/api/auth/mfa/restart",
+                          {username:$("u").value,password:$("p").value});
+          pendingUser=e.username;
+          if(e.qr_svg){ $("qrBox").innerHTML=e.qr_svg; $("qrBox").style.display="block"; }
+          $("secretVal").textContent=e.secret;
+          $("secretBox").style.display="block";
+          $("form").style.display="none";
+          say("Pair your authenticator to finish setting up this account.", true);
+        }catch(e2){ say(e2.message||m, false); }
+      }else{ say(m, false); }
+    }
     $("go").disabled=false;
   });
 

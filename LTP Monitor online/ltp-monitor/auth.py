@@ -172,11 +172,25 @@ def qr_svg(uri, scale=5):
         # dark/light chosen for the login card, not the OS theme: a
         # scanner needs contrast, and an inverted QR fails on some
         # readers. Quiet zone (border) is required by the spec.
-        segno.make(uri, error="m").save(buf, kind="svg", scale=scale,
-                                        border=3, dark="#0B0E14",
-                                        light="#FFFFFF", xmldecl=False,
-                                        svgns=True)
-        return buf.getvalue().decode()
+        q = segno.make(uri, error="m")
+        q.save(buf, kind="svg", scale=scale, border=3, dark="#0B0E14",
+               light="#FFFFFF", xmldecl=False, svgns=True)
+        svg = buf.getvalue().decode()
+        # 2026-08-01 — segno emits width/height and NO viewBox. Any CSS
+        # that sets a different width/height then moves the VIEWPORT
+        # instead of scaling the drawing, so the page showed the
+        # top-left corner of the symbol and cropped two finder patterns
+        # off the right and bottom. It rendered as a convincing QR and
+        # could not be scanned by anything.
+        #
+        # A viewBox makes the symbol scale to whatever box the CSS gives
+        # it, which is the only way a fixed-size layout can hold a
+        # variable-size QR (the version, and so the pixel size, grows
+        # with the length of the account name).
+        if "viewBox" not in svg:
+            w, h = q.symbol_size(scale=scale, border=3)
+            svg = svg.replace("<svg ", f'<svg viewBox="0 0 {w} {h}" ', 1)
+        return svg
     except Exception:
         return None
 
@@ -289,6 +303,33 @@ def confirm_mfa(username, code):
         _save(users)
     audit("mfa.enroll_confirm", username)
     return True
+
+
+def restart_enrollment(username, password):
+    """Re-issue an enrollment secret for an account whose MFA is NOT yet
+    active, authenticated by password.
+
+    2026-08-01 — without this an interrupted enrollment is a dead end,
+    and the operator hit it on the first attempt: /setup refuses once an
+    account exists, /mfa/enroll requires a session, and login refuses
+    because MFA is not enrolled. Three correct rules with no way out
+    between them.
+
+    It weakens nothing: whoever knows the password could have completed
+    the original enrollment anyway, and it refuses outright once MFA is
+    active — at that point re-enrollment requires a signed-in session.
+    """
+    username = (username or "").strip().lower()
+    with _lock:
+        users = _load()
+        d = users.get(username)
+        if not d or not verify_password(password or "", d.get("salt", ""),
+                                        d.get("hash", "")):
+            audit("mfa.restart", username, {"reason": "bad credentials"}, ok=False)
+            raise ValueError("invalid username or password")
+        if d.get("totp_secret"):
+            raise ValueError("MFA is already active — sign in, then re-enroll")
+    return begin_mfa_enrollment(username)
 
 
 def disable_mfa(username):

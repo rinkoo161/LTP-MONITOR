@@ -4,6 +4,75 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v58.75 — a QR that could not scan, a dead end, sign-out, SQL audit (2026-08-01)
+
+### The QR rendered perfectly and could not be scanned
+
+segno emits `<svg width="275" height="275">` with **no viewBox**. The
+login page's CSS then set `width:190px;height:190px` — and without a
+viewBox those attributes move the VIEWPORT, they do not scale the
+drawing. The browser showed the top-left 190x190 of a 275x275 symbol,
+cropping two of the three finder patterns and a third of the data.
+
+It looked exactly like a QR code. That is the whole lesson: the failure
+mode of a visual artifact is that it still looks like the artifact. A
+viewBox is now injected and the CSS scales with `height:auto`
+(~4.2px per module at 230px). The test asserts the viewBox exists AND
+matches the intrinsic size, because either alone is not enough.
+
+### Three correct rules with no way out between them
+
+After the QR failed, the account was stuck: `/setup` refuses once an
+account exists, `/api/auth/mfa/enroll` requires a session, and login
+refuses because MFA is not enrolled. Each rule is right; together they
+are a dead end, and the operator hit it on the first attempt.
+
+`POST /api/auth/mfa/restart` re-issues enrollment for an account whose
+MFA is not yet active, authenticated by password, and refuses once MFA
+IS active. It weakens nothing — whoever knows the password could have
+completed the original enrollment — and the login page now offers it
+automatically when it sees "MFA is required".
+
+**Worth naming: a security design is not finished when every path is
+guarded. It is finished when a legitimate user who fails halfway can
+still get in.**
+
+### Sign out, and what "forgot password" honestly means here
+
+The rail had no way out: with auth on, ending a session meant deleting
+a cookie by hand. Added, labelled with the signed-in account (the roles
+exist for attribution), hidden when auth is off.
+
+There is no mail server on this machine, so password recovery has
+exactly two honest answers: another admin resets it, or someone with
+access to the box does. Anything else is theatre. `manage_users.py`
+makes FILESYSTEM ACCESS the recovery boundary — running it already
+proves the authority to change credentials — and is the only thing that
+can help a locked-out sole admin, since nothing served over HTTP can.
+Passwords are read with getpass: never echoed, never in argv, never in
+shell history.
+
+### SQL injection audit — clean, and proven rather than asserted
+
+`history.py` has six `execute(f"…")` sites. All six interpolate a
+SCHEMA IDENTIFIER (a table name from a hardcoded call site, a column
+list built from PRAGMA output) or a WHERE fragment of `?` placeholders
+— the symbol VALUE is bound through `args`. No user input reaches SQL
+as text.
+
+An audit that only reads the code and concludes "looks parameterised"
+is the same quality of evidence as eyeballing a colour palette, so
+`test_sql_injection.py` fires eight payloads (DROP, UNION, ATTACH, a
+NUL byte, `' OR '1'='1`) at both the Python readers and the HTTP
+endpoints and checks the database afterwards: no row deleted, no table
+dropped, no ATTACH artifact. A guard check fails if a future
+`execute(f"…")` ever interpolates a value-shaped variable.
+
+What it DID catch: those endpoints answered **200** for
+`' OR '1'='1`. Not exploitable — but answering a nonsense symbol as
+though it were real tells a prober which parameters reach a database.
+`require_symbol()` now rejects at the edge, in one place.
+
 ## v58.74 — authentication, TOTP MFA, and a banner that clears itself (2026-08-01)
 
 ### The app had no authentication at all

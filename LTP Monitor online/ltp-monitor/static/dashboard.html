@@ -409,6 +409,9 @@
     <span class="rail-icon"><svg viewBox="0 0 24 24"><path d="M6 9a6 6 0 0 1 12 0c0 5 2 6 2 6H4s2-1 2-6"/><path d="M10 20a2 2 0 0 0 4 0"/></svg></span><span class="dot-red" id="alertDot"></span><span class="lbl">Alerts</span>
   </button>
   <div class="spacer"></div>
+  <button id="rail-signout" onclick="signOut()" title="Sign out" style="display:none">
+    <span class="rail-icon"><svg viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg></span><span class="lbl" id="signoutLbl">Sign out</span>
+  </button>
   <button onclick="toggleTheme()" title="Theme">
     <span class="rail-icon"><svg viewBox="0 0 24 24"><path d="M20 12.5A8.5 8.5 0 1 1 11.5 4a7 7 0 0 0 8.5 8.5z"/></svg></span><span class="lbl">Theme</span>
   </button>
@@ -463,7 +466,7 @@
   <div class="dashgrid">
     <div class="dc8">
       <div class="panel" style="margin-bottom:8px">
-        <h2>&#128200; Live Chart (TradingView Lightweight Charts) <span class="badge" style="font-weight:400">v58.74</span> <span class="sub" id="lwChartStatus">connecting...</span>
+        <h2>&#128200; Live Chart (TradingView Lightweight Charts) <span class="badge" style="font-weight:400">v58.75</span> <span class="sub" id="lwChartStatus">connecting...</span>
           <select id="lwChartSymbol" style="margin-left:auto" onchange="switchLwChart(this.value)"></select></h2>
         <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;flex-wrap:wrap">
           <button class="lwIntervalBtn active" data-interval="1" onclick="switchLwInterval('1')">1m</button>
@@ -1662,6 +1665,29 @@ async function saveSettings(){
   closeSettings(); loadSettings(); refreshAll();
 }
 soundOn = localStorage.getItem("ltp_sound")==="1";
+
+
+/* ---------------- session ---------------- */
+/* v58.75 — the rail had no way out: with auth on, the only way to end a
+   session was to delete the cookie by hand. Shown only when auth is
+   enabled, and labelled with who is signed in so a shared screen makes
+   the acting account obvious (the roles exist for attribution). */
+async function refreshSession(){
+  try{
+    const s=await (await fetch("/api/auth/status")).json();
+    const btn=document.getElementById("rail-signout");
+    if(s.enabled && s.user){
+      btn.style.display="";
+      document.getElementById("signoutLbl").textContent="Sign out ("+s.user+")";
+      btn.title="Signed in as "+s.user+" ("+s.role+") — click to sign out";
+    }else{ btn.style.display="none"; }
+  }catch(e){}
+}
+async function signOut(){
+  try{ await fetch("/api/auth/logout",{method:"POST"}); }catch(e){}
+  location.href="/login";
+}
+refreshSession();
 
 /* ---------------- alerts ---------------- */
 function playBeep(){

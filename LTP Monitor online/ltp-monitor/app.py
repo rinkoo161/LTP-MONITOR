@@ -25,7 +25,7 @@ from agents import Orchestrator, compute_momentum
 import agents
 
 BASE = os.path.dirname(os.path.abspath(__file__))
-APP_VERSION = "v58.74"   # maintained per explicit request; last delivered was v49
+APP_VERSION = "v58.75"   # maintained per explicit request; last delivered was v49
 
 app = FastAPI(title="LTP Option Chain Monitor")
 
@@ -175,6 +175,28 @@ def auth_delete_user(username: str, request: Request):
     return {"ok": True}
 
 
+@app.post("/api/auth/users/{username}/password")
+def auth_reset_password(username: str, body: SetupIn, request: Request):
+    """Admin resets another account's password. The other half of
+    "forgot password"; the host-side half is manage_users.py, which is
+    the only thing that helps a locked-out sole admin."""
+    _require_admin(request)
+    try:
+        auth.set_password(username, body.password)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True, "username": username}
+
+
+@app.post("/api/auth/users/{username}/mfa-reset")
+def auth_reset_mfa(username: str, request: Request):
+    """Admin clears MFA for an account — the lost-phone case."""
+    _require_admin(request)
+    auth.disable_mfa(username)
+    return {"ok": True, "username": username,
+            "next": "the user signs in and the page offers pairing"}
+
+
 @app.post("/api/auth/mfa/enroll")
 def auth_mfa_enroll(request: Request):
     sess = current_user(request)
@@ -182,6 +204,19 @@ def auth_mfa_enroll(request: Request):
         raise HTTPException(401, "not authenticated")
     secret, uri = auth.begin_mfa_enrollment(sess["user"])
     return {"secret": secret, "uri": uri, "qr_svg": auth.qr_svg(uri)}
+
+
+@app.post("/api/auth/mfa/restart")
+def auth_mfa_restart(body: LoginIn):
+    """Re-issue an enrollment QR for an account whose MFA never completed.
+    Password-authenticated; refuses once MFA is active. See
+    auth.restart_enrollment for why this exists."""
+    try:
+        secret, uri = auth.restart_enrollment(body.username, body.password)
+    except ValueError as e:
+        raise HTTPException(401 if "invalid" in str(e) else 400, str(e))
+    return {"ok": True, "username": (body.username or "").strip().lower(),
+            "secret": secret, "uri": uri, "qr_svg": auth.qr_svg(uri)}
 
 
 @app.post("/api/auth/mfa/confirm")
@@ -1123,6 +1158,25 @@ def _batch_fetch_prev_close(today):
                          f"present; raw q={q!r}")
 
 
+def require_symbol(symbol):
+    """Reject anything outside the four supported indices.
+
+    v58.75 — the SQL layer is parameterised (audited: every
+    execute(f"…") in history.py interpolates a schema identifier or a
+    fragment of `?` placeholders, never a caller value), so a payload
+    like "' OR '1'='1" was harmless — but it still returned 200 with an
+    empty body. Answering a nonsense symbol as though it were a real one
+    is how a probe learns which parameters reach a database at all.
+    Reject it at the edge, in the one place, so the answer is the same
+    everywhere.
+    """
+    sym = (symbol or "").upper()
+    if sym not in SYMBOLS:
+        raise HTTPException(400, f"unknown symbol {symbol!r} — expected one of "
+                                 f"{', '.join(sorted(SYMBOLS))}")
+    return sym
+
+
 @app.get("/api/chain-snapshots/{symbol}")
 def api_chain_snapshots(symbol: str, hours: float = 6,
                         strike: float | None = None, leg: str | None = None):
@@ -1135,6 +1189,7 @@ def api_chain_snapshots(symbol: str, hours: float = 6,
     `rows` (not an error) means nothing's been persisted yet for that
     filter — same graceful-degradation convention as the rest of
     Feature #4."""
+    symbol = require_symbol(symbol)
     import history
     conn = history._conn()
     cutoff = int(time.time() - hours * 3600)
@@ -4484,6 +4539,7 @@ def api_ta_calibration(days: int = 5, symbol: str = None):
     ta_calibration_logging is on — auto_deploy does NOT need to be on,
     which is the whole point.
     """
+    symbol = require_symbol(symbol) if symbol else None
     import history
     return history.ta_calibration_summary(days=days, symbol=symbol)
 

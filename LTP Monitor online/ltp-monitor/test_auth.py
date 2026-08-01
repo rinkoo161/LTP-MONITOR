@@ -129,7 +129,23 @@ else:
           f"{len(_svg)} bytes")
     check("the SECRET never appears in the QR markup", SEC not in _svg,
           "the payload is encoded as modules, not written as text")
-    check("a quiet zone is included (scanners need it)", "border" not in _svg or True)
+    # 2026-08-01 — the QR rendered but would not scan. segno emits
+    # width/height and no viewBox; the page's CSS set a different
+    # width/height, which moves the VIEWPORT rather than scaling the
+    # drawing, so two finder patterns were cropped off. It looked like a
+    # QR and was unreadable. Without a viewBox any CSS size is a crop.
+    import re as _re
+    _head = _svg[:_svg.index(">") + 1]
+    _vb = _re.search(r'viewBox="0 0 (\d+) (\d+)"', _head)
+    _w = _re.search(r'width="(\d+)"', _head)
+    check("the SVG carries a viewBox", bool(_vb), _head[:60])
+    check("and it matches the intrinsic size, so CSS scales without cropping",
+          bool(_vb and _w) and _vb.group(1) == _w.group(1),
+          f"viewBox {_vb.group(1) if _vb else '?'} vs width {_w.group(1) if _w else '?'}")
+    _css = open("static/login.html").read()
+    check("the page does not pin a fixed height against that viewBox",
+          "height:auto" in _css and "width:190px;height:190px" not in _css,
+          "a fixed height on a square symbol re-introduces the crop")
 _probe = {}
 import builtins as _b
 _real_import = _b.__import__
