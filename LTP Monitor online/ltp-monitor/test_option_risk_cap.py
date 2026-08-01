@@ -73,6 +73,23 @@ _one = sizing.risk_coherence({"backtest_capital": 200000,
                               "portfolio_max_drawdown": 4000})
 check("a portfolio cap one trade can trip is REPORTED",
       any("meaningless" in x for x in _one), str(_one))
+
+# 2026-08-02 — the portfolio cap was raised 5,000 -> 12,000 so it stops
+# being a single-trade stop. These pin the RELATIONSHIPS, not the number,
+# so a future tweak to either value cannot silently reintroduce the bug.
+_live = dict(config.DEFAULTS)
+check("portfolio cap survives at least 2 full-risk trades",
+      _live["portfolio_max_drawdown"] / _live["option_risk_per_trade_rupees"] >= 2,
+      f"{_live['portfolio_max_drawdown']/_live['option_risk_per_trade_rupees']:.1f} "
+      f"concurrent trades")
+check("an inverted daily limit is REPORTED",
+      any("fires FIRST" in x for x in sizing.risk_coherence(
+          {"portfolio_max_drawdown": 12000, "daily_loss_limit": 5000})),
+      "a daily limit below the portfolio cap makes the kill-switch dead")
+check("an unreachable daily limit is REPORTED",
+      any("unreachable" in x for x in sizing.risk_coherence(
+          {"portfolio_max_drawdown": 1000, "daily_loss_limit": 20000})),
+      "20x the portfolio cap needs 20 kill cycles in one session")
 check("and it sits BELOW the portfolio kill-switch",
       config.DEFAULTS["option_risk_per_trade_rupees"]
       < config.DEFAULTS["portfolio_max_drawdown"],

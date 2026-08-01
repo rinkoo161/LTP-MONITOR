@@ -352,6 +352,17 @@ def risk_coherence(cfg=None):
         out.append(f"option cap ₹{cap:,.0f} >= portfolio cap ₹{kill:,.0f} — a "
                    f"single trade can trip the whole book, which makes the "
                    f"portfolio cap meaningless exactly when it is needed")
+    daily = cfg.get("daily_loss_limit", 0) or 0
+    if kill and daily and daily <= kill:
+        out.append(f"daily_loss_limit ₹{daily:,.0f} <= portfolio cap "
+                   f"₹{kill:,.0f} — the daily limit fires FIRST, so the "
+                   f"portfolio kill-switch can never be the operative "
+                   f"constraint. One of them is doing nothing.")
+    if kill and daily and daily > kill and daily / kill > 5:
+        out.append(f"daily_loss_limit ₹{daily:,.0f} is {daily/kill:.0f}x the "
+                   f"portfolio cap ₹{kill:,.0f} — it needs {daily/kill:.0f} "
+                   f"full kill-switch cycles to fire, which is close to "
+                   f"unreachable in one session")
     if cap and kill and kill / cap < 2:
         out.append(f"portfolio cap ₹{kill:,.0f} permits only {kill/cap:.2f} "
                    f"concurrent trades at the ₹{cap:,.0f} per-trade cap — a "

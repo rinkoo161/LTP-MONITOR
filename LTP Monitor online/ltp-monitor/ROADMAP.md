@@ -283,6 +283,47 @@ headline), so the veto logic is what is under test. 19/19.
 A green suite is the point. On 2026-08-01 a live regression hid inside an
 already-failing file for exactly as long as the red was being tolerated.
 
+## Portfolio cap raised 5,000 -> 12,000 (2026-08-02) — risk set now COHERENT
+
+`portfolio_max_drawdown` was a single-trade stop wearing a portfolio
+label: at the ₹4,000 per-trade cap it permitted **1.25** concurrent
+trades. That is what force-closed the BANKNIFTY short at -₹1,968 after
+it had reached +₹3,516 MFE — a working position liquidated to pay for
+losing ones.
+
+**₹12,000 permits 3 trades at full permitted risk**, which is what a
+whole-book limit should mean. Only defensible now that `lots_per_trade`
+is back at 1 — at 5 lots this would have removed the last constraint on
+an oversized book, which is exactly why the ordering was sizing first,
+thresholds second.
+
+The live set now reports CLEAN from `sizing.risk_coherence()`:
+
+    per-trade cap      ₹4,000
+    portfolio kill    ₹12,000    3.0 concurrent trades at full risk
+    daily loss limit  ₹20,000    1.67 kill cycles, ~17 min minimum
+    futures per-trade  ₹2,500    4.8 concurrent futures
+
+Against the real clean population (n=106): the median trade needs **4.8**
+concurrent losers to trip the book, the worst-case trade **3.0**. No
+single trade can trip it, which was the whole defect.
+
+### Two DEFAULTS problems this surfaced — NOT changed
+
+`risk_coherence()` gained a daily-limit check and immediately flagged
+`config.DEFAULTS`:
+
+  - **`daily_loss_limit` 5,000 <= portfolio cap 12,000.** In DEFAULTS the
+    daily limit fires FIRST, so the portfolio kill-switch can never be
+    the operative constraint — one of the two does nothing. The LIVE
+    config has 20,000 and is fine; the shipped default is not.
+  - **`option_risk_per_trade_rupees` 4,000 != budget 2,000**, because
+    DEFAULTS carries `risk_pct_per_trade` 1.0 while the running config
+    uses 2.0.
+
+Both are left for a decision rather than quietly aligned. They are now
+reported daily instead of being discoverable only by accident.
+
 ## Options risk cap, RE-DERIVED on clean data (2026-08-02)
 
 The ₹5,000 cap shipped earlier the same day was calibrated twice wrong.

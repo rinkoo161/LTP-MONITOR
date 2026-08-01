@@ -150,7 +150,15 @@ DEFAULTS = {
     "mtf_max_trades_per_day": 1,       # per symbol
     "max_lots_per_trade": 10,         # hard cap regardless of the risk-budget math
     "portfolio_kill_switch_enabled": True,
-    "portfolio_max_drawdown": 15000,  # combined UNREALIZED loss across all open
+    # 2026-08-02 — raised 5,000 -> 12,000. At the ₹4,000 per-trade cap a
+    # ₹5,000 portfolio limit permitted 1.25 concurrent trades, i.e. it was
+    # a single-trade stop wearing a portfolio label and it liquidated
+    # winners to pay for losers (see the BANKNIFTY trade in ROADMAP:
+    # +₹3,516 MFE, force-closed at -₹1,968). 12,000 permits 3 trades at
+    # full permitted risk, which is what a whole-book limit should mean.
+    # Only defensible because lots_per_trade is back at 1 — at 5 lots this
+    # would have removed the last constraint on an oversized book.
+    "portfolio_max_drawdown": 12000,
     # ---- S4 (v50): futures paper trading (Phase 1) ----
     # These MUST be registered here: config.save() silently drops any
     # key not present in DEFAULTS, so an unregistered setting can never
