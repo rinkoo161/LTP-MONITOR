@@ -381,6 +381,33 @@ def test_feed(url, timeout=10):
         return {"ok": False, "error": f"{type(e).__name__}: {e}"}
 
 
+RELEVANCE_VETOES = []          # in-process ring, newest last
+_VETO_MAX = 500
+
+
+def _log_relevance_veto(title, category, ai_result):
+    """Record every AI-relevance veto so the recall cost is MEASURED.
+
+    v59.0 item 39. A veto that is silent is a veto nobody can audit: if
+    this filter is throwing away genuinely relevant headlines, the only
+    way to find out is to look at what it threw away. Kept in memory
+    (bounded) and surfaced through the news payload rather than written
+    to yet another file.
+    """
+    RELEVANCE_VETOES.append({
+        "ts": time.time(), "title": title, "category": category,
+        "ai_bias": ai_result.get("bias"),
+        "ai_reasoning": ai_result.get("reasoning", ""),
+    })
+    if len(RELEVANCE_VETOES) > _VETO_MAX:
+        del RELEVANCE_VETOES[:-_VETO_MAX]
+
+
+def veto_stats():
+    """(count, recent) — for the dashboard and for a human spot-check."""
+    return {"vetoed": len(RELEVANCE_VETOES), "recent": RELEVANCE_VETOES[-25:]}
+
+
 def process_item(item, source_name, region="india"):
     """Turn a raw RSS item into the unified event record this module
     produces for both consumers.
@@ -404,11 +431,38 @@ def process_item(item, source_name, region="india"):
     title = item["title"][:200]
     category = classify_category(title)
     ai_result, ai_error = classify_headline_ai(title)
+    # v59.0 item 39 — KEYWORD RELEVANCE IS A VETO, NOT A FALLBACK.
+    #
+    # 2026-08-01: the AI path trusted `ai_result["relevant"]` outright, so
+    # a local 3B model could UPGRADE a headline with zero financial signal.
+    # Observed: "Local team's morale suffers crash after tough loss" came
+    # back relevant=True, bias=bearish, reasoning "Negative headline
+    # suggesting local team performance impact on investor sentiment" —
+    # nonsense that then earned the full [1m,5m,15m] impact window and fed
+    # the `news` bus key that gates strategy decisions.
+    #
+    # Now the AI may DOWNGRADE relevance but never upgrade a headline that
+    # is category "other" AND matches no financial context. Same veto-only
+    # shape as basis_residual.gate_for(): it can stop something, never
+    # cause it.
+    #
+    # This costs AI recall on genuinely relevant headlines phrased without
+    # any financial keyword. Accepted deliberately, because the harms are
+    # asymmetric — a false "Risk" read gates real trades, a missed story
+    # does not — and every veto is LOGGED below so the recall loss is
+    # measured rather than assumed.
+    keyword_relevant = (category != "other"
+                        or bool(FINANCIAL_CONTEXT_RE.search(title)))
     if ai_result is not None:
-        is_relevant = ai_result["relevant"]
+        is_relevant = bool(ai_result["relevant"]) and keyword_relevant
+        if ai_result["relevant"] and not keyword_relevant:
+            _log_relevance_veto(title, category, ai_result)
         bias = ai_result["bias"] if is_relevant else "neutral"
         classification_source = "ai"
         classification_note = ai_result.get("reasoning", "")
+        if not is_relevant and ai_result["relevant"]:
+            classification_note = (f"AI said relevant ({classification_note}) "
+                                   f"but no financial context — VETOED")
     else:
         # Fallback: keyword-based, with the relevance gate this same
         # fix pass added — an irrelevant headline is forced to neutral

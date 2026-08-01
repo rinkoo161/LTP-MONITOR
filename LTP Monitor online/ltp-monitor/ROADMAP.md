@@ -205,6 +205,84 @@ genuinely relevant headlines phrased without financial keywords. Given the
 asymmetry — a false Risk read gates real trades, a missed story does not —
 the conservative direction looks right, but it is a judgement call.
 
+## v59.0 items 37-40 (2026-08-01)
+
+### Item 37 — the kill-switch is REAL but does NOT explain Phase 0
+
+Tested against all 40 futures trades. Exit reasons:
+
+    15  EOD square-off (15:15)
+    13  manual exit from dashboard
+    11  portfolio kill-switch   (5 trips, each closing 2-3 positions)
+     1  stoploss
+     0  target
+
+**Confirmed:** the kill-switch tripped 5 times and force-closed 11 of 40,
+always closing the whole book at once, always at ₹5,050-6,222 against a
+₹5,000 limit. It killed at least one genuine winner — a BANKNIFTY short
+that had reached MFE ₹3,516 was force-closed at -₹1,968.
+
+**Also found:** in 3 of the 5 trips the summed FUTURES P&L was well short
+of the trip figure (-3,285 vs -5,050; -4,042 vs -5,066; -3,073 vs
+-5,233). The kill-switch is portfolio-wide, so those futures were closed
+because OPTIONS positions were losing. They were collateral damage.
+
+**But H4 does NOT resolve to a config error.** The decisive test is the
+15 trades that ran a FULL session with no kill-switch — maximum
+opportunity to reach target:
+
+    exit type        n    MFE as a share of target: median / mean / best
+    EOD square-off  15          5.5%  /  8.0%  /  30.1%
+    kill-switch     11          0.1%  /  2.9%  /  12.8%
+    manual          13          0.4%  /  3.5%  /  20.5%
+    ALL 40          median 1.1% of target;  0 of 40 reached even HALF
+
+Targets were unreachable regardless of how the trade ended. The ATR
+geometry finding stands. The kill-switch is a separate, real defect that
+made a bad situation worse — worth fixing on its own merits (see item 38
+for the rescale), but it is not the explanation.
+
+Note the premise correction: `futures_max_trades_per_day` is **20**, not
+2, so the "exactly two futures trades wide" framing does not hold; the
+cap that mattered was the portfolio one, and it caught options too.
+
+### Item 39 — the AI relevance veto is APPLIED
+
+`news_engine.process_item()`:
+`is_relevant = ai_relevant AND (category != "other" OR FINANCIAL_CONTEXT_RE)`.
+The AI may now DOWNGRADE relevance but never upgrade a headline with zero
+financial signal — the same veto-only shape as `basis_residual.gate_for()`.
+
+Every veto is logged to `news_engine.RELEVANCE_VETOES` (bounded ring) and
+exposed via `veto_stats()`, so the recall cost is MEASURED rather than
+assumed. A silent veto is one nobody can audit.
+
+`test_news_relevance_filter.py` now PINS `classify_headline_ai` instead of
+calling the live model. It previously passed when Ollama was down and
+failed when it was up — a test whose verdict depends on whether a daemon
+is running cannot distinguish a regression from a restart. Pinned to the
+exact hallucination observed (`relevant=True, bias=bearish` on a sports
+headline), so the veto logic is what is under test. 19/19.
+
+### Item 40 — the suite is GREEN: 104 passed, 0 failed, 2 skipped
+
+`run_tests.py` now understands **exit code 77 = SKIP**.
+
+  - `test_dhan_ws` exits 77 when Dhan credentials or `dhanhq` are absent.
+  - `test_kotak` exits 77 without a TTY. It is an INTERACTIVE diagnostic —
+    it prompts for an access token, mobile, UCC and a live TOTP — so under
+    the runner it blocked on stdin until the timeout and was reported as a
+    failure. It never ran at all.
+  - `test_staleness_and_docs` required a "NOT YET WIRED" disclaimer about
+    the Pine MACD-histogram early exit. That gap was CLOSED in v58.47 and
+    the docs were updated; the assertion then failed for the rest of the
+    release while being wrong about what the failure meant. Inverted: it
+    now requires the exit to be documented as implemented AND the stale
+    disclaimer to be gone.
+
+A green suite is the point. On 2026-08-01 a live regression hid inside an
+already-failing file for exactly as long as the red was being tolerated.
+
 ## Credential audit — CLOSED (2026-08-01)
 
 Full-history audit of the public repo (github.com/rinkoo161/LTP-MONITOR).
@@ -310,6 +388,49 @@ applied to it.
 So the defensible statement is the hedged one: *no strategy's edge is
 distinguishable from zero, and measurement uncertainty is wide enough
 that one could plausibly be above it.*
+
+### AND SIZING JUST QUADRUPLED (item 38, 2026-08-01)
+
+Read this next to the 0-of-11 above, because the two together are the
+risk. **No strategy has demonstrated an edge, and position size just went
+up ~4.3x.**
+
+    units per trade   historical  1 lot x 75 =  75
+                      forward     5 lots x 65 = 325     4.33x
+
+`lots_per_trade` was raised to 5 and the lot map was corrected 75->65;
+both post-date every trade in the journal. `dynamic_sizing_enabled` is
+False, so `size_option_buy()` returns `lots_per_trade` VERBATIM — there
+is no risk-based reduction on the options path at all.
+
+Against absolute rupee thresholds that did not move:
+
+    option stop   loss/trade   vs kill-switch 5,000   vs daily limit 20,000
+      10 pts       ₹3,250            65%                     16%
+      20 pts       ₹6,500           130%                     32%
+      30 pts       ₹9,750           195%                     49%
+      50 pts      ₹16,250           325%                     81%
+
+**A single losing trade at a 20-point stop now breaches the portfolio
+kill-switch on its own.** The ₹2,500 per-trade cap is futures-only and
+does not apply here.
+
+`portfolio_max_drawdown` (5,000) vs `daily_loss_limit` (20,000) is 1:4,
+so the kill-switch trips four times before the daily limit is ever
+reachable. **The daily limit is dead configuration; the kill-switch is
+the only binding cap.** Which is miscalibrated? The kill-switch — it was
+sized for 1-lot trades. A portfolio-wide unrealized cap must sit above
+any single permitted position loss or it becomes a single-trade stop
+wearing a portfolio label.
+
+Proposed rescale, NOT APPLIED — needs a decision:
+
+    portfolio_max_drawdown   5,000 -> 15,000   (3 permitted trades, not 0.5)
+    daily_loss_limit        20,000 -> 20,000   (unchanged; now actually reachable)
+    lots_per_trade               5 -> 1..2     until something clears the gate
+
+The cleanest single action is the last one: nothing has demonstrated
+edge, so size is the wrong lever to have moved first.
 
 ### This is the first time the system has been ABLE to say this
 

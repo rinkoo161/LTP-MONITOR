@@ -65,9 +65,22 @@ for k in ("title", "indicators", "entry", "exit", "params"):
     check(f"has '{k}'", bool(doc.get(k)))
 check("documents BOTH entry paths",
       any("weapon" in str(x).lower() for x in doc.get("entry", [])))
-check("names the known unwired gap honestly",
-      any("NOT YET WIRED" in str(x) for x in doc.get("exit", [])),
-      "the Pine original's MACD-histogram early exit is absent")
+# 2026-08-01 — INVERTED. This required the docs to carry a "NOT YET
+# WIRED" disclaimer about the Pine original's MACD-histogram early exit.
+# That gap was CLOSED in v58.47: the exit is implemented
+# (pa_strategies.py `hist_turn_confirm_bars`, line ~604) and the docs
+# were updated to describe it. The assertion then failed for the rest of
+# the release, correctly reporting that a disclaimer was missing while
+# being wrong about what that meant. A docs test should track what the
+# code DOES, so it now requires the wired exit to be documented — and
+# requires the stale disclaimer to be gone.
+_exit = " ".join(str(x) for x in doc.get("exit", []))
+check("the MACD-histogram early exit is documented as implemented",
+      "hist_turn_confirm_bars" in _exit and "EARLY EXIT" in _exit,
+      "wired in v58.47; pa_strategies.py ~604")
+check("the stale 'NOT YET WIRED' disclaimer is gone",
+      "NOT YET WIRED" not in _exit,
+      "a disclaimer outliving the gap it described is its own staleness bug")
 check("every PA strategy now has a docs entry",
       all(n in strategy_docs.DOCS for n in pa.PA_NAMES),
       str([n for n in pa.PA_NAMES if n not in strategy_docs.DOCS]))

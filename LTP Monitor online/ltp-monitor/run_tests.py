@@ -59,7 +59,14 @@ def main():
     print(f"store: {home}")
     print(f"tests: {len(tests)}   timeout: {a.timeout}s per test\n", flush=True)
 
-    passed, failed, timed_out = [], [], []
+    # v59.0 item 40 — exit code 77 means SKIPPED, not failed. Some tests
+    # genuinely cannot run without live broker credentials or an
+    # interactive TTY, and reporting those as failures leaves the suite
+    # permanently red. A permanently-red suite is how a real regression
+    # arrives invisible — which is exactly what happened on 2026-08-01,
+    # when a live regression hid inside an already-failing file.
+    SKIP_CODE = 77
+    passed, failed, timed_out, skipped = [], [], [], []
     for t in tests:
         try:
             r = subprocess.run([sys.executable, t], cwd=BASE, env=env,
@@ -71,6 +78,11 @@ def main():
         if r.returncode == 0:
             passed.append(t)
             print(f"  PASS     {t}", flush=True)
+        elif r.returncode == SKIP_CODE:
+            why = next((l.strip() for l in (r.stdout + r.stderr).splitlines()
+                        if "SKIP" in l), "")
+            skipped.append(t)
+            print(f"  SKIP     {t}   {why[:90]}", flush=True)
         else:
             failed.append(t)
             body = (r.stdout + r.stderr).splitlines()
@@ -81,9 +93,11 @@ def main():
     total = len(tests)
     print(f"\n{'=' * 62}")
     print(f"  passed {len(passed)}/{total}   failed {len(failed)}   "
-          f"timed out {len(timed_out)}")
+          f"skipped {len(skipped)}   timed out {len(timed_out)}")
     if failed:
         print("  failed:  " + ", ".join(failed))
+    if skipped:
+        print("  skipped: " + ", ".join(skipped))
     if timed_out:
         print("  timeout: " + ", ".join(timed_out))
     if not a.home:

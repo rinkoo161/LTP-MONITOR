@@ -36,9 +36,34 @@ def check(label, cond, detail=""):
           (f"   [{detail}]" if detail else ""))
 
 
+# 2026-08-01 (item 39) — THIS FILE USED TO TEST THE MODEL, NOT THE LOGIC.
+# process_item() calls classify_headline_ai(); with Ollama running, the
+# local 3B model returned relevant=True/bearish for the sports headline
+# below and the file failed. With Ollama down it fell back to keywords
+# and passed. A test whose verdict depends on whether a daemon is up
+# cannot tell a regression from a restart, so the AI is now PINNED and
+# each path is exercised explicitly.
+_real_ai = ne.classify_headline_ai
+
+
+def pin_ai(result, error=None):
+    """Force classify_headline_ai to a fixed answer."""
+    ne.classify_headline_ai = lambda title: (result, error)
+
+
+def unpin():
+    ne.classify_headline_ai = _real_ai
+
+
 print("1) THE REPORTED BUG PATTERN: an irrelevant headline containing a "
      "generic high-severity word gets neutralized, not the aggressive "
      "3-window classification")
+# Pinned to the exact hallucination observed from qwen2.5:3b — the AI
+# calls this sports headline relevant AND bearish. The keyword veto must
+# override it.
+pin_ai({"relevant": True, "bias": "bearish",
+        "reasoning": "Negative headline suggesting local team performance "
+                     "impact on investor sentiment"})
 r1 = ne.process_item({"title": "Local team's morale suffers crash after "
                                 "tough loss", "link": ""}, "test_feed")
 check("category correctly falls to 'other' (no real financial content)",
@@ -52,6 +77,8 @@ check("action correctly stays 'none'", r1["action"] == "none", r1["action"])
 
 print("\n2) a genuinely relevant, high-severity market headline is "
      "UNAFFECTED by the fix — still gets the full aggressive window")
+pin_ai({"relevant": True, "bias": "bearish",
+        "reasoning": "RBI policy and geopolitical risk, directly market-moving"})
 r2 = ne.process_item({"title": "RBI rate decision sends Sensex into "
                                 "crash amid war fears", "link": ""}, "test_feed")
 check("category correctly identified", r2["category"] != "other", r2["category"])

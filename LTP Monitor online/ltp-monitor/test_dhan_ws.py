@@ -47,13 +47,13 @@ def main():
     client_id = cfg.get("dhan_client_id")
     access_token = cfg.get("dhan_access_token")
     if not client_id or not access_token:
-        log("[SETUP] No dhan_client_id/dhan_access_token in config — "
+        log("[SKIP] No dhan_client_id/dhan_access_token in config — "
             "add them via Settings first (same fields the REST path uses).")
-        sys.exit(1)
+        sys.exit(77)   # env-gated skip, not a failure
 
     if dhan_ws.MarketFeed is None:
-        log("[SETUP] dhanhq package not installed. Run: pip install dhanhq")
-        sys.exit(1)
+        log("[SKIP] dhanhq package not installed. Run: pip install dhanhq")
+        sys.exit(77)   # env-gated skip, not a failure
 
     log(f"[1] Building DhanWebsocketClient for client_id={client_id[:4]}...")
     ticks_received = []

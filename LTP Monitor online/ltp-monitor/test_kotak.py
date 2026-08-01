@@ -2,7 +2,8 @@
 trade API flow (the one you validated with curl). Run: python test_kotak.py
 Report is secret-safe: key names and statuses only, never values.
 """
-import getpass, json, sys, urllib.error, urllib.request
+import getpass
+import sys, json, sys, urllib.error, urllib.request
 
 REPORT = []
 def log(m):
@@ -32,6 +33,17 @@ def keys_only(o, d=0):
 BASE = "https://mis.kotaksecurities.com"
 
 def main():
+    # v59.0 item 40 — this is an INTERACTIVE diagnostic, not an automated
+    # test: it prompts for an access token, mobile, UCC and a live TOTP.
+    # Under the runner it blocked on stdin until the per-test timeout and
+    # was reported as a failure, which is wrong twice over — it never ran,
+    # and a permanently-red line is how a genuine regression goes unseen.
+    # Exit 77 = SKIP whenever there is no interactive terminal.
+    if not sys.stdin.isatty():
+        print("[SKIP] test_kotak is an interactive diagnostic — it needs a TTY "
+              "plus a live Kotak access token, mobile, UCC and TOTP. "
+              "Run it directly: python3 test_kotak.py")
+        sys.exit(77)
     print("Kotak Neo diagnostic v2 — credentials stay on this machine")
     access_token = getpass.getpass("Access Token from Kotak portal (hidden): ").strip()
     mobile = input("Mobile (+91XXXXXXXXXX): ").strip()
