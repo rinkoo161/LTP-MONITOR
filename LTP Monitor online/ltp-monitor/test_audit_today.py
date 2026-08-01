@@ -56,9 +56,17 @@ def seed_symbol(sym):
     today = agents.now_ist().strftime("%Y-%m-%d")
     base_ts = int(time.mktime(time.strptime(today, "%Y-%m-%d"))) + 9 * 3600 + 15 * 60
     full = cross_up_series(200)
+    # 2026-08-01 — session_only=False because this fixture is deliberately
+    # "today", and audit_today() scopes to today by definition. Run on a
+    # weekend the v58.71 write gate correctly refuses today-dated bars, the
+    # table stays empty and every assertion fails for a reason that has
+    # nothing to do with the audit logic. The escape hatch exists for
+    # exactly this: a caller that genuinely needs out-of-hours bars must
+    # ask for them, rather than the gate being softened for everyone.
     history.upsert_candles(f"{sym}_IDX", [
         {"ts": c["time"], "o": c["open"], "h": c["high"], "l": c["low"],
-        "c": c["close"], "v": None, "oi": None} for c in candles(full, base_ts)])
+        "c": c["close"], "v": None, "oi": None} for c in candles(full, base_ts)],
+        session_only=False)
     return today
 
 

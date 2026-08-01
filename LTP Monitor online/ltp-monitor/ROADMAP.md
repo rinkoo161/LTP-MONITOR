@@ -4,6 +4,64 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v58.76 — the record was never broken; auth switched on (2026-08-01)
+
+### The claim that futures records "cannot reconstruct risk" was wrong
+
+Stated in v58.73's analysis and repeated as the reason to build a fix.
+Futures trades carry `sl`, `initial_sl`, `target`, `side`, `lots`,
+`lot_size`, `atr_at_entry`, `rpf_peak`, `peak`, `defended` — everything
+needed. They simply do not use the OPTION-shaped names (`stoploss`,
+`target1`, `qty`) that the forensic script read.
+
+So `stoploss: None` on 19 futures trades never meant the data was
+missing; `sl` was 57266.82 in the same record. The replay then fell
+back to scraping stop prices out of the exit-reason TEXT, which worked
+for 3 of 19 — and a conclusion about 19 trades was drawn from 3.
+
+**This is the project's recurring failure in its purest form: reading a
+SHAPE rather than the MEANING.** It has now produced the quadrant
+mismatch (v58.66), the missing derived state (v58.67), the MFE claim
+and this. Every instance looked like missing or broken data and was
+actually a reader that knew one schema.
+
+`agents.trade_risk_fields()` is the single reader for both shapes,
+preferring `initial_sl` over `sl` deliberately: `sl` may have been
+ratcheted by the trail or the profit floor before exit, so it answers
+"where was the stop at the end", while sizing was decided against the
+stop at ENTRY. Replay coverage went 3/19 -> 59/59.
+
+### Which changes the cap result, substantially
+
+With real stops across the 30 trades that carry `initial_sl`:
+
+    actual  -₹73,760   ->   under the ₹2,500 cap  -₹8,406
+    89% of the loss removed
+
+Winners are scaled down and refused trades zeroed in the same pass, so
+it is an honest net. The earlier "-₹36,942 -> -₹6,240" came from three
+trades. Decision recorded: futures stay ON, capped, and observed.
+
+### Login was never actually enforced
+
+`auth_enabled` shipped false by design, but the Settings page had NO
+CONTROL for it — the key was added to DEFAULTS and SettingsIn and
+nowhere else, so the switch that turns the feature on was unreachable
+from the UI that exists to turn it on. Second time in three releases
+that a config key was registered everywhere except where a human could
+reach it (v58.74's was SettingsIn itself).
+
+An "Access & security" card now carries Require login, Require MFA and
+Session length. Enabled at the operator's request with a 12-hour
+session, and the full cycle verified end to end: password + code ->
+12h session -> expiry -> password + a FRESH code.
+
+Two of my own verification attempts failed before that and neither was
+a defect: a code generated 60s ahead is two steps out and correctly
+outside the ±1-step skew window, and a pre-consumed future code is
+correctly refused as a replay. The demo now waits for each code to
+genuinely appear, which is what a person does.
+
 ## v58.75 — a QR that could not scan, a dead end, sign-out, SQL audit (2026-08-01)
 
 ### The QR rendered perfectly and could not be scanned

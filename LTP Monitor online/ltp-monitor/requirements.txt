@@ -12,3 +12,10 @@ yfinance>=0.2.40        # News/Macro Agent fallback when Alpha Vantage / Twelve 
 segno>=1.6                # QR for the MFA enrollment page (auth.py). Pure
                           # Python, zero deps, OPTIONAL: without it the
                           # page falls back to the manual setup key.
+websockets>=12            # REQUIRED for the live chart. uvicorn ships no ws
+                          # implementation of its own: without this the
+                          # /ws/candles endpoint answers 404 ("Unsupported
+                          # upgrade request") and the chart silently shows no
+                          # candles. It arrived transitively via dhanhq, so a
+                          # dhanhq-free install lost the chart with no error
+                          # that named the cause.

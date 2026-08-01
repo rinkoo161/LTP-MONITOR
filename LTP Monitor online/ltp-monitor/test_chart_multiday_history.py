@@ -96,24 +96,37 @@ check("all 3 distinct trading days' worth of candles (60 total) are "
       "retrieved, not just today's",
       len(fetched) == 60, str(len(fetched)))
 
-print("\n3) the pre-existing weekend-keepalive contamination risk is "
-     "guarded against now that the query reaches back further")
-weekend = now
-while weekend.weekday() < 5:
-    weekend -= _dt.timedelta(days=1)
-weekend = weekend.replace(hour=12, minute=0, second=0, microsecond=0)
+print("\n3) the pre-existing out-of-session keepalive contamination risk "
+     "is guarded against now that the query reaches back further")
+# 2026-08-01 — was "the most recent weekend day", starting at `now`. Two
+# problems, both only visible on a weekend:
+#
+#   1. starting at `now` meant that run ON a Saturday the loop never
+#      executed and the "weekend" row was TODAY, so section 4 (which
+#      asserts the old today-only query sees nothing) failed;
+#   2. starting a day earlier does not fix it either — on a Saturday the
+#      5-day lookback window spans Mon-Fri, so there is NO weekend day
+#      inside it and the row fell outside the query entirely.
+#
+# The property under test is that an OUT-OF-SESSION bar is filtered out.
+# A weekend day is one instance; an after-hours weekday bar is another,
+# always exists inside the window, and is always before today. Testing
+# the general property is both more robust and closer to what the filter
+# actually promises.
+weekend = trading_day_before(now, 1).replace(hour=22, minute=0,
+                                             second=0, microsecond=0)
 conn.execute("INSERT OR REPLACE INTO candles VALUES (?,?,?,?,?,?,?,?)",
             (SEC, int(weekend.timestamp()), 999, 999, 999, 999, None, None))
 conn.commit()
 fetched2 = conn.execute(
     "SELECT ts,o,h,l,c FROM candles WHERE security_id=? AND ts>=? ORDER BY ts",
     (SEC, history_cutoff)).fetchall()
-check("the raw query now includes the contaminated weekend row (61, "
+check("the raw query now includes the contaminated out-of-session row (61, "
       "confirming it WOULD have leaked through without the filter)",
       len(fetched2) == 61, str(len(fetched2)))
 filtered = [r for r in fetched2 if app._in_market_session(r[0])]
 check("_in_market_session() correctly filters it back out, leaving "
-      "exactly the 60 real trading candles",
+      "exactly the 60 real in-session candles",
       len(filtered) == 60, str(len(filtered)))
 
 print("\n4) a query with the OLD 'today only' cutoff would have missed "

@@ -466,7 +466,7 @@
   <div class="dashgrid">
     <div class="dc8">
       <div class="panel" style="margin-bottom:8px">
-        <h2>&#128200; Live Chart (TradingView Lightweight Charts) <span class="badge" style="font-weight:400">v58.75</span> <span class="sub" id="lwChartStatus">connecting...</span>
+        <h2>&#128200; Live Chart (TradingView Lightweight Charts) <span class="badge" style="font-weight:400">v58.76</span> <span class="sub" id="lwChartStatus">connecting...</span>
           <select id="lwChartSymbol" style="margin-left:auto" onchange="switchLwChart(this.value)"></select></h2>
         <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;flex-wrap:wrap">
           <button class="lwIntervalBtn active" data-interval="1" onclick="switchLwInterval('1')">1m</button>
@@ -1110,6 +1110,13 @@
       <div class="settings-subgrid">
 
       <div class="settings-subcard">
+        <div class="settings-subcard-title">Access &amp; security</div>
+        <div class="switch"><input type="checkbox" id="s_authon"><label for="s_authon"><b>Require login</b> - password + authenticator code for every session</label></div>
+        <div class="switch"><input type="checkbox" id="s_authmfa"><label for="s_authmfa"><b>Require MFA</b> - refuse accounts without an authenticator paired</label></div>
+        <div class="frow"><label>Session length (hours) <span class="reasons">after this the session expires and a fresh authenticator code is required</span></label><input type="number" id="s_authhrs" min="1" max="168" step="1"></div>
+        <div class="reasons" id="s_authwho" style="margin-top:6px"></div>
+      </div>
+      <div class="settings-subcard">
         <div class="settings-subcard-title">Basics</div>
         <div class="switch"><input type="checkbox" id="s_paper"><label for="s_paper"><b>Paper mode</b> - simulate all orders</label></div>
         <div class="switch"><input type="checkbox" id="s_auto"><label for="s_auto"><b>Auto-execute</b> - agents place orders without asking</label></div>
@@ -1366,6 +1373,20 @@ function openSettings(){
   ["s_cid","s_tok","s_ant","s_td","s_av","s_na"].forEach(function(id){document.getElementById(id).value="";});
   document.getElementById("s_tok_state").textContent=settings.dhan_access_token_set?("(current: "+settings.dhan_access_token_masked+")"):"(not set)";
   document.getElementById("s_mdfeed").value=settings.market_data_feed||"rest";
+  document.getElementById("s_authon").checked=!!settings.auth_enabled;
+  document.getElementById("s_authmfa").checked=settings.auth_require_mfa!==false;
+  document.getElementById("s_authhrs").value=settings.auth_session_hours||12;
+  fetch("/api/auth/status").then(function(r){return r.json();}).then(function(a){
+    // populate from the LIVE state, not the page-load snapshot
+    document.getElementById("s_authon").checked=!!a.enabled;
+    document.getElementById("s_authmfa").checked=a.require_mfa!==false;
+    authFieldsLoaded=true;
+    var el=document.getElementById("s_authwho");
+    el.textContent = a.needs_setup
+      ? "No account yet — create one at /setup before turning this on."
+      : (a.enabled ? ("Login required. Signed in as "+(a.user||"?")+".")
+                   : "An account exists. Turn on Require login to enforce it.");
+  }).catch(function(){});
   document.getElementById("s_ant_state").textContent=settings.anthropic_api_key_set?("(current: "+settings.anthropic_api_key_masked+")"):"(not set)";
   document.getElementById("s_td_state").textContent=settings.twelve_data_api_key_set?("(current: "+settings.twelve_data_api_key_masked+")"):"(not set)";
   document.getElementById("s_av_state").textContent=settings.alpha_vantage_api_key_set?("(current: "+settings.alpha_vantage_api_key_masked+")"):"(not set)";
@@ -1534,6 +1555,15 @@ function warnCheck(){
 }
 document.getElementById("s_paper").onchange=warnCheck;
 document.getElementById("s_auto").onchange=warnCheck;
+/* v58.76 — auth_* keys are attached ONLY when the Access & security card
+   has been populated from the LIVE server state in this page view.
+   Sending them unconditionally meant every Settings save posted whatever
+   the checkbox happened to hold — and on a page loaded before auth was
+   turned on, that is `false`. Saving any unrelated setting then silently
+   DISABLED authentication. Same shape as the cached broker client that
+   looked like a token "rolling back": stale client state overwriting
+   newer server state. A control may only write a field it has read. */
+var authFieldsLoaded=false;
 async function saveSettings(){
   soundOn=document.getElementById("s_sound").checked;
   localStorage.setItem("ltp_sound", soundOn?"1":"0");
@@ -1661,6 +1691,11 @@ async function saveSettings(){
     news_block_minutes:+document.getElementById("s_newsblock").value,
     news_realert_cooldown_minutes:+document.getElementById("s_newscooldown").value,
   };
+  if(authFieldsLoaded){
+    body.auth_enabled=document.getElementById("s_authon").checked;
+    body.auth_require_mfa=document.getElementById("s_authmfa").checked;
+    body.auth_session_hours=parseFloat(document.getElementById("s_authhrs").value)||12;
+  }
   settings=await (await fetch("/api/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)})).json();
   closeSettings(); loadSettings(); refreshAll();
 }

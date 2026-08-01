@@ -154,11 +154,19 @@ def analyse(t, show_bars=14):
     print(f"    entry {'WITH' if aligned else 'AGAINST'} the 5/13 EMA trend")
 
     # ---------- stop geometry ----------
-    stop_px = None
-    r = str(t.get("reason") or "")
-    if "stoploss (" in r:
-        try: stop_px = float(r.split("stoploss (")[1].split(")")[0])
-        except Exception: pass
+    # 2026-08-01 — was scraping the stop out of the exit-reason TEXT,
+    # which only worked for the 3 of 19 trades whose reason happened to
+    # contain one. The record carries it: agents.trade_risk_fields()
+    # returns initial_sl for a futures trade (the stop sizing was decided
+    # against, before any trail moved it). Falls back to the old scrape
+    # only for records written before initial_sl existed.
+    import agents as _ag
+    stop_px = _ag.trade_risk_fields(t).get("stop")
+    if stop_px is None:
+        r = str(t.get("reason") or "")
+        if "stoploss (" in r:
+            try: stop_px = float(r.split("stoploss (")[1].split(")")[0])
+            except Exception: pass
     if stop_px:
         dist = abs(entry - stop_px)
         print(f"\n  STOP: {stop_px:,.2f} — {dist:.1f} pts away = {dist/a14:.2f}× ATR"

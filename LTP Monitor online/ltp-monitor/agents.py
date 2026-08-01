@@ -495,6 +495,54 @@ def ai_advisory_due(state, cfg, pnl, risk_rupees=None, near_stop=False):
     return None
 
 
+def trade_risk_fields(t):
+    """Entry / stop / target / quantity for ANY closed trade, whichever
+    schema it was written in.
+
+    2026-08-01 — the journal holds two shapes. Options and spreads use
+    `stoploss` / `target1` / `qty`; futures positions are persisted as
+    the live position dict, so the same facts are `initial_sl` / `sl` /
+    `target` / `lots` x `lot_size`. Both are complete — but a reader
+    that knows only one shape sees None and concludes the data is
+    missing.
+
+    That is not hypothetical: the 2026-08-01 forensic analysis read
+    `stoploss`, found None on all 19 futures trades, and reported that
+    futures records "cannot reconstruct risk". They always could. The
+    replay then fell back to scraping stop prices out of the exit-reason
+    TEXT, which only worked for the 3 trades whose reason happened to
+    contain one — so a 30-trade result was reported from 3.
+
+    `initial_sl` is preferred over `sl` deliberately: `sl` may have been
+    ratcheted by the trail or the profit floor before exit, so it
+    answers "where was the stop at the end", while sizing was decided
+    against the stop at ENTRY.
+
+    Returns {entry, stop, target, qty, lots, side} with None for
+    anything genuinely absent.
+    """
+    kind = trade_class(t)
+    entry = t.get("entry")
+    if kind == "futures":
+        lots = t.get("lots")
+        lot_size = t.get("lot_size")
+        qty = (lots * lot_size) if (lots and lot_size) else t.get("qty")
+        stop = t.get("initial_sl") or t.get("sl") or t.get("stoploss")
+        target = t.get("target") or t.get("target1")
+    else:
+        qty = t.get("qty")
+        lots = t.get("lots")
+        stop = t.get("stoploss") or t.get("sl")
+        target = t.get("target1") or t.get("target")
+    side = t.get("side")
+    if not side and entry is not None and t.get("ltp") is not None:
+        # options/spreads do not store a side; infer from the P&L sign
+        pnl = float(t.get("pnl") or 0)
+        side = "LONG" if (float(t["ltp"]) > float(entry)) == (pnl > 0) else "SHORT"
+    return {"entry": entry, "stop": stop, "target": target, "qty": qty,
+            "lots": lots, "side": side, "kind": kind}
+
+
 def trade_class(t):
     """Which risk class a trade belongs to: spread | futures | option.
 
