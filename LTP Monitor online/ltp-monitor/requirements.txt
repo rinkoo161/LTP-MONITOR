@@ -9,3 +9,6 @@ dhanhq>=2.2.0           # official Dhan Live Market Feed websocket (dhan_ws.py) 
                         # does NOT need this package, only dhan_ws.py does
 yfinance>=0.2.40        # News/Macro Agent fallback when Alpha Vantage / Twelve Data fail
 # AI runs locally via Ollama (install separately from https://ollama.com) — no Python package needed
+segno>=1.6                # QR for the MFA enrollment page (auth.py). Pure
+                          # Python, zero deps, OPTIONAL: without it the
+                          # page falls back to the manual setup key.

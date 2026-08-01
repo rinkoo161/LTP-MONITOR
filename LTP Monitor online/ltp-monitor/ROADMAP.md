@@ -4,6 +4,92 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v58.74 — authentication, TOTP MFA, and a banner that clears itself (2026-08-01)
+
+### The app had no authentication at all
+
+The README said so outright: "Anyone who can reach that port can place
+trades with your keys — there is no login screen." Defensible on
+127.0.0.1, indefensible the moment `HOST=0.0.0.0` puts an order-placing
+API on a LAN.
+
+Two roles, `admin` and `user`, with the SAME operational access per
+explicit choice — the split is for separate credentials and
+attribution, not to restrict trading. Account management is admin-only,
+because a role that grants nothing is not a role. Every POST/PUT/DELETE
+is attributed to a username in `auth_audit.jsonl`.
+
+### OFF by default, and that is the design
+
+Enabling auth inside a process already holding live positions, before
+any account exists, locks the operator out of their own running system.
+So it ships inert: create the admin at `/setup`, pair the
+authenticator, then set `auth_enabled`. Verified both ways — with it
+off every route still answers 200 and nothing changes.
+
+### Enforcement is ONE boundary
+
+A single `@app.middleware("http")` covers every route except a six-entry
+allowlist. There are 65+ endpoints and each can move money or leak a
+credential; a per-route decorator protects exactly the routes somebody
+remembered, and this session alone produced three bugs of that shape
+(the S10 call site, the futures risk cap, the candle write gate). A NEW
+endpoint is now protected because it exists.
+
+That framing immediately exposed a hole it would otherwise have hidden:
+**Starlette runs http middleware on the http scope only**, so
+`/ws/candles/{symbol}` would have streamed live prices to anyone able to
+open a socket. Checked explicitly on the handshake.
+
+### TOTP, verified against the RFC rather than eyeballed
+
+Any six-digit generator looks right. `test_auth.py` asserts all six
+RFC 6238 Appendix B vectors, so the codes are the ones Google
+Authenticator will produce.
+
+**Replay is rejected.** A 30-second code otherwise stays valid for its
+whole step (±1 for skew, so up to 90s) — a code read over a shoulder is
+reusable. The last accepted counter is stored per user and anything at
+or below it is refused. One visible consequence, asserted in the test:
+the code used to finish enrollment cannot then log you in; you wait for
+the next one. That is the protection working.
+
+`segno` renders the enrollment QR SERVER-SIDE, returned in the POST
+response — never a GET endpoint, because a URL carrying the TOTP secret
+lands in access logs and browser history. Optional: without it the page
+falls back to the manual setup key, and the test simulates the missing
+import to prove enrollment is never blocked.
+
+### Caught by the project's own test
+
+`test_settings_model_sync` failed: seven new config keys had been added
+to `DEFAULTS` but not to `SettingsIn`, so `auth_enabled` would have been
+unreachable from the Settings page that is supposed to switch it on.
+Exactly the silently-dropped-key trap this file has documented four
+times, and the test that exists for it did its job.
+
+### Alert banner
+
+It stayed until clicked, so a high-severity alert sat across every page
+for the rest of the session — and `token expired` and the kill-switch
+both raise HIGH, so it was frequently a permanent fixture reporting
+something already dealt with. Now clears after 10s (400ms fade), timers
+cancelled before each new banner so a fresh alert is not cut short by
+the previous one's timeout. The bell panel still holds everything.
+
+### A test that only worked on 30 days of the month
+
+`test_chart_indicators` walked back from a weekend with
+`d.replace(day=d.day - 1)`, which raises "day 0 must be in range"
+whenever the 1st of a month falls on a weekend. Today is Saturday
+1 August and the file crashed on import. Arithmetic on the day FIELD
+does not cross month boundaries; a timedelta does. Second date-shaped
+test failure in two days (v58.72's was Friday-only).
+
+STILL OPEN: `test_audit_today` and `test_chart_multiday_history` seed
+"today"-dated candles, and on a weekend the v58.71 write gate correctly
+refuses to store them. The gate is right; the fixtures assume a weekday.
+
 ## v58.73 — a test destroyed the live token; risk cap; the floor that lied (2026-08-01)
 
 ### A test overwrote the operator's Dhan token

@@ -16,6 +16,7 @@ working because it is fed by TechnicalAgent's `analysis:{sym}`
 
 Run:  python3 test_chart_indicators.py
 """
+import datetime
 import math
 import os
 import sys
@@ -52,7 +53,12 @@ def seed_candles(interval, n=260, base=23800.0):
     # walk back to the most recent weekday
     d = now
     while d.weekday() >= 5:
-        d = d.replace(day=d.day - 1)
+        # 2026-08-01 — was d.replace(day=d.day - 1), which raises
+        # "day 0 must be in range" whenever the 1st of a month falls on
+        # a weekend. Today is Saturday 1 August and the whole file
+        # crashed on import. A timedelta crosses month and year
+        # boundaries; arithmetic on the day FIELD does not.
+        d = d - datetime.timedelta(days=1)
     session_open = d.replace(hour=9, minute=15, second=0, microsecond=0)
     start_ts = int(session_open.timestamp())
     step = int(interval) * 60

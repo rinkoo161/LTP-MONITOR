@@ -9,9 +9,9 @@ import store
 import time
 import traceback
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from starlette.websockets import WebSocketState
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -25,9 +25,204 @@ from agents import Orchestrator, compute_momentum
 import agents
 
 BASE = os.path.dirname(os.path.abspath(__file__))
-APP_VERSION = "v58.73"   # maintained per explicit request; last delivered was v49
+APP_VERSION = "v58.74"   # maintained per explicit request; last delivered was v49
 
 app = FastAPI(title="LTP Option Chain Monitor")
+
+# ====================================================================
+# Authentication (v58.74). See auth.py for the account/TOTP mechanics.
+#
+# Enforced by ONE middleware rather than a decorator on each route.
+# There are 65+ endpoints and every one of them can move money or leak
+# a credential; a per-route decorator protects exactly the routes
+# somebody remembered, and this session has already produced three bugs
+# of that shape (the S10 call site, the futures risk cap, the candle
+# write gate). The rule belongs at the boundary they all cross.
+#
+# Anything not on the allowlist requires a session, so a NEW endpoint is
+# protected by default rather than by being noticed.
+# ====================================================================
+import auth
+
+SESSION_COOKIE = "ltp_session"
+_AUTH_FREE = ("/login", "/setup", "/favicon.ico", "/api/version",
+              "/api/auth/login", "/api/auth/setup", "/api/auth/status")
+
+
+def _auth_free(path):
+    return path in _AUTH_FREE or path.startswith("/static/")
+
+
+def current_user(request):
+    return auth.session(request.cookies.get(SESSION_COOKIE))
+
+
+@app.middleware("http")
+async def _require_login(request, call_next):
+    cfg = config.load()
+    if not cfg.get("auth_enabled", False) or _auth_free(request.url.path):
+        return await call_next(request)
+    sess = current_user(request)
+    if not sess:
+        if request.url.path.startswith("/api/"):
+            return JSONResponse(status_code=401,
+                                content={"error": "not authenticated",
+                                         "login": "/login"})
+        return RedirectResponse("/login", status_code=302)
+    request.state.user = sess
+    resp = await call_next(request)
+    # Attribute every state-changing call. "Same access, separate
+    # accounts" only means anything if the record says who acted.
+    if request.method in ("POST", "PUT", "DELETE"):
+        auth.audit("api", sess["user"], {"method": request.method,
+                                         "path": request.url.path})
+    return resp
+
+
+def _set_session_cookie(resp, token, cfg):
+    resp.set_cookie(SESSION_COOKIE, token, httponly=True, samesite="lax",
+                    path="/", secure=bool(cfg.get("auth_cookie_secure", False)),
+                    max_age=int(float(cfg.get("auth_session_hours", 12)) * 3600))
+    return resp
+
+
+class LoginIn(BaseModel):
+    username: str = ""
+    password: str = ""
+    code: str = ""
+
+
+class SetupIn(BaseModel):
+    username: str = ""
+    password: str = ""
+
+
+class UserIn(BaseModel):
+    username: str = ""
+    password: str = ""
+    role: str = "user"
+
+
+@app.get("/api/auth/status")
+def auth_status(request: Request):
+    """Unauthenticated on purpose — the login page needs to know whether
+    auth is on and whether an admin exists yet."""
+    cfg = config.load()
+    sess = current_user(request)
+    return {"enabled": bool(cfg.get("auth_enabled", False)),
+            "needs_setup": auth.user_count() == 0,
+            "require_mfa": bool(cfg.get("auth_require_mfa", True)),
+            "user": sess["user"] if sess else None,
+            "role": sess["role"] if sess else None}
+
+
+@app.post("/api/auth/setup")
+def auth_setup(body: SetupIn):
+    """Create the FIRST admin. Refuses once any account exists, so it
+    cannot be used to mint a second admin later."""
+    if auth.user_count() > 0:
+        raise HTTPException(403, "setup already completed — sign in instead")
+    try:
+        u = auth.create_user(body.username, body.password, "admin")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    secret, uri = auth.begin_mfa_enrollment(u)
+    return {"ok": True, "username": u, "secret": secret, "uri": uri,
+            "qr_svg": auth.qr_svg(uri),
+            "next": "scan or type the secret, then POST /api/auth/mfa/confirm"}
+
+
+@app.post("/api/auth/login")
+def auth_login(body: LoginIn):
+    cfg = config.load()
+    token, err = auth.authenticate(body.username, body.password, body.code, cfg)
+    if err:
+        raise HTTPException(401, err)
+    return _set_session_cookie(JSONResponse({"ok": True}), token, cfg)
+
+
+@app.post("/api/auth/logout")
+def auth_logout(request: Request):
+    auth.logout(request.cookies.get(SESSION_COOKIE))
+    r = JSONResponse({"ok": True})
+    r.delete_cookie(SESSION_COOKIE, path="/")
+    return r
+
+
+@app.get("/api/auth/users")
+def auth_users(request: Request):
+    _require_admin(request)
+    return {"users": auth.list_users()}
+
+
+@app.post("/api/auth/users")
+def auth_create_user(body: UserIn, request: Request):
+    _require_admin(request)
+    try:
+        u = auth.create_user(body.username, body.password, body.role)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True, "username": u}
+
+
+@app.delete("/api/auth/users/{username}")
+def auth_delete_user(username: str, request: Request):
+    _require_admin(request)
+    try:
+        auth.delete_user(username)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True}
+
+
+@app.post("/api/auth/mfa/enroll")
+def auth_mfa_enroll(request: Request):
+    sess = current_user(request)
+    if not sess:
+        raise HTTPException(401, "not authenticated")
+    secret, uri = auth.begin_mfa_enrollment(sess["user"])
+    return {"secret": secret, "uri": uri, "qr_svg": auth.qr_svg(uri)}
+
+
+@app.post("/api/auth/mfa/confirm")
+def auth_mfa_confirm(body: LoginIn, request: Request):
+    """Usable during first-run setup (no session yet) or from a session."""
+    sess = current_user(request)
+    user = sess["user"] if sess else (body.username or "").strip().lower()
+    if not user:
+        raise HTTPException(400, "username required")
+    if not auth.confirm_mfa(user, body.code):
+        raise HTTPException(400, "that code did not verify — check the clock "
+                                 "on the phone and try the next one")
+    return {"ok": True}
+
+
+def _require_admin(request):
+    """Account management is the one admin-only surface: both roles have
+    the same operational access by explicit choice, so this is what the
+    role actually means."""
+    sess = current_user(request)
+    if not config.load().get("auth_enabled", False):
+        return None                      # auth off: local-only, as before
+    if not sess:
+        raise HTTPException(401, "not authenticated")
+    if sess.get("role") != "admin":
+        auth.audit("admin.denied", sess["user"],
+                   {"path": str(request.url.path)}, ok=False)
+        raise HTTPException(403, "admin role required")
+    return sess
+
+
+@app.get("/login")
+def login_page():
+    return FileResponse(os.path.join(BASE, "static", "login.html"),
+                        headers={"Cache-Control": "no-store"})
+
+
+@app.get("/setup")
+def setup_page():
+    return FileResponse(os.path.join(BASE, "static", "login.html"),
+                        headers={"Cache-Control": "no-store"})
 
 
 @app.get("/api/version")
@@ -528,6 +723,18 @@ class SettingsIn(BaseModel):
     rupee_profit_floor_arm_rupees: float | None = None
     rupee_profit_floor_keep_pct: float | None = None
     rupee_profit_floor_min_rupees: float | None = None
+    rupee_profit_floor_as_stop: bool | None = None
+    # v58.74 — auth. Registered here as well as in DEFAULTS: a key absent
+    # from this model cannot reach config.save() from the Settings page
+    # at all, which is how `auth_enabled` would have been unreachable
+    # from the UI that is supposed to switch it on. Caught by
+    # test_settings_model_sync, which exists for exactly this.
+    auth_enabled: bool | None = None
+    auth_require_mfa: bool | None = None
+    auth_session_hours: float | None = None
+    auth_max_failed: int | None = None
+    auth_lockout_minutes: float | None = None
+    auth_cookie_secure: bool | None = None
     ai_exit_advisory_logging: bool | None = None
     ai_exit_advisory_danger_interval_sec: int | None = None
     ai_exit_advisory_min_interval_sec: int | None = None
@@ -3124,6 +3331,16 @@ async def ws_candles(websocket: WebSocket, symbol: str, interval: str = "1"):
     from the same message shape, so no separate "candle closed" event
     type is needed on the wire.
     """
+    # v58.74 — the HTTP middleware cannot see a websocket handshake
+    # (Starlette runs http middleware on the http scope only), so an
+    # unauthenticated client could stream live prices from a protected
+    # app through this one route. Checked explicitly here; the cookie
+    # rides the handshake like any other request.
+    if config.load().get("auth_enabled", False):
+        if not auth.session(websocket.cookies.get(SESSION_COOKIE)):
+            await websocket.close(code=1008)     # policy violation
+            return
+
     import asyncio
     import history
     symbol = symbol.upper()

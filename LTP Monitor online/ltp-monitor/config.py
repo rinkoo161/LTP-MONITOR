@@ -311,6 +311,21 @@ DEFAULTS = {
     # -₹3,000, -₹1,980, -₹1,500 and -₹2,340 gross. As a price it becomes
     # the stop, which is evaluated first in the exit chain.
     "rupee_profit_floor_as_stop": True,
+    # ---- authentication (v58.74) ----
+    # OFF by default and that is deliberate: enabling auth in a process
+    # already holding live positions, before any account exists, locks
+    # the operator out of their own running system. Create the admin at
+    # /setup, enroll the authenticator, THEN turn this on.
+    "auth_enabled": False,
+    "auth_require_mfa": True,      # a password alone is not a second factor
+    "auth_session_hours": 12,
+    "auth_max_failed": 5,          # attempts before a temporary lockout
+    "auth_lockout_minutes": 15,
+    # Secure cookies require HTTPS. This app is normally reached over
+    # plain HTTP on a LAN (HOST=0.0.0.0), where setting Secure would stop
+    # the cookie being sent at all and make login silently fail. Turn it
+    # on only behind a TLS terminator.
+    "auth_cookie_secure": False,
     "ai_exit_advisory_logging": True,        # log every advisory, acted on or not
     # ---- AI advisory cadence (v58.36) ----
     # Event-driven, not clock-driven. A flat 5-minute poll was too slow
