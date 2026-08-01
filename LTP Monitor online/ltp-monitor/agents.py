@@ -534,6 +534,23 @@ def trade_risk_fields(t):
         lots = t.get("lots")
         stop = t.get("stoploss") or t.get("sl")
         target = t.get("target1") or t.get("target")
+        # LEGACY SPREAD ROWS. Until 2026-08-02, exit_spread() wrote
+        # `stoploss = -loss_limit` and `target1 = +profit_target` — both
+        # P&L-per-share quantities in fields that mean PRICE. Those rows
+        # are history and cannot be rewritten, so convert on READ into
+        # the same spread-value basis the writer now uses:
+        #     value at stop   = credit + loss_limit   = entry - stop
+        #     value at target = credit - profit_target = entry - target
+        # Detected by the sign, which is unambiguous: a negative stop
+        # price cannot occur in the current shape, and a spread's target
+        # is always BELOW its credit. Guarded on kind so a genuine option
+        # buy is never touched.
+        if kind == "spread" and t.get("stop_basis") is None:
+            if stop is not None and stop < 0 and entry is not None:
+                stop = round(entry + abs(stop), 2)
+            if target is not None and entry is not None and target > 0 \
+                    and target < entry:
+                target = round(entry - target, 2)
     side = t.get("side")
     if not side and entry is not None and t.get("ltp") is not None:
         # options/spreads do not store a side; infer from the P&L sign
@@ -4881,8 +4898,32 @@ class ExecutionAgent(Agent):
             "lots": sp["lots"], "strategy": sp["strategy"],
             "source": sp.get("source") or sp.get("strategy"),
             "entry": sp["credit"], "ltp": sp.get("pnl_per_share", 0),
-            "stoploss": -sp["loss_limit"], "target1": sp["profit_target"],
+            # 2026-08-02 — `stoploss` used to be written as
+            # `-sp["loss_limit"]`. The VALUE was right but the FIELD means
+            # a price everywhere else in this codebase, and what was
+            # stored is a P&L-per-share floor. Result: 385 of 500 journal
+            # rows carried a negative "stop price", which is impossible
+            # for anything tradeable, and any consumer doing the obvious
+            # `entry - stoploss` arithmetic got nonsense. It produced a
+            # bogus "median stop = 200% of premium" in the 2026-08-02 stop
+            # study and silently contaminated the per-trade risk figure
+            # the options risk cap was calibrated against.
+            #
+            # A credit spread DOES have a real stop price, in spread-value
+            # terms: P&L/share = credit - value, so the loss limit binds
+            # when value = credit + loss_limit. That is positive and ABOVE
+            # entry, which is correct for a short position. Same for the
+            # target: it binds when value = credit - profit_target.
+            #
+            # The P&L-basis numbers are kept under names that say what
+            # they are, so nothing is lost and neither can be misread.
+            "stoploss": round(sp["credit"] + sp["loss_limit"], 2),
+            "target1": round(sp["credit"] - sp["profit_target"], 2),
             "target2": sp["credit"],
+            "stop_basis": "spread_value",
+            "side": "SHORT",
+            "loss_limit_per_share": sp["loss_limit"],
+            "profit_target_per_share": sp["profit_target"],
             "closed": now.strftime("%H:%M:%S"),
             "closed_date": now.strftime("%Y-%m-%d"),
             "closed_at": now.isoformat(),

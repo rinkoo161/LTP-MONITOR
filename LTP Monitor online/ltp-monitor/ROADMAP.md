@@ -283,6 +283,56 @@ headline), so the veto logic is what is under test. 19/19.
 A green suite is the point. On 2026-08-01 a live regression hid inside an
 already-failing file for exactly as long as the red was being tolerated.
 
+## Unreachable stops — a P&L stored in a price field (2026-08-02)
+
+**385 of 500 journal rows carried a stop price of ≤ 0, median -32.0.**
+Nothing tradeable can have a negative stop, so 77% of the trade history
+recorded a stop that could never be hit.
+
+Root cause, `exit_spread()`: `"stoploss": -sp["loss_limit"]`. The VALUE
+was right — a credit spread's risk limit really is a P&L-per-share floor
+— but `stoploss` means a PRICE in every other writer and reader in this
+codebase. One field, two meanings, distinguished only by free-text
+`reason`. `target1` had the same defect, storing `+profit_target`.
+
+### What it cost
+
+This is not cosmetic. It silently contaminated live analysis:
+
+  - the 2026-08-02 stop-width study reported "median stop = 200% of
+    premium" — impossible, and the tell that something was wrong;
+  - **the ₹5,000 options risk cap was calibrated on the contaminated
+    pool.** The "median ₹3,198 per lot" figure mixed spread legs with
+    option buys. On the clean single-leg population the median is
+    ₹3,175 (close) but the tail is far worse: p90 ₹7,608, max ₹9,484,
+    both above the ₹5,000 portfolio kill-switch, against a max of
+    ₹6,435 previously reported. ₹5,000 blocks 18% of clean trades, not
+    the 8% first stated. **The cap needs re-deriving.**
+
+### The fix
+
+A credit spread DOES have a real stop price, in spread-value terms:
+P&L/share = credit - value, so the loss limit binds at
+`value = credit + loss_limit` — positive, and ABOVE entry, which is
+correct for a short. The target binds at `credit - profit_target`.
+
+  - **Writer**: stores those prices, plus `stop_basis: "spread_value"`,
+    `side: "SHORT"`, and the raw P&L numbers under
+    `loss_limit_per_share` / `profit_target_per_share`. Nothing is lost
+    and neither can be misread.
+  - **Reader** (`trade_risk_fields`): converts the ~385 legacy rows on
+    READ, since they are history and cannot be rewritten. Gated on
+    `kind == "spread"` AND absence of `stop_basis`, so new rows are never
+    double-converted and option buys are never touched.
+
+Verified against the real journal: impossible stops **385 -> 0**, and
+spreads now reconstruct per-trade risk (median ₹2,064, p90 ₹6,055, max
+₹19,364) where previously they reconstructed nothing.
+
+`test_trade_record_schema.py` had PINNED the bug (`s["stop"] == -79.1`).
+Inverted, with the reason recorded — a test asserting an impossible value
+is not protection, it is the defect with a green light on it.
+
 ## Credential audit — CLOSED (2026-08-01)
 
 Full-history audit of the public repo (github.com/rinkoo161/LTP-MONITOR).

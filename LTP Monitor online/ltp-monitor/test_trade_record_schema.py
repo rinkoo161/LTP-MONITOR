@@ -64,7 +64,18 @@ check("side inferred from the P&L sign (options store none)",
 print("\n3) spreads too")
 s = agents.trade_risk_fields(SPREAD)
 check("classified as spread", s["kind"] == "spread", s["kind"])
-check("stop from stoploss", s["stop"] == -79.1)
+# 2026-08-02 — this asserted `s["stop"] == -79.1`, i.e. it PINNED the bug.
+# A negative stop price is impossible for anything tradeable; what was
+# stored was a P&L-per-share floor in a field meaning price. The reader
+# now converts legacy spread rows onto the spread-value basis the writer
+# uses: value at the stop = credit + loss_limit = 79.1 + 79.1.
+check("legacy negative stop is converted to a real price",
+      s["stop"] == 158.2, f"{s['stop']} (79.1 credit + 79.1 loss limit)")
+check("and the reconstructed risk equals the original loss limit",
+      abs((s["stop"] - s["entry"]) - 79.1) < 1e-9,
+      "this is what the field is FOR — sizing must be recoverable")
+check("target converted onto the same basis",
+      s["target"] == round(79.1 - 27.68, 2), str(s["target"]))
 check("qty as stored", s["qty"] == 150)
 
 print("\n4) the specific bug: reading the wrong key must not look like missing data")
