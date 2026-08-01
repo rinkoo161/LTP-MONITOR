@@ -4,6 +4,466 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.0 Phase D + items 9, 24 (2026-08-01)
+
+### Item 24 — the ₹1,143 is not a constant, and not independent either
+
+`proxy_sd_model.py`. The question was what ₹1,143 varies with. The
+bucket analysis found **no strong single driver**, which was the useful
+negative result:
+
+    hold duration   <30m 1,213   30-90m 832   >90m 1,171     not monotonic
+    move size       <25p 1,147   25-75p 1,080  >75p 1,100    flat
+    entry premium   <100 1,045   100-250 697   >250 1,349    not monotonic
+    lot size        sd/share 34.5 / 25.3 / 8.7 / 40.6        does NOT scale
+
+Strategy explains more than any single driver (orb 1,825 vs
+momentum_confluence 707, a 2.6x spread), but the real answer is
+underneath all of it:
+
+**The proxy error is NOT independent of the P&L.**
+
+    corr(error, proxy P&L) = -0.49
+    corr(error, real  P&L) = +0.34
+    Var(proxy) = 1,996,251   vs   Var(real) + Var(err) = 3,014,973
+    => the independent-additive identity is VIOLATED by 34%
+
+`err = real - proxy`, and both are driven by the same spot move, so the
+covariance was never going to be zero. Consequences:
+
+1. **The ema_mtf anomaly dissolves.** `own_sd` below ₹1,143 is not a
+   paradox once variances stop adding. Nothing structural about ema_mtf
+   needed explaining — the noise model was wrong.
+2. **Item 21a's deconvolution was invalid**, since it assumed exactly
+   this independence. Its conclusion survives on other grounds (see the
+   headline), but the estimator should not be trusted as stated.
+3. **The applied gate's quadrature term double-counts.** `own_sd`
+   already contains the model error.
+
+`promotion_gate.required_margin_calibrated()` records the form the
+evidence supports: what ₹1,143 genuinely buys is uncertainty in the BIAS
+CORRECTION, `sd/sqrt(74) = ₹133` — a floor set by the calibration sample
+that a strategy's own n cannot shrink, which is correct, because no
+amount of trading fixes a bias measured on four sessions.
+
+    required = cost_bias + 2 x sqrt(own_sd^2/n + 1143^2/74)
+
+**Stricter than the applied gate on 11 of 11**, so the 0-of-11 finding is
+unchanged and understated. REPORTED, not applied — swapping the
+construction silently is the substitution this engagement exists to
+prevent.
+
+### Phase D — futures delta hedge, SHADOW ONLY (LANDED, 0 of 40 sessions)
+
+`fhedge_shadow.py`, observed from `_monitor_spreads` against the real
+S5/S6 spreads. **Nothing is placed, in live or in paper.** Records
+trigger time, spot vs short strike, computed net delta, hedge lots and
+unwind, to `fhedge_shadow.jsonl`.
+
+The invariant — *parent spread closes forces hedge close in the same
+cycle* — is INSTRUMENTED, not asserted. On every parent close the
+journal records whether the hedge would have unwound **on its own rules**
+(the parent-closed rule deliberately excluded from `would_unwind()`, or
+the measurement would be circular). When it would not have, the
+forced-close rule is the only thing standing between the book and a
+naked future, and the record carries the margin: points still to reclaim,
+minutes to EOD. A hedge that fails to unwind is a naked directional
+position on a 15x instrument nobody chose — worse than the short-gamma
+problem it solves.
+
+`test_fhedge_shadow.py` deliberately feeds the report a VIOLATION and
+confirms it is counted. A monitor that cannot express failure reads as
+evidence of safety.
+
+**Found while testing:** a vertical's net delta peaks near the short
+strike at roughly 0.15-0.5/share and collapses toward zero as the breach
+deepens. At ONE lot that is ~11-37 shares against a 75-share lot, so a
+single-lot spread **can never size a whole hedge lot**. Expect few
+triggers; a sparse journal is the instrument working, not failing.
+
+**40 sessions before paper orders are discussed. Live is not on the
+table.** `futures_strategy_enabled` and `futures_live_enabled` remain
+False.
+
+### Item 9 — basis residual gate, wired, DEFAULT OFF
+
+Consulted in `RiskAgent.evaluate()` via `basis_residual.gate_for()` —
+the existing function, not a second copy. VETO ONLY: it abstains when it
+has no z (cold start) and when the residual is inside the band, so it can
+never be the reason a trade happens. Rejections surface through the same
+`check()` chain as every other risk gate. Per-strategy
+`<strategy>_require_basis_agreement` overrides the global key; both
+default False.
+
+## THE HEADLINE (2026-08-01) — no strategy's edge is distinguishable from zero, and the measurement is too coarse to rule one out
+
+Read the second clause as carefully as the first. The claim is **not**
+"no strategy has an edge". It is that this system cannot yet tell, and
+that the uncertainty is wide enough that one of them could plausibly sit
+above the line.
+
+**No strategy's edge is distinguishable from zero.** t of net-per-trade
+against the strategy's own trade variance:
+
+    ema_mtf NIFTY 1.47   vwap NIFTY 1.43   momentum NIFTY 1.16
+    orb FINNIFTY  0.98   ema_mtf BN 0.91   momentum FINNIFTY 0.83
+    vwap BN       0.79   vwap SENSEX 0.37  orb BN 0.23
+    vwap FINNIFTY 0.13   orb SENSEX 0.03
+
+**This argument needs neither the cost model nor the ₹1,143 P&L-model
+sd.** It is arithmetic on the strategies' own recorded P&L. Discard
+everything else in items 7-19 and it still stands.
+
+Two things make it harder to dismiss:
+
+- **Removing the P&L model's error entirely does not rescue any of them.**
+  Deconvolving the proxy noise (`true_sd = sqrt(own^2 - 1143^2)`) where
+  the estimator is stable — 7 of 11 — lifts the best t from 1.43 to
+  **1.56**. Nowhere near 2. Fixing the P&L model is therefore not the
+  route to a live strategy.
+- **The best of the eleven is below what pure noise predicts.** The
+  expected maximum of 11 standard normals is ~1.59; the observed maximum
+  is **1.47**. Caveat, and it is a real one: the eleven are not
+  independent — they share symbols, periods and often the same underlying
+  moves — which lowers the 1.59 benchmark by an amount this data cannot
+  quantify. Directional, not exact. Even so it is the cleanest available
+  summary: the spread of results across eleven strategies looks like what
+  you would get from eleven strategies with no edge at all.
+
+### HOW CLOSE IT SITS — item 27, and why the headline is hedged
+
+The measurement uncertainty is not a rounding detail; it is larger than
+the thing being measured. Two facts already established:
+
+  - `sd(real P&L) 1,307` vs `sd(proxy P&L) 1,413` — the proxy overstates
+    dispersion by about 8%.
+  - the proxy's mean bias is **+₹102**, i.e. real P&L beat proxy P&L.
+
+Apply BOTH to the strategies with the highest t:
+
+    strategy               symbol       t    t_adj
+    ema_mtf                NIFTY     1.47     2.90   ABOVE 2
+    vwap_pullback          NIFTY     1.43     2.27   ABOVE 2
+    momentum_confluence    NIFTY     1.16     3.59   ABOVE 2
+    orb                    FINNIFTY  0.98     1.68
+
+**Three of eleven would clear t = 2.** That is not a finding — it is a
+sensitivity, and it is recorded precisely so nobody reads the headline
+as a proof of absence.
+
+**It is NOT applied, and must not be.** The bias is **₹102 ± ₹133** —
+itself indistinguishable from zero. Propagating a point estimate that
+cannot be distinguished from zero is exactly the substitution this
+engagement keeps refusing. It would also be applied uniformly across
+strategies whose hold profiles differ, when the bias is known to be
+duration-dependent (+₹341 under 30 min, -₹212 past 90).
+
+**The bias band alone swamps the entire result set.** At 2 SE the band is
+±₹266, which exceeds the whole net-per-trade figure of **11 of 11**
+strategies (the largest is vwap_pullback NIFTY at ₹219). Every one of
+these edges is smaller than the uncertainty in one of the corrections
+applied to it.
+
+So the defensible statement is the hedged one: *no strategy's edge is
+distinguishable from zero, and measurement uncertainty is wide enough
+that one could plausibly be above it.*
+
+### This is the first time the system has been ABLE to say this
+
+Not a new problem — a newly *visible* one. Three separate defects each
+independently made the question unanswerable:
+
+1. **The sign-test gate** (`trades >= min_conf and net_pnl > 0`) never
+   asked whether a result was distinguishable from noise. It promoted
+   11 of 11.
+2. **The P&L proxy** (`pts x 0.5 x lot`) contributed an unmeasured
+   ±₹1,143/trade, so no error bar existed to compare an edge against.
+3. **The flat cost model** (`fee_per_lot`) understated real cost, biasing
+   every net figure upward by ₹18-56/trade.
+
+Each one alone was enough to prevent the question being asked. All three
+were live simultaneously.
+
+### What changed on 2026-08-01
+
+- Auto-promotion to live STOPPED. `promotion_gate` is wired into
+  `backtester.is_live_enabled()`, ANDed with the existing checks, failing
+  CLOSED if the gate itself errors. Under it, 0 of 11 qualify for live.
+- **All eleven keep running in paper.** Nothing is bleeding, and they
+  generate the data that will eventually settle this. Killing them would
+  destroy the only route to an answer. Both `is_live_enabled` call sites
+  are already behind `not paper_mode`, so this changes nothing about
+  paper — `test_promotion_gate.py` asserts that.
+
+### What would change the answer
+
+In order, because each depends on the one before:
+
+1. **Chain-archive depth.** Item 18 started tiered archiving of
+   `chain_snapshots` on 2026-08-01. Everything before that date was
+   hard-deleted nightly and is gone.
+2. **Repricing the replays from real premiums** (item 16). Needs ~1 year
+   of the above. Removes the ₹1,143 entirely rather than estimating it.
+3. **Per-strategy cost from actually-traded strikes** (item 19). Needs
+   the same archive; replaces a single spread constant that the measured
+   distribution (median 0.65, mean 2.27, max 15.80) shows is the wrong
+   shape.
+
+Until then the honest statement is not "these strategies lose money" —
+it is **"this system cannot yet tell whether they make money."**
+
+### Items 26 and 28 (2026-08-01)
+
+**Item 26 — the calibrated gate is APPLIED.** `evaluate()` now uses
+`cost_bias + 2*sqrt(own_sd^2/n + 1143^2/74)`, replacing the quadrature
+form that assumed an independence `err = real - proxy` makes impossible.
+Stricter on 11 of 11; the superseded value is reported as
+`legacy_required` so the change stays visible. A caller with no `own_sd`
+is now DENIED rather than waved through on the model term — this gates
+live orders, and "unmeasurable" must not read as "passed".
+
+**Item 28 — Phase D sizing, fixed before the 40 sessions accumulate.**
+An 11-37 share net delta against a 75-share lot is a 2x-6.8x over-hedge
+if lots round to nearest: a directional futures position wearing a
+hedge's label, which is the failure this phase exists to prevent
+arriving through SIZING rather than through the unwind invariant. Three
+defences, because any one alone can be defeated by a later edit:
+
+  - `hedge_lots()` FLOORS, so 0.9 lots is zero, not one. Flooring can
+    only ever under-hedge, leaving part of the short gamma the trader
+    actually chose — strictly the safer error.
+  - `fhedge_min_parent_lots` (default 3) blocks the hedge entirely below
+    a parent size where it could not be proportionate. Checked BEFORE
+    the delta solve so the refusal is journalled rather than invisible.
+  - every trigger AND every block records `over_hedge_ratio`
+    (hedged/required). Flooring makes it <= 1 by construction, so
+    anything above 1 means the floor was broken; `invariant_report()`
+    surfaces `over_hedged` and `max_over_hedge_ratio`. Without the
+    column, 40 sessions of sparse output reads as "working" even if
+    every firing entry were 3x its delta.
+
+## v59.0 items 17-19 — the promotion gate, and what the archive must keep (2026-08-01)
+
+### Item 17 — the gate now separates bias from variance (DONE, reporting only)
+
+`promotion_gate.py`. The shipped rule was `trades >= min_conf and
+net_pnl > 0`, which promotes the error terms of two models. Corrected:
+
+    net_per_trade > cost_bias + 2 x sd / sqrt(n)
+
+Cost error is BIAS (₹18-56/trade by symbol, does not shrink with n).
+Proxy error is VARIANCE (sd ₹1,143/trade, shrinks as sd/sqrt(n)). The
+proxy's measured MEAN of +₹102 is deliberately NOT netted out — it came
+from 4 sessions in one regime and its sign flips with hold duration
+(+₹341 under 30 min, -₹212 past 90), so applying one mean across
+strategies with different hold profiles would swap a known bias for an
+unmeasured one.
+
+**Result: 1 of 11 live strategies clears the gate** (vwap_pullback NIFTY,
+headroom +₹42/trade). Under the old gate, 11 of 11 passed. The gate is
+NOT wired into `agents.py` — `test_promotion_gate.py` asserts that it
+isn't. Awaiting a decision on item 20.
+
+**The ₹1,143 is PROVISIONAL** (n=74, 4 sessions, one regime, measured
+against a 5-day archive). It carries `PROXY_SD_PROVENANCE` in every
+payload. Re-measure once the archive below has depth. It must not harden
+into a constant.
+
+### Item 18 — chain_snapshots is tiered, no longer hard-deleted (DONE)
+
+Measured: 13.75 MB/session including indexes, ≈3.4 GB/year against a
+324 MB database — material, so tiered rather than kept whole:
+
+    tier 1   0-90 days     everything, untouched
+    tier 2   90-730 days   one row per strike/leg per 5 minutes
+    tier 3   beyond        one row per strike/leg per session
+
+Steady state ≈ 850 MB + 1.3 GB + 10 MB/year. Tier 2's 5-minute grid is
+chosen so replay entry/exit timestamps can still be matched within
+±2.5 min; a 15-minute grid would save ~500 MB/year and cost the exact
+question the tier exists to answer.
+
+This starts the clock. Item 16 (repricing the replays from real
+premiums) and the September 2025 question become answerable in roughly a
+year, and **only because archiving started 2026-08-01** — everything
+before that date was deleted nightly and is not recoverable.
+
+### Item 19 — bid-ask is not a constant; per-strategy cost should key off traded strikes (NOT STARTED)
+
+Measured at the strikes the replays actually traded (n=73):
+
+    median 0.65 pts    mean 2.27    max 15.80
+
+Mean is 3.5x median and the tail reaches 24x — the distribution is
+heavily right-skewed, so **every fixed-spread assumption in the item-7
+cost table was the wrong SHAPE**, including my own 0.5-point half-spread.
+A single `opt_halfspread_points` cannot represent this.
+
+The eventual fix: cost per strategy should be computed from the spread
+distribution at the strikes and times that strategy actually trades, not
+one global constant. That needs the archive above to have depth, so it is
+noted and NOT built. Until then `options_costs.cost_round_trip()` at the
+median is a documented LOWER bound on cost, and is labelled as such.
+
+Item 11 (measuring spreads to precision) stays deferred — item 15 showed
+the P&L-model sd is 14-30x the entire cost correction, so refining the
+cost term while that stands is false precision.
+
+### Item 20 — what to disable, and what each conclusion rests on (EVIDENCE FILED, decision pending)
+
+`gate_report.py`. Three independent arguments, weakest first.
+
+**Argument 1 — the cost correction (WEAKEST).** Disqualifies exactly one
+strategy that would otherwise survive: `orb FINNIFTY` (headroom -₹2,
+i.e. it fails by two rupees). Any conclusion resting on this alone is
+fragile, because the cost bias is itself a lower bound taken at the
+median of a heavily-skewed spread distribution (item 19).
+
+**Argument 2 — the corrected promotion gate.** 1 of 11 passes:
+`vwap_pullback NIFTY`, headroom +₹42/trade. The other 10 fail the
+statistical margin regardless of the cost question. This is the argument
+item 17 was built to make, and it is robust to the cost term being wrong
+in either direction.
+
+**Argument 3 — the strategies' own trade variance (STRONGEST, and it
+needs neither error model).** t of net/trade against each strategy's own
+per-trade sd:
+
+    ema_mtf NIFTY 1.47   vwap NIFTY 1.43   momentum NIFTY 1.16
+    orb FINNIFTY  0.98   ema_mtf BN 0.91   momentum FINNIFTY 0.83
+    vwap BN       0.79   vwap SENSEX 0.37  orb BN 0.23
+    vwap FINNIFTY 0.13   orb SENSEX 0.03
+
+**Not one of the eleven reaches t = 2.** The highest is 1.47. The sd used
+is a LOWER bound (it ignores dispersion within the win and loss buckets),
+so every t here is an UPPER bound — the real figures are lower still.
+None of these eleven measured edges is distinguishable from zero, and
+that statement survives even if the ₹1,143 and the entire cost model are
+discarded.
+
+**DECIDED 2026-08-01 — the combined margin is now what ships.** Errors
+from independent sources add in quadrature, so the gate is
+
+    net_per_trade > cost_bias + 2 x sqrt(own_sd^2 + 1143^2) / sqrt(n)
+
+Under it **0 of 11 pass** (previously 1 of 11 on the model term alone).
+`backtester.metrics()` now records `pnl_sd` so `own_sd` is the real
+per-trade dispersion; where an older persisted entry lacks it, the
+win/loss approximation is used and flagged, because it is a LOWER bound
+and therefore runs the gate PERMISSIVE.
+
+**ARGUMENTS 2 AND 3 ARE ONE FINDING, NOT TWO.** With `own_sd` folded in,
+the gate IS a t-test on the edge with model uncertainty added. "0 of 11
+pass the combined gate" and "0 of 11 reach t=2" are the same statement
+measured two ways. They must never be presented as corroborating each
+other. The t-stat is the better public form because it needs neither
+error model. Recorded in `promotion_gate.py`'s docstring so the next
+reader does not double-count them.
+
+**The decision.** Auto-promotion stopped (wired into `is_live_enabled`,
+fails closed). No strategy disabled — all eleven continue in paper.
+
+## v59.0 Phase A FINDING — futures stay disabled (2026-08-01)
+
+**At the corrected notional cost model, none of these strategies has a
+gross edge exceeding transaction costs.** That is the finding. Futures
+remain disabled; no strategy is wired; Phase C does not proceed.
+
+### The table (NIFTY, 521 sessions, net of §3.2 costs)
+
+    strategy        n    win    gross/t  cost/t   net/t      t     verdict
+    s11_momentum   325  43.4%    +4.24    9.14    -4.91   -1.81   FAIL
+    s12_vwap       512  57.4%    -2.34    9.22   -11.55   -4.55   INSUFFICIENT (data)
+    s13_orb        515  38.8%    -5.43    9.18   -14.61   -3.21   FAIL
+    s14_existing   521  32.4%    -1.30    9.18   -10.47   -8.71   FAIL
+
+**ALL FOUR ROWS used INDEX 1-minute candles as the futures proxy with
+futures costs applied.** Futures prices were never archived, so not one
+result ran on the instrument itself. Intraday the basis is near-constant
+so signal geometry and point moves are faithful, but this is a proxy and
+every row carries the caveat, not just S12.
+
+### The cost correction is the most valuable output of this project
+
+Under the old flat `fee_per_lot` (₹80/round trip = 1.23 pts), the SAME
+replays read:
+
+    s11_momentum   +3.01 pts/trade   +₹63,531   PROFITABLE
+    s14_existing   -2.53 pts/trade
+
+`is_live_enabled()` reads backtest profitability. So the flat model would
+have presented S11 as a promotable strategy that in reality loses ₹4.91
+per point-lot on every trade. The real round trip is 9.14-9.22 points —
+identical across all four, as it must be for one instrument and one cost
+function at one lot. That gap, not any strategy insight, is what this
+engagement bought.
+
+### S14 closes the Phase 0 question — it was BOTH
+
+Phase 0 found the live engine never used its ATR geometry: `enter_future`
+silently fell back to fixed percentages on all 40 trades, giving a 0.8%
+target that nothing reached (0/40, median MFE 1.7% of target). Re-run
+with the ATR geometry actually engaged, **target-reach goes 0% -> 32.4%**
+— so the exit WAS broken and fixing it makes the target reachable. It
+still loses 10.47 pts/trade at t = -8.71. Broken exit AND bad edge; both
+questions answered.
+
+Confirmed not a labelling artifact: S14 is a pure bracket, 352 stops +
+169 targets, and the win set IS the target set exactly.
+
+### Verdict precision
+
+**S11 is the one result that could flip.** 325 trades is below the 380
+needed to separate a 55% win rate from 50%; t = -1.81 is not separable
+from zero at this sample; and its gross edge (+4.24) is roughly HALF the
+round-trip cost (9.14). That is "no edge that survives costs at this
+sample", which is different from "no edge".
+
+**S12 is INSUFFICIENT (data), not FAIL.** Its premise is true futures
+VWAP. Futures prices were never archived and futures volume exists for 5
+sessions; the 512 trades used INDEX "volume", and NSE indices have no
+traded volume. Recording FAIL would tell a later session the strategy had
+been tested when it was not.
+
+### Two gate defects in the spec, corrected
+
+* **OOS/IS is meaningless when IS expectancy is negative.** S12 (1.43)
+  and S13 (1.22) nominally cleared a >=0.5 gate while losing MORE out of
+  sample. Now evaluated only when IS > 0 — which still leaves S11 judged
+  on it (IS +6.13, OOS/IS -6.25, fails).
+* **Target-reach is inapplicable to time-exit strategies.** S11 exits on
+  the clock by design; reporting 0% reads as the exact defect the gate
+  exists to catch. Now N/A, with expectancy and t-stat carrying the
+  verdict.
+
+### A metric of mine that was wrong
+
+`cost_drag_pct` divided cost by |sum of SIGNED gross| — the NET gross
+outcome, which is small and near zero for S14 (-₹43,941 against ₹310,784
+of cost -> 707%). Inverting it implied per-trade costs of 12-36 points
+that do not exist. Measured directly, cost is 9.14-9.22 pts everywhere.
+Now `cost_vs_gross_edge_pct`, and N/A when gross is negative: a strategy
+with no gross edge has nothing for cost to erode, and a percentage there
+invites blaming the cost when the entry is the problem.
+
+### What makes a re-test possible
+
+Futures OHLCV+OI archiving STARTS 2026-08-01 for every symbol in
+`futures_symbols`, hanging off the existing tick path. Until enough
+sessions accumulate, nothing above can be re-tested on the real
+instrument — the proxy is the ceiling on how much any of this can be
+trusted.
+
+### 40 trades could not have established the old engine was bad either
+
+Stated plainly because it cuts both ways: the 27.5% win rate was alarming
+and the -₹23,863 was real, but the statistical case for disabling rested
+on the EXIT SIGNATURE (0 of 40 reaching target), not the sample size.
+This finding rests on 521 sessions and a cost model, which is a different
+quality of evidence.
+
+`futures_strategy_enabled` and `futures_live_enabled` remain False.
+
 ## v58.76 — the record was never broken; auth switched on (2026-08-01)
 
 ### The claim that futures records "cannot reconstruct risk" was wrong

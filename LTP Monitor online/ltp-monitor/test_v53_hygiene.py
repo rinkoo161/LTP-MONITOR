@@ -76,8 +76,14 @@ finally:
     agents.market_open = real_market_open
 
 after = conn.execute("SELECT COUNT(*) FROM chain_snapshots WHERE symbol=?", (SYM,)).fetchone()[0]
-check("cycle() pruned both legs of the row older than the retention window",
-      after == 2, f"before={before} after={after} (expect 2 = recent snapshot's CE+PE)")
+# v59.0 item 18 INVERTED this assertion. It used to require the 10-day-old
+# row to be GONE. That 5-day hard delete is exactly why the historical
+# premiums needed to reprice the replays (item 16) do not exist, so the
+# 10-day row must now SURVIVE — it is inside tier 1 (90 days), where
+# nothing is thinned at all.
+check("cycle() no longer deletes rows merely for being older than 5 days",
+      after == 4, f"before={before} after={after} (expect all 4 — tier 1 is "
+                  f"untouched for 90 days; a 5-day delete is the item-18 bug)")
 check("chain_prune_done marked for today (won't re-run this cycle)",
       bus.get("chain_prune_done") == agents.now_ist().strftime("%Y-%m-%d"))
 
@@ -93,6 +99,24 @@ check("re-running cycle() the SAME day does not prune again "
       "(daily gate, not every-cycle)",
       after2 == 4, f"expected the re-inserted old snapshot's 2 rows to "
                    f"survive alongside the recent snapshot's 2 rows: got {after2}")
+
+print("\n2b) tiering is what enforces retention now, not deletion")
+conn.execute("DELETE FROM chain_snapshots WHERE symbol=?", (SYM,))
+conn.commit()
+# Two rows a minute apart, 200 days old — inside tier 2, where the grid is
+# 5 minutes, so one of them must go and one must stay.
+# SNAPPED to a 300s boundary on purpose: unaligned, the pair straddles a
+# bucket edge roughly one run in five and BOTH rows legitimately survive.
+# That would be a test failing on the wall clock, not on the code.
+t2a = ((int(time.time()) - 200 * 86400) // 300) * 300
+history.upsert_chain_snapshot(SYM, t2a, [{"strike": 100, "ce": {"ltp": 1}, "pe": {"ltp": 1}}])
+history.upsert_chain_snapshot(SYM, t2a + 60, [{"strike": 100, "ce": {"ltp": 2}, "pe": {"ltp": 2}}])
+history.prune_chain_snapshots()
+kept = conn.execute("SELECT COUNT(*) FROM chain_snapshots WHERE symbol=?", (SYM,)).fetchone()[0]
+check("tier 2 thins a 60s cadence to the 5-min grid", kept == 2,
+      f"expect 2 (CE+PE at one grid point) from 4 rows: got {kept}")
+conn.execute("DELETE FROM chain_snapshots WHERE symbol=?", (SYM,))
+conn.commit()
 
 conn.execute("DELETE FROM chain_snapshots WHERE symbol=?", (SYM,))
 conn.commit()

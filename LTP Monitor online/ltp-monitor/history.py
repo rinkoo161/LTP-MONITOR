@@ -677,6 +677,57 @@ def log_future_oi(symbol, ts, oi, oi_chg, ltp, chg, quadrant):
     c.close()
 
 
+def log_basis_residual(symbol, ts, spot, future, actual_basis, fair_basis,
+                       residual, residual_z, days_to_expiry, r_pct, q_pct,
+                       approx):
+    """Persist one basis-residual observation (v59.0 Phase B §5).
+
+    Futures candles were never archived, so there is no history to
+    backfill: this series builds FORWARD from the first live cycle, the
+    same way future_oi_snapshots did. `approx` records whether the
+    dividend yield was a real calendar figure or the configured estimate
+    — it travels with the row so a chart can mark it rather than a reader
+    having to remember.
+
+    residual_z is NULLABLE on purpose: before the z-window fills there is
+    no z, and writing 0.0 would be indistinguishable from "exactly
+    average".
+    """
+    c = _conn()
+    c.execute("""CREATE TABLE IF NOT EXISTS basis_residual(
+        symbol TEXT, ts INTEGER, spot REAL, future REAL,
+        actual_basis REAL, fair_basis REAL, residual REAL, residual_z REAL,
+        days_to_expiry REAL, r_pct REAL, q_pct REAL, approx INTEGER,
+        PRIMARY KEY (symbol, ts))""")
+    c.execute("CREATE INDEX IF NOT EXISTS ix_basis_sym_ts "
+              "ON basis_residual(symbol, ts)")
+    c.execute("INSERT OR REPLACE INTO basis_residual (symbol, ts, spot, future,"
+              " actual_basis, fair_basis, residual, residual_z, days_to_expiry,"
+              " r_pct, q_pct, approx) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+              (symbol.upper(), int(ts), spot, future, actual_basis, fair_basis,
+               residual, residual_z, days_to_expiry, r_pct, q_pct,
+               1 if approx else 0))
+    c.commit()
+    c.close()
+
+
+def basis_residual_series(symbol, limit=500):
+    """Most recent observations, oldest first — what the z-window reads."""
+    c = _conn()
+    try:
+        rows = c.execute(
+            "SELECT ts, spot, future, actual_basis, fair_basis, residual, "
+            "residual_z, days_to_expiry, r_pct, q_pct, approx "
+            "FROM basis_residual WHERE symbol=? ORDER BY ts DESC LIMIT ?",
+            (symbol.upper(), int(limit))).fetchall()
+    except Exception:
+        rows = []
+    c.close()
+    keys = ("ts", "spot", "future", "actual_basis", "fair_basis", "residual",
+            "residual_z", "days_to_expiry", "r_pct", "q_pct", "approx")
+    return [dict(zip(keys, r)) for r in reversed(rows)]
+
+
 def future_oi_series(symbol, day):
     """Futures OI quadrant series for one day, oldest first."""
     c = _conn()
@@ -927,17 +978,94 @@ def prune_ta_calibration(days=10):
     c.commit(); c.close()
 
 
-def prune_chain_snapshots(days=5):
-    """Routine retention — chain snapshots at 60s cadence add up fast
-    (4 symbols x ~42 rows x 1440/min-per-day at 60s interval ≈ 240k
-    rows/day). Keeps `days` days, same order of magnitude as the news-
-    tracker retention pattern elsewhere in this codebase. Not called
-    automatically by this module — a caller (e.g. a daily maintenance
-    cycle) should invoke this periodically."""
-    cutoff = int(time.time()) - days * 86400
+def prune_chain_snapshots(days=None, cfg=None):
+    """Retention for chain_snapshots — THINNING, not deletion.
+
+    v59.0 item 18. This used to hard-delete everything past 5 days. That
+    made two questions permanently unanswerable: repricing the historical
+    replays from real premiums (item 16), and anything about a regime
+    more than a week old — because the evidence was discarded nightly and
+    no amount of later engineering brings it back.
+
+    Measured cost of keeping everything: 13.75 MB per session including
+    indexes, ≈3.4 GB/year. Against a 324 MB database that is material, so
+    the answer is tiering rather than either extreme:
+
+      tier 1  (0 - chain_tier1_days, default 90)   everything, untouched
+      tier 2  (.. chain_tier2_days,  default 730)  thinned to one row per
+              strike/leg per chain_tier2_interval_sec (default 300s)
+      tier 3  (beyond)                             one row per strike/leg
+              per session — the daily close
+
+    WHY 5 MINUTES AND NOT 15. Tier 2 exists to answer item 16, which
+    matches replay entry/exit timestamps against premiums. proxy_error.py
+    matches within +/-3 minutes; a 15-minute grid would introduce a
+    +/-7.5-minute mismatch, and an ATM option moves materially in that
+    window. 15 min would save ~500 MB/year and cost the question this
+    tier is being kept for.
+
+    Steady-state footprint at the defaults: ~850 MB tier 1 + ~1.3 GB
+    tier 2 + ~10 MB/year tier 3.
+
+    Passing an int `days` keeps the old hard-delete behaviour, for
+    callers that genuinely want rows gone.
+
+    Returns a dict of what it did, so the caller can log real numbers
+    rather than "pruned".
+    """
     c = _conn()
-    c.execute("DELETE FROM chain_snapshots WHERE ts < ?", (cutoff,))
-    c.commit(); c.close()
+    try:
+        if days is not None:
+            cutoff = int(time.time()) - int(days) * 86400
+            n = c.execute("DELETE FROM chain_snapshots WHERE ts < ?",
+                          (cutoff,)).rowcount
+            c.commit()
+            return {"mode": "hard_delete", "days": int(days), "deleted": n}
+
+        if cfg is None:
+            import config as _cfg
+            cfg = _cfg.load()
+
+        def _int(key, default, lo, hi):
+            try:
+                v = int(cfg.get(key, default))
+            except (TypeError, ValueError):
+                v = default
+            return max(lo, min(hi, v))
+
+        t1 = _int("chain_tier1_days", 90, 1, 3650)
+        t2 = _int("chain_tier2_days", 730, 1, 36500)
+        step = _int("chain_tier2_interval_sec", 300, 60, 3600)
+        t2 = max(t2, t1)
+        now = int(time.time())
+        c1, c2 = now - t1 * 86400, now - t2 * 86400
+
+        # IST session date, matching how the rest of this module buckets days.
+        day = "date(ts,'unixepoch','+5 hours','+30 minutes')"
+
+        # Tier 2: keep the row nearest each `step`-second bucket boundary.
+        # MIN(ts) per bucket is deterministic and needs no window function,
+        # which matters because the shipped sqlite here is not guaranteed
+        # to have them.
+        t2_del = c.execute(
+            f"DELETE FROM chain_snapshots WHERE ts < ? AND ts >= ? AND ts NOT IN "
+            f"(SELECT MIN(ts) FROM chain_snapshots WHERE ts < ? AND ts >= ? "
+            f" GROUP BY symbol, strike, leg, ts/{step})",
+            (c1, c2, c1, c2)).rowcount
+        c.commit()
+
+        # Tier 3: one row per strike/leg per session — the last of the day.
+        t3_del = c.execute(
+            f"DELETE FROM chain_snapshots WHERE ts < ? AND ts NOT IN "
+            f"(SELECT MAX(ts) FROM chain_snapshots WHERE ts < ? "
+            f" GROUP BY symbol, strike, leg, {day})",
+            (c2, c2)).rowcount
+        c.commit()
+        return {"mode": "tiered", "tier1_days": t1, "tier2_days": t2,
+                "tier2_interval_sec": step,
+                "tier2_thinned": t2_del, "tier3_thinned": t3_del}
+    finally:
+        c.close()
 
 
 DROPPED_OUT_OF_SESSION = {}   # security_id -> count dropped this process

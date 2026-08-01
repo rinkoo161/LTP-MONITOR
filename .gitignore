@@ -1,9 +1,45 @@
 # Broker/LLM credentials — plaintext API keys, never commit.
 # The live copy lives in ~/.ltp-monitor/config.json (see config.py).
+#
+# 2026-08-01 audit: a real config.json — Dhan client id + access token and
+# an Anthropic key — was committed once, in a LOCAL-ONLY commit
+# (a04215f, path "LTP Option chain/ltp-monitor 2/config.json"). It never
+# reached GitHub; confirmed against the API by full SHA, with a known-
+# public commit as the control. The patterns below exist so the next one
+# cannot get as far as that one did.
 config.json
+.env
+.env.*
+*.env
+*_token
+*_token.*
+*_secret
+*_secret.*
+*.pem
+*.key
+credentials*.json
+
+# Runtime/persistent state. Normally ~/.ltp-monitor, outside the repo —
+# but store.py honours LTP_MONITOR_HOME, so it CAN be pointed inside one.
+# Ignored by name so it does not matter where it lands.
+.ltp-monitor/
+history.db
+history.db-wal
+history.db-shm
+journal.json
+open_state.json
+backtests.json
+strategy_versions.json
+activity.log
+macro_events.jsonl
+news_feeds.json
+shadow_signals.jsonl
+fhedge_shadow.jsonl
+auth.json
 
 # macOS / Python / build output
 .DS_Store
 __pycache__/
 *.pyc
 *.zip
+venv/

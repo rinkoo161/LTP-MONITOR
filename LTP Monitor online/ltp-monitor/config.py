@@ -316,6 +316,49 @@ DEFAULTS = {
     # already holding live positions, before any account exists, locks
     # the operator out of their own running system. Create the admin at
     # /setup, enroll the authenticator, THEN turn this on.
+    # ---- futures cost model (v59.0 Phase 0 §3.2) ----
+    # fee_per_lot is a flat per-lot charge — an options-shaped assumption.
+    # Futures STT is a PERCENTAGE OF NOTIONAL: one NIFTY lot at 24,800 is
+    # ₹18.6 lakh of notional and ~₹372 of sell-side STT alone, against a
+    # model charging ₹40 for the whole round trip. is_live_enabled() reads
+    # backtest profitability, so the flat model is a live-promotion risk.
+    # Clamped on READ in futures_costs.rate(), not only on write.
+    # ---- basis residual (v59.0 Phase B §5) ----
+    # The dashboard already shows raw basis, which is mostly cost of carry
+    # and therefore tells you the calendar rather than the positioning.
+    # The residual is the part carry does not explain. q is NOT allowed to
+    # default to zero: NIFTY ex-dates cluster Feb-Aug and a zero
+    # assumption biases the residual the same way every year, so the
+    # estimate below is used and the payload is stamped approx=True.
+    # Real per-index dividend yield (%) over the remaining contract life,
+    # when a calendar is available: {"NIFTY": 1.4, ...}. Empty by default,
+    # which makes basis_residual fall back to the estimate below AND stamp
+    # approx=True. Registered here because config.save() drops unknown
+    # keys silently — without this line the calendar hook was unreachable
+    # and the estimate would have been used forever while looking optional.
+    "index_dividend_calendar": {},
+    # The residual as an optional VETO gate (§5). Default off everywhere:
+    # this ships as an observation first. A per-strategy key wins over the
+    # global one, so "all strategies" is covered without a key per
+    # strategy forever. The gate may only veto — it can never be the
+    # reason a trade happens, nor bypass an existing risk gate.
+    "require_basis_agreement": False,
+    "s11_require_basis_agreement": False,
+    "s12_require_basis_agreement": False,
+    "s13_require_basis_agreement": False,
+    "s14_require_basis_agreement": False,
+    "futures_require_basis_agreement": False,
+
+    "fut_financing_rate_pct": 6.5,
+    "fut_dividend_yield_pct": 1.2,
+    "fut_residual_z_window": 200,
+    "fut_brokerage_per_order": 20.0,
+    "fut_stt_sell_pct": 0.0002,
+    "fut_exchange_txn_pct": 0.0000173,
+    "fut_sebi_turnover_pct": 0.000001,
+    "fut_stamp_duty_pct": 0.00002,
+    "fut_gst_pct": 0.18,
+    "fut_slippage_points": 1.0,
     "auth_enabled": False,
     "auth_require_mfa": True,      # a password alone is not a second factor
     "auth_session_hours": 12,
@@ -382,8 +425,27 @@ DEFAULTS = {
     "rupee_profit_floor_min_rupees_option": 250,             # 15m Tide is a 195-min lookback in a
                                           # 375-min session; see ta_elliott
                                           # .tide_of() for the measurement.
-    # ---- Snapshot retention (v53) ----
+    # ---- Futures delta hedge — SHADOW ONLY (v59.0 Phase D) ----
+    # Nothing here places an order in live OR paper. fhedge_shadow.py
+    # only records what a hedge would have done against the real S5/S6
+    # spreads. 40 sessions of this before paper orders are discussed.
+    "fhedge_shadow_enabled": True,
+    "fhedge_trigger_buffer_pct": 0.10,
+    "fhedge_max_lots": 2,
+    # item 28 — below this parent size a hedge is directional, not risk
+    # reduction. See fhedge_shadow.DEFAULTS for the delta arithmetic.
+    "fhedge_min_parent_lots": 3,
+    # ---- Snapshot retention (v53; tiered in v59.0 item 18) ----
+    # chain_snapshot_retention_days is RETAINED but no longer consulted by
+    # LearningAgent — it was a 5-day hard delete, and it is the reason no
+    # historical premium exists to reprice the replays against. Kept as a
+    # registered key so an explicit call can still hard-delete.
     "chain_snapshot_retention_days": 5,
+    # Tiering: full detail, then 5-minute, then daily close. ~850 MB +
+    # ~1.3 GB steady state; see history.prune_chain_snapshots().
+    "chain_tier1_days": 90,
+    "chain_tier2_days": 730,
+    "chain_tier2_interval_sec": 300,
     # ---- PA strategies auto-deploy list (v55.1) ----
     # Was previously read ONLY via cfg.get("pa_enabled",
     # list(pa.PA_NAMES)) with no registered default and no way to

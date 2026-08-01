@@ -161,11 +161,64 @@ def _clamp_to_current_bounds(name, params):
     return clamped
 
 
+def gate_verdict(name, symbol, versions=None):
+    """(passes, detail) for one strategy/symbol under promotion_gate.
+
+    Split out from is_live_enabled() so the dashboard and the reports can
+    show WHY without re-deriving it — a second derivation is how the
+    quadrant classifier and the market-session check both drifted.
+    """
+    import promotion_gate
+    v = versions if versions is not None else load_versions()
+    entry = (v.get(name, {}).get("symbols", {}) or {}).get(symbol)
+    if not entry:
+        return False, {"reason": "no backtest entry"}
+    m = {}
+    for ver in entry.get("versions") or []:
+        if ver.get("v") == entry.get("active"):
+            m = ver.get("results") or {}
+    return promotion_gate.evaluate_entry(name, symbol, m)
+
+
 def is_live_enabled(name, symbol):
+    """May this strategy send a REAL order?
+
+    v59.0 item 17 (2026-08-01) — this used to be nothing but a read of
+    `live_enabled`, which the learning agent set from
+
+        profitable_now = trades >= min_conf and net_pnl > 0
+
+    A bare sign test on a P&L series carrying a systematic cost bias and
+    an sd of ₹1,143/trade. It promoted 11 of 11 strategies to live; under
+    a margin scaled to both error sources, 0 of 11 clear it, and not one
+    of the eleven reaches t=2 against its own trade variance. So the sign
+    test was not measuring edge — it was measuring noise, and promoting
+    on it.
+
+    The statistical gate is now an ADDITIONAL requirement, ANDed with
+    what was here before. It can only ever withhold live permission,
+    never grant it: a strategy still needs `live_enabled` and no manual
+    disable, exactly as before.
+
+    THIS DOES NOT STOP THE STRATEGIES. Both call sites are guarded by
+    `not cfg["paper_mode"]`, so paper trading is untouched and all eleven
+    keep running and generating the data that will eventually settle the
+    question. Killing them would destroy the only route to an answer.
+    """
     v = load_versions()
     entry = v.get(name, {}).get("symbols", {}).get(symbol)
-    return bool(entry and entry.get("live_enabled") and
-               not entry.get("manually_disabled"))
+    if not (entry and entry.get("live_enabled")
+            and not entry.get("manually_disabled")):
+        return False
+    try:
+        ok, _ = gate_verdict(name, symbol, v)
+    except Exception:
+        # An unavailable gate must not silently re-open live trading.
+        # Failing closed is the only safe direction here, and this is a
+        # deliberate exception to the house rule that a broken auxiliary
+        # never blocks a path.
+        return False
+    return bool(ok)
 
 
 # ------------------------------------------------------------ metrics
@@ -184,6 +237,12 @@ def metrics(trades):
         "wl_ratio": round(len(wins) / max(1, len(losses)), 2),
         "avg_win": round(statistics.mean(wins), 0) if wins else 0,
         "avg_loss": round(statistics.mean(losses), 0) if losses else 0,
+        # v59.0 item 17 — the promotion gate needs the strategy's OWN
+        # per-trade dispersion, and it must be the real thing. Derived
+        # from win_rate/avg_win/avg_loss it is a LOWER bound (it ignores
+        # dispersion inside each bucket), which would make every gate
+        # decision optimistic in exactly the direction that promotes.
+        "pnl_sd": round(statistics.pstdev(pnls), 0) if len(pnls) > 1 else 0.0,
         "max_win": round(max(pnls), 0),
         "max_loss": round(min(pnls), 0),
         "avg_risk_per_trade": round(statistics.mean(
@@ -588,6 +647,24 @@ def _replay_for(name, symbol, params, days=None):
     if name == "ta_elliott":
         return replay_ta_elliott(symbol, params=params, days=days)
     return replay_pa(symbol, name, params=params, days=days)
+
+
+def replay_futures(symbol, name, params=None, days=None, log=lambda m: None):
+    """Futures replay, following the replay_* convention so _replay_for()
+    and sweep_params() can reach it.
+
+    Delegates to futures_replay.py — the research harness lives outside
+    this module because this module drives is_live_enabled(), and Phase A
+    produces no live path. Uses the notional cost model, never
+    fee_per_lot: Phase 0 measured the flat model understating futures
+    cost ~10x, and it charged 40 real trades exactly zero.
+    """
+    import futures_costs
+    import futures_replay as fr
+    warn = futures_costs.warn_if_flat_cost_model(log=log)
+    if warn:
+        log("  (futures replay uses the notional model regardless)")
+    return fr.replay_futures(symbol, name, params, days, log)
 
 
 def warn_if_costs_disabled(log=lambda m: None):

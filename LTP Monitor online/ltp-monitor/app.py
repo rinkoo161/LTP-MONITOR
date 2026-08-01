@@ -25,7 +25,7 @@ from agents import Orchestrator, compute_momentum
 import agents
 
 BASE = os.path.dirname(os.path.abspath(__file__))
-APP_VERSION = "v58.76"   # maintained per explicit request; last delivered was v49
+APP_VERSION = "v59.0"   # maintained per explicit request; last delivered was v49
 
 app = FastAPI(title="LTP Option Chain Monitor")
 
@@ -764,6 +764,26 @@ class SettingsIn(BaseModel):
     # at all, which is how `auth_enabled` would have been unreachable
     # from the UI that is supposed to switch it on. Caught by
     # test_settings_model_sync, which exists for exactly this.
+    # v59.0 §3.2 — registered here as well as in DEFAULTS, or config.save()
+    # drops them silently and the cost model stays on its defaults forever.
+    index_dividend_calendar: dict | None = None
+    require_basis_agreement: bool | None = None
+    s11_require_basis_agreement: bool | None = None
+    s12_require_basis_agreement: bool | None = None
+    s13_require_basis_agreement: bool | None = None
+    s14_require_basis_agreement: bool | None = None
+    futures_require_basis_agreement: bool | None = None
+
+    fut_financing_rate_pct: float | None = None
+    fut_dividend_yield_pct: float | None = None
+    fut_residual_z_window: int | None = None
+    fut_brokerage_per_order: float | None = None
+    fut_stt_sell_pct: float | None = None
+    fut_exchange_txn_pct: float | None = None
+    fut_sebi_turnover_pct: float | None = None
+    fut_stamp_duty_pct: float | None = None
+    fut_gst_pct: float | None = None
+    fut_slippage_points: float | None = None
     auth_enabled: bool | None = None
     auth_require_mfa: bool | None = None
     auth_session_hours: float | None = None
@@ -811,7 +831,18 @@ class SettingsIn(BaseModel):
     futures_defense_tighten_pct: float | None = None
     margin_per_lot_future: int | None = None
     futures_live_enabled: bool | None = None
+    # v59.0 Phase D — shadow only, no orders in live or paper.
+    fhedge_shadow_enabled: bool | None = None
+    fhedge_trigger_buffer_pct: float | None = None
+    fhedge_max_lots: int | None = None
+    fhedge_min_parent_lots: int | None = None
     chain_snapshot_retention_days: int | None = None
+    # v59.0 item 18 — tiered chain retention. See
+    # history.prune_chain_snapshots(); tier 2's interval is what decides
+    # whether replay timestamps can still be matched to a premium.
+    chain_tier1_days: int | None = None
+    chain_tier2_days: int | None = None
+    chain_tier2_interval_sec: int | None = None
     chain_snapshot_interval_sec: int | None = None
     chart_history_days_1m: int | None = None
     chart_history_days_5m: int | None = None

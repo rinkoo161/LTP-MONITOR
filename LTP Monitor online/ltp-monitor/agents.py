@@ -1225,7 +1225,7 @@ class MarketDataAgent(Agent):
         # too. Fixed: OHLC/LTP tracking now runs whenever LTP alone is
         # present; only the OI-buildup classification below still
         # requires OI specifically.
-        self._update_future_ohlc(sym, ltp, today, tick.get("volume"))
+        self._update_future_ohlc(sym, ltp, today, tick.get("volume"), tick)
         if oi is None:
             return
         baselines = getattr(self, "_future_baseline", None)
@@ -1287,7 +1287,7 @@ class MarketDataAgent(Agent):
                      {"ltp": ltp, "oi": oi, "baseline_ltp": b["ltp"],
                       "baseline_oi": b["oi"]})
 
-    def _update_future_ohlc(self, sym, ltp, today, cum_volume=None):
+    def _update_future_ohlc(self, sym, ltp, today, cum_volume=None, tick=None):
         """Session OHLC + a VWAP proxy for the future, extending the
         existing futures tick pipeline (LTP Monitor enhancement,
         feature #1) — reuses the exact same tick data
@@ -1345,6 +1345,117 @@ class MarketDataAgent(Agent):
 
         if cum_volume is not None:
             self._build_volume_candle(sym, cum_volume)
+        self._record_basis_residual(sym, ltp)
+        self._archive_futures_candle(sym, ltp, cum_volume, tick)
+
+    def _archive_futures_candle(self, sym, ltp, cum_volume, tick=None):
+        """Persist a real per-minute FUTURES OHLCV+OI candle.
+
+        v59.0 item 4, and the gating dependency for any futures re-test.
+        Phase A had to drive every strategy with INDEX candles because
+        futures prices were never archived — only volume, and only for 5
+        sessions. So no Phase A result ran on the instrument itself, and
+        none can until this series exists.
+
+        Starts today and builds forward; the first valid re-test window
+        opens once enough sessions accumulate. Writes o/h/l/c/v/oi in ONE
+        row via upsert_candles, rather than layering an OHLC write over
+        upsert_volume_history's v-only row — a naive REPLACE there would
+        null the volume the other writer had just stored.
+
+        `session_only` stays default True: an out-of-hours futures bar is
+        the same keepalive contamination the v58.71 write gate exists to
+        refuse.
+        """
+        now = time.time()
+        bucket = int(now // 60) * 60
+        st = getattr(self, "_fut_candle_state", None)
+        if st is None:
+            st = {}
+            self._fut_candle_state = st
+        oi = None
+        if isinstance(tick, dict):
+            for k in ("oi", "openInterest", "open_interest", "OI"):
+                if tick.get(k) is not None:
+                    oi = tick.get(k)
+                    break
+        cur = st.get(sym)
+        if cur is None or cur["bucket"] != bucket:
+            if cur is not None:
+                try:
+                    import history as _h
+                    n = _h.upsert_candles(f"{sym}_FUT_1m", [{
+                        "ts": cur["bucket"], "o": cur["o"], "h": cur["h"],
+                        "l": cur["l"], "c": cur["c"],
+                        "v": (max(0, cur["last_cum"] - cur["start_cum"])
+                              if cur["start_cum"] is not None
+                              and cur["last_cum"] is not None else None),
+                        "oi": cur["oi"]}])
+                    if n and not getattr(self, "_fut_archive_announced", False):
+                        self._fut_archive_announced = True
+                        self.bus.log(self.name,
+                                     f"futures OHLCV+OI archive ACTIVE for {sym} "
+                                     f"— first bar {now_ist().strftime('%Y-%m-%d %H:%M')}. "
+                                     f"Phase A could not run on the instrument; "
+                                     f"this is what makes a re-test possible.")
+                except Exception as e:
+                    if should_log_throttled(self, "_fut_arch_fail", sym,
+                                            f"{type(e).__name__}: {e}"):
+                        self.bus.log(self.name,
+                                     f"⚠ {sym}: futures candle archive FAILED "
+                                     f"({type(e).__name__}: {e})")
+            st[sym] = {"bucket": bucket, "o": ltp, "h": ltp, "l": ltp,
+                       "c": ltp, "oi": oi,
+                       "start_cum": cum_volume, "last_cum": cum_volume}
+            return
+        cur["h"] = max(cur["h"], ltp)
+        cur["l"] = min(cur["l"], ltp)
+        cur["c"] = ltp
+        if oi is not None:
+            cur["oi"] = oi
+        if cum_volume is not None:
+            cur["last_cum"] = cum_volume
+
+    def _record_basis_residual(self, sym, fut_ltp):
+        """One basis-residual observation per futures tick cycle.
+
+        v59.0 Phase B §5. Deliberately hangs off the EXISTING futures
+        tick path rather than adding a poll loop of its own — the Dhan
+        pacing that path already respects is the whole reason it is
+        safe to call this often.
+
+        Failures are reported, not swallowed: this series is the evidence
+        base for the residual signal exactly as the shadow journal is for
+        the strategies, and Phase 0 spent a day proving that a silently
+        missing table looks identical to a feature that was never wired.
+        """
+        try:
+            import basis_residual as br
+            import history as _h
+            spot = (self.bus.get(f"analysis:{sym}") or {}).get("spot")
+            if not spot or not fut_ltp:
+                return
+            exp = self.bus.get(f"future_expiry:{sym}")
+            if not exp:
+                return
+            if hasattr(exp, "date"):
+                dte = (exp.date() - now_ist().date()).days
+            else:
+                import datetime as _dt
+                dte = (_dt.date.fromisoformat(str(exp)[:10]) - now_ist().date()).days
+            hist = [r["residual"] for r in _h.basis_residual_series(sym, 1000)]
+            obs = br.compute(sym, spot, fut_ltp, max(0, dte), hist)
+            self.bus.set(f"basis_residual:{sym}", obs)
+            _h.log_basis_residual(sym, time.time(), obs["spot"], obs["future"],
+                                  obs["actual_basis"], obs["fair_basis"],
+                                  obs["residual"], obs["residual_z"],
+                                  obs["days_to_expiry"], obs["r_pct"],
+                                  obs["q_pct"], obs["approx"])
+        except Exception as e:
+            if should_log_throttled(self, "_basis_fail", sym,
+                                    f"{type(e).__name__}: {e}"):
+                self.bus.log(self.name, f"⚠ {sym}: basis residual FAILED "
+                                        f"({type(e).__name__}: {e})")
 
     def _build_volume_candle(self, sym, cum_volume, now=None):
         """Builds a real per-minute traded-volume series from the
@@ -2680,6 +2791,11 @@ class StrategyAgent(Agent):
 SHADOW_PATH = store.path("shadow_signals.jsonl")
 
 
+# v59.0 — counts journal rows lost to OS errors. A single mutable cell so
+# the count survives across calls without a module-level global rebind.
+_shadow_write_failures = [0]
+
+
 def log_futures_shadow(bus, sym, side, gates, taken, why=None, ltp=None,
                        lots=None, stop=None, target=None):
     """Shadow-journal every futures EVALUATION, taken or not.
@@ -2712,12 +2828,48 @@ def log_futures_shadow(bus, sym, side, gates, taken, why=None, ltp=None,
         "why": why,
         "resolution": "taken" if taken else "pending",
     }
+    # v59.0 Phase 0 §3.3 — this was `except Exception: pass`.
+    #
+    # The shadow journal is the evidence base for the entire futures
+    # research project: it is how "was the gate right to block that?"
+    # gets answered, and 142 of 183 evaluations recorded so far are
+    # REJECTED signals that exist nowhere else. Silently dropping an
+    # entry does not degrade the analysis, it biases it — the entries
+    # most likely to fail a write (disk full, permissions, a serialisation
+    # error on an unusual gate value) are not a random sample.
+    #
+    # A journal that loses rows without saying so is worse than no
+    # journal, because it still looks complete. Transient OS errors are
+    # surfaced on the bus and counted; a programming error (TypeError
+    # from a non-serialisable gate value) propagates per the fail-loud
+    # rule.
+    # Serialisation is a PROGRAMMING error and must propagate. I/O is an
+    # environment error and must be reported without killing the trading
+    # loop — so os.makedirs belongs with the I/O, not with the encoding.
+    # It was originally in the block below and a permissions failure
+    # escaped uncaught, which the test caught: fail-loud must still mean
+    # survivable for the caller that is holding a position.
+    try:
+        line = json.dumps(entry)
+    except (TypeError, ValueError) as e:
+        raise TypeError(
+            f"futures shadow entry is not serialisable ({type(e).__name__}: {e}) "
+            f"— gates={gates!r}. Fix the caller; do not drop the record.") from e
     try:
         os.makedirs(os.path.dirname(SHADOW_PATH), exist_ok=True)
         with open(SHADOW_PATH, "a") as f:
-            f.write(json.dumps(entry) + "\n")
-    except Exception:
-        pass
+            f.write(line + "\n")
+    except OSError as e:
+        _shadow_write_failures[0] += 1
+        msg = (f"⚠ futures shadow journal WRITE FAILED "
+               f"({type(e).__name__}: {e}) — {_shadow_write_failures[0]} lost "
+               f"so far. The journal is the evidence base for futures "
+               f"research; it is now incomplete.")
+        try:
+            bus.log("shadow", msg)
+            bus.alert("high", "shadow", sym or "", "futures journal write failed")
+        except Exception:
+            print("  " + msg)
     return entry
 
 
@@ -3010,6 +3162,26 @@ class RiskAgent(Agent):
                     check(True, f"⚠ matches an underperforming pattern from the "
                                f"learning journal ({match['win_rate']}% win rate, "
                                f"n={match['sample_size']}) — confidence -{penalty}")
+        # v59.0 item 9 — basis residual gate. DEFAULT OFF, its own change,
+        # separate from Phase D. A VETO only: `basis_residual.agrees()`
+        # returns True whenever it has no opinion (no z yet, or inside the
+        # band), so this can never be the reason a trade happens — only a
+        # reason one does not. It sits alongside the existing gates rather
+        # than bypassing any of them.
+        if True:
+            import basis_residual as _br
+            _obs = self.bus.get(f"basis_residual:{job.get('symbol')}") or {}
+            _side = "LONG" if (sig.get("type") or "").upper().startswith("C") \
+                else ("SHORT" if (sig.get("type") or "").upper().startswith("P")
+                      else None)
+            _skey = (sig.get("strategy") or "signal").lower()
+            _ok, _why = _br.gate_for(_skey, _side, _obs.get("residual_z"), cfg)
+            if not _ok:
+                check(False, _why)
+            elif _obs.get("residual_z") is not None and cfg.get(
+                    f"{_skey}_require_basis_agreement",
+                    cfg.get("require_basis_agreement", False)):
+                check(True, _why)
         check(sig["confidence"] >= cfg["min_confidence"],
               f"confidence {sig['confidence']}≥{cfg['min_confidence']}")
         check(sig.get("entry", 0) > 0 and sig.get("stoploss", 0) > 0,
@@ -4458,10 +4630,143 @@ class ExecutionAgent(Agent):
                 reason = "market closing — squaring off spread"
             spreads[sid] = sp
             self.bus.set("spreads", spreads)
+            # v59.0 Phase D — SHADOW ONLY. Observes what a delta hedge
+            # would have done against this real spread. Placed here, at
+            # the end of the cycle, so `reason` is already decided and
+            # the parent-close case can be measured rather than guessed.
+            # Wrapped because an observer must never be able to stop a
+            # spread from exiting.
+            try:
+                self._fhedge_observe(sp, sid, spot, chain, cfg, reason)
+            except Exception as e:
+                why = f"⚠ hedge shadow failed: {type(e).__name__}: {e}"
+                if should_log_throttled(self, "_fhedge_warn", "err", why):
+                    self.bus.log(self.name, why)
             if reason:
                 self.exit_spread(sid, reason)
             else:
                 self._spread_ai_check(sp, chain)
+
+    def _fhedge_observe(self, sp, sid, spot, chain, cfg, parent_reason):
+        """Record what the futures delta hedge WOULD have done. No orders.
+
+        v59.0 Phase D. Reads the live spread; writes only to the shadow
+        journal. `futures_strategy_enabled` and `futures_live_enabled`
+        are irrelevant here because nothing is placed either way — but
+        the module is still gated on its own switch so it can be turned
+        off without touching spread logic.
+        """
+        import fhedge_shadow as fh
+        if not cfg.get("fhedge_shadow_enabled", True):
+            return
+        state = getattr(self, "_fhedge_state", None)
+        if state is None:
+            state = self._fhedge_state = {}
+        cur = state.get(sid)
+
+        exp = (chain or {}).get("expiry")
+        dte = None
+        if exp:
+            try:
+                import datetime as _dt
+                dte = (_dt.date.fromisoformat(str(exp)[:10])
+                       - now_ist().date()).days
+            except (ValueError, TypeError):
+                dte = None
+        buf = fh.buffer_points(sp, cfg)
+        bp = fh.breach_points(sp, spot)
+        unwound, unwind_why, margin = fh.would_unwind(sp, spot, cfg)
+
+        base = {"sid": sid, "symbol": sp.get("symbol"),
+                "strategy": sp.get("strategy"), "spot": spot,
+                "short_strike": sp.get("short_strike"),
+                "breach_pts": (round(bp, 2) if bp is not None else None),
+                "buffer_pts": round(buf, 2)}
+
+        # --- the parent closed: the dangerous case ----------------------
+        if parent_reason:
+            if cur:
+                rec = dict(base, event="parent_close", hedge_active=True,
+                           parent_reason=parent_reason,
+                           hedge_lots=cur.get("lots"),
+                           opened_ts=cur.get("opened_ts"),
+                           held_seconds=round(time.time() - cur.get("opened_ts", 0)),
+                           independently_unwound=unwound,
+                           independent_reason=unwind_why,
+                           # The invariant: the hedge closes in the SAME
+                           # cycle the parent does. In shadow that is
+                           # true by construction — this field exists so
+                           # the journal proves it per cycle rather than
+                           # asserting it once in a test.
+                           hedge_closed_same_cycle=True,
+                           margin=margin)
+                fh.write(rec)
+                if not unwound:
+                    # The forced-close rule was the ONLY thing preventing
+                    # a naked future in this cycle. Say so out loud.
+                    gap = margin.get("reclaim_gap_pts")
+                    self.bus.log(self.name,
+                                 f"[hedge shadow] {sp.get('symbol')} {sid}: parent "
+                                 f"closed ({parent_reason}) with hedge OPEN "
+                                 f"{cur.get('lots')} lots — would NOT have unwound "
+                                 f"on its own (still {gap}pts from reclaim, "
+                                 f"{margin.get('minutes_to_eod')}m to EOD). Forced "
+                                 f"close is load-bearing here.")
+                state.pop(sid, None)
+            else:
+                fh.write(dict(base, event="parent_close", hedge_active=False,
+                              parent_reason=parent_reason, margin=margin))
+            return
+
+        # --- unwind on its own rules ------------------------------------
+        if cur:
+            if unwound:
+                fh.write(dict(base, event="unwind", reason=unwind_why,
+                              hedge_lots=cur.get("lots"),
+                              opened_ts=cur.get("opened_ts"),
+                              held_seconds=round(time.time() - cur.get("opened_ts", 0)),
+                              margin=margin))
+                state.pop(sid, None)
+            return
+
+        # --- trigger ----------------------------------------------------
+        if bp is None or bp < buf:
+            return                       # not breached past the buffer
+        # v59.0 item 28 — a hedge on a spread too small to need one is a
+        # directional futures position, not risk reduction. Checked BEFORE
+        # the delta solve so the journal records the refusal explicitly
+        # rather than showing nothing at all.
+        _psz_ok, _psz_why = fh.parent_lots_ok(sp, cfg)
+        if not _psz_ok:
+            fh.write(dict(base, event="trigger_blocked",
+                          parent_lots=sp.get("lots"), why=_psz_why))
+            return
+        nd = fh.net_delta(sp, spot, chain, cfg, dte)
+        lot = (cfg.get("lot_sizes") or {}).get(sp.get("symbol"), 0)
+        if nd is None:
+            # Refuse to size off a delta nobody computed. Logged, not
+            # silently skipped — an empty journal must never be able to
+            # mean "IV would not solve".
+            fh.write(dict(base, event="trigger_blocked", dte=dte,
+                          why="net delta unavailable (IV did not solve)"))
+            return
+        lots, capped, ratio = fh.hedge_lots(nd, lot, cfg)
+        if lots < 1:
+            fh.write(dict(base, event="trigger_blocked", net_delta=round(nd, 1),
+                          over_hedge_ratio=ratio, parent_lots=sp.get("lots"),
+                          why=f"delta {nd:.0f} < 1 lot ({lot}) — floored to zero"))
+            return
+        side = "SHORT" if nd > 0 else "LONG"
+        state[sid] = {"lots": lots, "side": side, "opened_ts": time.time()}
+        fh.write(dict(base, event="trigger", net_delta=round(nd, 1),
+                      hedge_side=side, hedge_lots=lots, lot_size=lot,
+                      over_hedge_ratio=ratio, parent_lots=sp.get("lots"),
+                      capped=capped, dte=dte, margin=margin))
+        self.bus.log(self.name,
+                     f"[hedge shadow] {sp.get('symbol')} {sp.get('strategy')}: spot "
+                     f"{spot:.0f} breached short strike {sp.get('short_strike'):.0f} "
+                     f"by {bp:.0f}pts — WOULD hedge {side} {lots} lot(s) "
+                     f"(net delta {nd:.0f}). Nothing placed.")
 
     def _market_move_context(self, sym):
         """2026-07-28 — per explicit request: AI advisories for open
@@ -5157,14 +5462,19 @@ class LearningAgent(Agent):
         if self.bus.get("chain_prune_done") != today:
             try:
                 import history
-                days = config.load().get("chain_snapshot_retention_days", 5)
-                history.prune_chain_snapshots(days)
+                # v59.0 item 18 — this passed a 5-day retention and hard-
+                # deleted everything older. That is why the September 2025
+                # question and item 16 (repricing the replays from real
+                # premiums) are both unanswerable today: the premiums were
+                # thrown away nightly. Now tiered — full for 90 days, 5-min
+                # thereafter, daily close past 2 years. Argument-free call
+                # so retention lives in one place, in history.py.
+                res = history.prune_chain_snapshots()
                 # v58.32 - same daily maintenance slot; see
                 # history.prune_ta_calibration() for the sizing note.
                 history.prune_ta_calibration(config.load().get('ta_calibration_retention_days', 10))
                 self.bus.set("chain_prune_done", today)
-                self.bus.log(self.name, f"chain_snapshots pruned "
-                             f"(keeping {days} days)")
+                self.bus.log(self.name, f"chain_snapshots retention: {res}")
             except Exception as e:
                 # Fail loud, not silent — same convention as every other
                 # maintenance task in this codebase. A failed prune

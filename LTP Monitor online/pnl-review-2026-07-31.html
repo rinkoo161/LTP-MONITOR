@@ -1,0 +1,375 @@
+<meta charset="utf-8">
+<title>LTP Monitor — P&L review, 12 sessions to 31 Jul 2026</title>
+<style>
+  .viz-root {
+    color-scheme: light;
+    --surface-1: #fcfcfb;
+    --plane: #f9f9f7;
+    --text-primary: #0b0b0b;
+    --text-secondary: #52514e;
+    --muted: #898781;
+    --grid: #e1e0d9;
+    --baseline: #c3c2b7;
+    --border: rgba(11,11,11,0.10);
+    --profit: #2a78d6;
+    --loss: #e34948;
+    --loss-soft: #f0a3a2;
+    --font: system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) .viz-root {
+      color-scheme: dark;
+      --surface-1: #1a1a19; --plane: #0d0d0d;
+      --text-primary: #ffffff; --text-secondary: #c3c2b7; --muted: #898781;
+      --grid: #2c2c2a; --baseline: #383835; --border: rgba(255,255,255,0.10);
+      --profit: #3987e5; --loss: #e66767; --loss-soft: #8a3b3b;
+    }
+  }
+  :root[data-theme="dark"] .viz-root {
+    color-scheme: dark;
+    --surface-1: #1a1a19; --plane: #0d0d0d;
+    --text-primary: #ffffff; --text-secondary: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --baseline: #383835; --border: rgba(255,255,255,0.10);
+    --profit: #3987e5; --loss: #e66767; --loss-soft: #8a3b3b;
+  }
+
+  .viz-root { background: var(--plane); color: var(--text-primary);
+    font-family: var(--font); line-height: 1.5; padding: 32px 20px 64px;
+    max-width: 1040px; margin: 0 auto; }
+  h1 { font-size: 20px; font-weight: 600; margin: 0 0 4px; letter-spacing: -0.01em; }
+  .sub { color: var(--text-secondary); font-size: 13px; margin: 0 0 28px; }
+  .card { background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 10px; padding: 20px 22px; margin-bottom: 18px; }
+  .card > h2 { font-size: 14px; font-weight: 600; margin: 0 0 2px; }
+  .card > .note { font-size: 12.5px; color: var(--text-secondary); margin: 0 0 16px; }
+
+  .hero-wrap { display: flex; flex-wrap: wrap; gap: 28px; align-items: flex-end; }
+  .hero { font-size: 52px; font-weight: 600; letter-spacing: -0.02em;
+    color: var(--loss); line-height: 1; }
+  .hero-label { font-size: 12.5px; color: var(--text-secondary); margin-top: 6px; }
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+    gap: 14px; margin-top: 20px; }
+  .kpi { border-left: 2px solid var(--border); padding-left: 12px; }
+  .kpi .k-label { font-size: 11.5px; color: var(--text-secondary); }
+  .kpi .k-val { font-size: 22px; font-weight: 600; margin-top: 2px; }
+
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; margin: 0 0 12px;
+    font-size: 12px; color: var(--text-secondary); }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .swatch { width: 11px; height: 11px; border-radius: 2px; display: inline-block; }
+  .keyline { width: 14px; height: 2px; border-radius: 1px; display: inline-block; }
+
+  .scroller { overflow-x: auto; }
+  svg { display: block; max-width: 100%; }
+  .tick { font-size: 11px; fill: var(--muted); font-variant-numeric: tabular-nums; }
+  .dlabel { font-size: 11.5px; font-weight: 600; fill: var(--text-primary); }
+  .rowlabel { font-size: 12px; fill: var(--text-secondary); }
+  .bar { cursor: pointer; }
+  .bar:focus { outline: none; }
+  .hit { fill: transparent; cursor: pointer; }
+  .hit:focus { outline: 2px solid var(--text-primary); outline-offset: 1px; }
+
+  .tip { position: fixed; z-index: 20; pointer-events: none; opacity: 0;
+    transition: opacity .1s; background: var(--surface-1); color: var(--text-primary);
+    border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px;
+    font-size: 12px; box-shadow: 0 4px 14px rgba(0,0,0,.16); max-width: 260px; }
+  .tip .t-val { font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .tip .t-lab { color: var(--text-secondary); font-size: 11.5px; }
+  .tip .t-row { display: flex; align-items: center; gap: 6px; margin-top: 3px; }
+
+  table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+  th, td { text-align: right; padding: 5px 8px; border-bottom: 1px solid var(--grid);
+    font-variant-numeric: tabular-nums; }
+  th:first-child, td:first-child { text-align: left; font-variant-numeric: normal; }
+  th { color: var(--text-secondary); font-weight: 500; }
+  details { margin-top: 6px; }
+  summary { cursor: pointer; font-size: 12.5px; color: var(--text-secondary); }
+  .takeaway { font-size: 13px; color: var(--text-secondary); margin: 14px 0 0;
+    padding-left: 12px; border-left: 2px solid var(--loss); }
+</style>
+
+<div class="viz-root">
+  <h1>LTP Monitor — P&amp;L review</h1>
+  <p class="sub">252 closed trades across 12 sessions, 16 Jul – 31 Jul 2026. Paper mode. Source: <code>trades.jsonl</code>.</p>
+
+  <div class="card">
+    <div class="hero-wrap">
+      <div>
+        <div class="hero" id="heroVal">−₹80,373</div>
+        <div class="hero-label">Net across all 252 closed trades</div>
+      </div>
+    </div>
+    <div class="kpis">
+      <div class="kpi"><div class="k-label">Win rate</div><div class="k-val">44%</div></div>
+      <div class="kpi"><div class="k-label">Worst session (30 Jul)</div><div class="k-val" style="color:var(--loss)">−₹74,523</div></div>
+      <div class="kpi"><div class="k-label">Futures share of that day</div><div class="k-val">98%</div></div>
+      <div class="kpi"><div class="k-label">Fees paid</div><div class="k-val">₹16,860</div></div>
+    </div>
+    <p class="takeaway"><strong>44% of trades win, yet the account is down ₹80,373.</strong> The problem is not hit rate — it is the size of the losses, and they are concentrated in one instrument on one day.</p>
+  </div>
+
+  <div class="card">
+    <h2>P&amp;L by session</h2>
+    <p class="note">One column per trading day. 30 July alone erased every other session combined.</p>
+    <div class="legend">
+      <span><i class="swatch" style="background:var(--profit)"></i>Profitable session</span>
+      <span><i class="swatch" style="background:var(--loss)"></i>Losing session</span>
+    </div>
+    <div class="scroller"><svg id="daily" role="img" aria-label="Daily profit and loss column chart, 12 sessions"></svg></div>
+    <details>
+      <summary>Table view</summary>
+      <table id="dailyTable"><thead><tr><th>Session</th><th>Trades</th><th>Wins</th><th>Fees</th><th>Net P&amp;L</th></tr></thead><tbody></tbody></table>
+    </details>
+  </div>
+
+  <div class="card">
+    <h2>Where 30 July went</h2>
+    <p class="note">The same session split by instrument. The spread book was profitable; futures lost the entire amount.</p>
+    <div class="scroller"><svg id="attr" role="img" aria-label="30 July profit and loss by instrument"></svg></div>
+  </div>
+
+  <div class="card">
+    <h2>The same trades under a ₹2,500 per-trade risk cap</h2>
+    <p class="note">Three of the 19 futures trades record a recoverable stop price. Each dot pair shows the loss as taken and as the cap would have sized it.</p>
+    <div class="legend">
+      <span><i class="swatch" style="background:var(--loss)"></i>As taken</span>
+      <span><i class="swatch" style="background:var(--loss-soft)"></i>Under the ₹2,500 cap</span>
+      <span><i class="keyline" style="background:var(--baseline)"></i>Reduction</span>
+    </div>
+    <div class="scroller"><svg id="cap" role="img" aria-label="Actual versus capped loss per trade"></svg></div>
+    <p class="takeaway">Those three trades cost <strong>₹36,942</strong>. Sized to the cap already in the config, they cost <strong>₹6,240</strong>.</p>
+  </div>
+</div>
+
+<div class="tip" id="tip" role="status" aria-live="polite"></div>
+
+<script>
+(function () {
+  const DAILY = [
+    {d:"2026-07-16", pnl:-2751,  n:7,  wins:3,  fees:0},
+    {d:"2026-07-17", pnl:-2171,  n:8,  wins:3,  fees:1120},
+    {d:"2026-07-20", pnl:-2010,  n:3,  wins:0,  fees:960},
+    {d:"2026-07-21", pnl:-355,   n:2,  wins:0,  fees:320},
+    {d:"2026-07-22", pnl:525,    n:11, wins:7,  fees:0},
+    {d:"2026-07-23", pnl:959,    n:45, wins:19, fees:1680},
+    {d:"2026-07-24", pnl:-2087,  n:47, wins:32, fees:0},
+    {d:"2026-07-27", pnl:-13464, n:47, wins:18, fees:0},
+    {d:"2026-07-28", pnl:-7046,  n:16, wins:7,  fees:0},
+    {d:"2026-07-29", pnl:24429,  n:31, wins:13, fees:600},
+    {d:"2026-07-30", pnl:-74523, n:32, wins:7,  fees:10980},
+    {d:"2026-07-31", pnl:-1879,  n:3,  wins:1,  fees:1200}
+  ];
+  const ATTR = [
+    {label:"Futures",       n:19, pnl:-73115},
+    {label:"Options (1 PE)", n:1,  pnl:-2610},
+    {label:"Spreads",       n:12, pnl:1202}
+  ];
+  const CAP = [
+    {label:"BANKNIFTY · 8 lots", actual:-18240, capped:-2280, note:"71.2pt stop × 30 = ₹2,135/lot → 1 lot allowed"},
+    {label:"FINNIFTY · 4 lots",  actual:-15840, capped:-3960, note:"31.2pt stop × 65 = ₹2,030/lot → 1 lot allowed"},
+    {label:"FINNIFTY · 1 lot",   actual:-2862,  capped:0,     note:"39.0pt stop × 65 = ₹2,533/lot → refused outright"}
+  ];
+
+  const NS = "http://www.w3.org/2000/svg";
+  const el = (n, a) => { const e = document.createElementNS(NS, n);
+    for (const k in (a||{})) e.setAttribute(k, a[k]); return e; };
+  const rupee = v => (v < 0 ? "−₹" : "₹") + Math.abs(Math.round(v)).toLocaleString("en-IN");
+  const shortDate = s => { const [ , m, d] = s.split("-");
+    return d + " " + ["","Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][+m]; };
+
+  // ---- tooltip (textContent only; labels are untrusted) ----
+  const tip = document.getElementById("tip");
+  function showTip(evt, rows) {
+    tip.textContent = "";
+    rows.forEach((r, i) => {
+      if (i === 0) { const v = document.createElement("div");
+        v.className = "t-val"; v.textContent = r.value; tip.appendChild(v);
+        const l = document.createElement("div"); l.className = "t-lab";
+        l.textContent = r.label; tip.appendChild(l); return; }
+      const row = document.createElement("div"); row.className = "t-row";
+      if (r.color) { const k = document.createElement("i"); k.className = "keyline";
+        k.style.background = r.color; row.appendChild(k); }
+      const t = document.createElement("span"); t.className = "t-lab";
+      t.textContent = r.label + (r.value ? " — " + r.value : ""); row.appendChild(t);
+      tip.appendChild(row);
+    });
+    tip.style.opacity = "1";
+    const box = evt.target.getBoundingClientRect();
+    const x = Math.min(window.innerWidth - 275, box.left + box.width / 2 - 60);
+    const y = Math.max(8, box.top - tip.offsetHeight - 10);
+    tip.style.left = x + "px"; tip.style.top = y + "px";
+  }
+  const hideTip = () => { tip.style.opacity = "0"; };
+
+  function wire(node, rows) {
+    node.setAttribute("tabindex", "0");
+    node.addEventListener("pointerenter", e => showTip(e, rows));
+    node.addEventListener("focus", e => showTip(e, rows));
+    node.addEventListener("pointerleave", hideTip);
+    node.addEventListener("blur", hideTip);
+  }
+
+  // A bar with a 4px rounded data-end and a square baseline end.
+  function bar(x, y, w, h, color, down) {
+    const g = el("g");
+    const r = Math.min(4, h);
+    g.appendChild(el("rect", {x, y, width: w, height: h, rx: r, fill: color}));
+    // square off the baseline end by overpainting the rounded corners there
+    if (h > r) g.appendChild(el("rect", {
+      x, y: down ? y : y + h - r, width: w, height: r, fill: color}));
+    return g;
+  }
+
+  // ================= chart 1: diverging columns =================
+  (function daily() {
+    const svg = document.getElementById("daily");
+    const W = Math.max(660, DAILY.length * 56), H = 300;
+    const m = {t: 26, r: 16, b: 34, l: 62};
+    const iw = W - m.l - m.r, ih = H - m.t - m.b;
+    svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+    svg.setAttribute("width", W); svg.setAttribute("height", H);
+
+    const max = 80000, min = -80000;
+    const y = v => m.t + ih * (max - v) / (max - min);
+    [80000, 40000, 0, -40000, -80000].forEach(v => {
+      const yy = y(v);
+      svg.appendChild(el("line", {x1: m.l, x2: m.l + iw, y1: yy, y2: yy,
+        stroke: v === 0 ? "var(--baseline)" : "var(--grid)", "stroke-width": 1}));
+      const t = el("text", {x: m.l - 10, y: yy + 4, "text-anchor": "end", class: "tick"});
+      t.textContent = (v / 1000) + "k"; svg.appendChild(t);
+    });
+
+    const band = iw / DAILY.length, bw = Math.min(24, band - 14);
+    DAILY.forEach((r, i) => {
+      const cx = m.l + band * i + band / 2, x = cx - bw / 2;
+      const zero = y(0), yv = y(r.pnl);
+      const h = Math.max(2, Math.abs(yv - zero));
+      const down = r.pnl < 0;
+      const color = down ? "var(--loss)" : "var(--profit)";
+      const g = bar(x, down ? zero : yv, bw, h, color, down);
+      g.setAttribute("class", "bar");
+      svg.appendChild(g);
+
+      const hit = el("rect", {x: cx - band / 2, y: m.t, width: band, height: ih, class: "hit"});
+      wire(hit, [
+        {value: rupee(r.pnl), label: shortDate(r.d)},
+        {label: r.n + " trades, " + r.wins + " winners", color: color},
+        {label: "fees " + rupee(r.fees)}
+      ]);
+      svg.appendChild(hit);
+
+      const lab = el("text", {x: cx, y: m.t + ih + 20, "text-anchor": "middle", class: "tick"});
+      lab.textContent = shortDate(r.d); svg.appendChild(lab);
+
+      // label the extremes only
+      if (r.pnl === -74523 || r.pnl === 24429) {
+        const t = el("text", {x: cx, y: down ? y(r.pnl) + 16 : y(r.pnl) - 8,
+          "text-anchor": "middle", class: "dlabel"});
+        t.textContent = rupee(r.pnl); svg.appendChild(t);
+      }
+    });
+
+    const tb = document.querySelector("#dailyTable tbody");
+    DAILY.forEach(r => {
+      const tr = document.createElement("tr");
+      [shortDate(r.d), r.n, r.wins, rupee(r.fees), rupee(r.pnl)].forEach((v, i) => {
+        const td = document.createElement("td"); td.textContent = v;
+        if (i === 4) td.style.color = r.pnl < 0 ? "var(--loss)" : "var(--profit)";
+        tr.appendChild(td);
+      });
+      tb.appendChild(tr);
+    });
+  })();
+
+  // ================= chart 2: attribution =================
+  (function attr() {
+    const svg = document.getElementById("attr");
+    const W = 660, rowH = 46, H = ATTR.length * rowH + 44;
+    const m = {t: 12, r: 24, b: 26, l: 118};
+    const iw = W - m.l - m.r;
+    svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+    svg.setAttribute("width", W); svg.setAttribute("height", H);
+
+    const max = 80000;
+    const x = v => m.l + (iw * (v + max)) / (2 * max);
+    const zero = x(0);
+    svg.appendChild(el("line", {x1: zero, x2: zero, y1: m.t, y2: m.t + ATTR.length * rowH,
+      stroke: "var(--baseline)", "stroke-width": 1}));
+
+    ATTR.forEach((r, i) => {
+      const cy = m.t + i * rowH + rowH / 2, bh = 20;
+      const xv = x(r.pnl), left = Math.min(zero, xv), w = Math.max(2, Math.abs(xv - zero));
+      const neg = r.pnl < 0;
+      const color = neg ? "var(--loss)" : "var(--profit)";
+      const g = el("g"); const rr = Math.min(4, w);
+      g.appendChild(el("rect", {x: left, y: cy - bh / 2, width: w, height: bh, rx: rr, fill: color}));
+      g.appendChild(el("rect", {x: neg ? zero - rr : zero, y: cy - bh / 2,
+        width: rr, height: bh, fill: color}));
+      svg.appendChild(g);
+
+      const lab = el("text", {x: m.l - 12, y: cy + 4, "text-anchor": "end", class: "rowlabel"});
+      lab.textContent = r.label; svg.appendChild(lab);
+
+      const v = el("text", {x: neg ? left - 8 : left + w + 8, y: cy + 4,
+        "text-anchor": neg ? "end" : "start", class: "dlabel"});
+      v.textContent = rupee(r.pnl); svg.appendChild(v);
+
+      const hit = el("rect", {x: m.l, y: cy - rowH / 2, width: iw, height: rowH, class: "hit"});
+      wire(hit, [{value: rupee(r.pnl), label: r.label},
+                 {label: r.n + " trades", color: color}]);
+      svg.appendChild(hit);
+    });
+
+    const cap = el("text", {x: m.l, y: H - 8, class: "tick"});
+    cap.textContent = "session total −₹74,523";
+    svg.appendChild(cap);
+  })();
+
+  // ================= chart 3: dumbbell =================
+  (function capChart() {
+    const svg = document.getElementById("cap");
+    const W = 660, rowH = 54, H = CAP.length * rowH + 40;
+    const m = {t: 16, r: 30, b: 24, l: 150};
+    const iw = W - m.l - m.r;
+    svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+    svg.setAttribute("width", W); svg.setAttribute("height", H);
+
+    const min = -20000;
+    const x = v => m.l + iw * (v - min) / (0 - min);
+    [-20000, -15000, -10000, -5000, 0].forEach(v => {
+      const xx = x(v);
+      svg.appendChild(el("line", {x1: xx, x2: xx, y1: m.t, y2: m.t + CAP.length * rowH,
+        stroke: v === 0 ? "var(--baseline)" : "var(--grid)", "stroke-width": 1}));
+      const t = el("text", {x: xx, y: H - 8, "text-anchor": "middle", class: "tick"});
+      t.textContent = v === 0 ? "0" : (v / 1000) + "k"; svg.appendChild(t);
+    });
+
+    CAP.forEach((r, i) => {
+      const cy = m.t + i * rowH + rowH / 2;
+      const xa = x(r.actual), xc = x(r.capped);
+      svg.appendChild(el("line", {x1: xa, x2: xc, y1: cy, y2: cy,
+        stroke: "var(--baseline)", "stroke-width": 2, "stroke-linecap": "round"}));
+      [[xc, "var(--loss-soft)"], [xa, "var(--loss)"]].forEach(([cx, col]) => {
+        svg.appendChild(el("circle", {cx, cy, r: 7, fill: col,
+          stroke: "var(--surface-1)", "stroke-width": 2}));
+      });
+
+      const lab = el("text", {x: m.l - 14, y: cy + 4, "text-anchor": "end", class: "rowlabel"});
+      lab.textContent = r.label; svg.appendChild(lab);
+
+      const a = el("text", {x: xa - 14, y: cy + 4, "text-anchor": "end", class: "dlabel"});
+      a.textContent = rupee(r.actual); svg.appendChild(a);
+      const c = el("text", {x: xc + 14, y: cy + 4, "text-anchor": "start", class: "dlabel"});
+      c.textContent = rupee(r.capped); svg.appendChild(c);
+
+      const hit = el("rect", {x: m.l, y: cy - rowH / 2, width: iw, height: rowH, class: "hit"});
+      wire(hit, [
+        {value: rupee(r.actual) + "  →  " + rupee(r.capped), label: r.label},
+        {label: r.note},
+        {label: "saved " + rupee(r.actual - r.capped), color: "var(--loss)"}
+      ]);
+      svg.appendChild(hit);
+    });
+  })();
+})();
+</script>

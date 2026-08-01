@@ -93,8 +93,12 @@ check("called when sizing refuses (the new rupee cap)",
       "log_futures_shadow(self.bus, sym, side, gates, False, sizing_why" in GS,
       "an over-tight cap must be distinguishable from a good filter")
 check("called on the eligible path too", '"eligible"' in GS)
-check("writes to the same journal options use", "SHADOW_PATH" in
-      GS.split("def log_futures_shadow")[1][:2000])
+# Sliced to the END OF THE FUNCTION, not to a character count. This
+# used to read [:2000] and broke the day the fail-loud rewrite lengthened
+# the docstring — the property was still true, the ruler was too short.
+_body = GS.split("def log_futures_shadow")[1].split("\ndef ")[0]
+check("writes to the same journal options use", "SHADOW_PATH" in _body,
+      f"function body is {len(_body)} chars")
 
 _e = agents.log_futures_shadow(None, "NIFTY", "LONG",
                                {"budget": "blocked (spent)"}, False, "budget")
