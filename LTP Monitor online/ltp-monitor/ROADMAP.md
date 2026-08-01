@@ -423,10 +423,51 @@ change required. (At 5 lots it was unreachable in the sense that mattered
 — the kill-switch fired on single trades, so the daily limit could never
 be the operative constraint.)
 
-Left as-is deliberately: the ₹2,500 `futures_risk_per_trade_rupees` cap
-remains futures-only. There is still no per-trade rupee cap on the
-options path; at 1 lot that is tolerable, and it must be revisited before
-`lots_per_trade` is ever raised again.
+### Per-trade rupee cap on the OPTIONS path (2026-08-02) — CLOSED
+
+The gap flagged above is closed. `option_risk_per_trade_rupees` = ₹5,000,
+applied through the SAME `sizing.cap_by_rupee_risk()` helper as futures,
+keyed separately. Not a second implementation — two per-trade caps that
+drift apart is the failure this codebase keeps re-learning.
+
+**AND IT CORRECTED THE THRESHOLD PICTURE ABOVE.** The table in item 41
+used hypothetical 10-50 point option stops. Measured against the 500 real
+option trades in the journal, the actual stops are far wider — **median
+69 points, p90 146, max 194** — so one lot risks:
+
+    median ₹3,198    mean ₹3,065    p90 ₹4,778    max ₹6,435
+
+Against a ₹5,000 portfolio cap. So the earlier claim that it takes "2-4
+concurrent losers" to trip the kill-switch was **too optimistic**: at the
+median it takes about 1.6, and the worst single trade (₹6,435) exceeds
+the entire portfolio allowance on its own. The reduction to 1 lot was
+still necessary and correct — at 5 lots the median trade would have
+risked ~₹16,000 — but it was not sufficient.
+
+**Why ₹5,000 and not ₹2,500 (the futures figure).** At
+`lots_per_trade`=1 there is nothing to size down TO, so this cap can only
+BLOCK, never resize. Measured impact on the 500 historical trades:
+
+    cap        trades blocked at 1 lot
+    ₹2,500              69%
+    ₹3,000              53%
+    ₹4,000              28%
+    ₹5,000               8%
+
+₹2,500 is not a risk control, it is a shutdown. ₹5,000 is the motivated
+line — *no single trade may consume the entire portfolio allowance* —
+and it blocks only the ~8% that make the portfolio cap meaningless.
+
+**What this does NOT fix.** The real problem is the stop WIDTH: a median
+69-point stop on an option is a 15%-of-premium stop, and no risk-layer
+cap can make that cheap without refusing most trades. Tightening the cap
+below ₹5,000 requires narrowing the stops first, which is a strategy
+change, not a risk change. Recorded as the next thing to look at if
+per-trade risk needs to come down further.
+
+A refusal raises an alert rather than returning quietly, because a
+silently-skipped trade is indistinguishable from a strategy that found no
+signal.
 
 ### The sizing episode, for the record (item 38)
 

@@ -72,6 +72,15 @@ DEFAULTS = {
     "spread_stop_after_consecutive_losses": 2,
     "regime_gate_enabled": True,   # block trades in choppy/rangebound regimes
     "require_tf_confluence": True, # require 1m/5m/15m to agree with signal direction
+    # v59.0 (2026-08-02) — per-trade rupee cap on the OPTIONS path.
+    # Set at the portfolio cap, not tighter, and that is deliberate:
+    # at 1 lot the cap can only BLOCK (there is nothing to size down
+    # to), and measured against 500 real trades a ₹2,500 cap would
+    # block 69% of them while ₹5,000 blocks ~8%. The motivated line is
+    # "no single trade may consume the whole portfolio allowance".
+    # Tightening further needs narrower STOPS first — median option
+    # stop is 69 points, so 1 lot already risks a median ₹3,198.
+    "option_risk_per_trade_rupees": 5000,
     "lots_per_trade": 1,
     "max_concurrent_positions": 1,   # allow >1 to trade multiple indices at once
     "fee_per_lot": 40,

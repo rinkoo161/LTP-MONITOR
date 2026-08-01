@@ -832,6 +832,7 @@ class SettingsIn(BaseModel):
     margin_per_lot_future: int | None = None
     futures_live_enabled: bool | None = None
     # v59.0 Phase D — shadow only, no orders in live or paper.
+    option_risk_per_trade_rupees: float | None = None
     fhedge_shadow_enabled: bool | None = None
     fhedge_trigger_buffer_pct: float | None = None
     fhedge_max_lots: int | None = None

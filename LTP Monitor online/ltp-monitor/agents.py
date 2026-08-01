@@ -4970,6 +4970,42 @@ class ExecutionAgent(Agent):
             n_lots, sizing_why = sizing.size_option_buy(
                 cfg, sym, sig["entry"], sig["stoploss"], deployed)
         self.bus.log(self.name, f"{sym} sizing: {sizing_why}")
+        # v59.0 (2026-08-02) — PER-TRADE RUPEE CAP ON THE OPTIONS PATH.
+        #
+        # The futures path got this cap on 2026-08-01; options never had
+        # one, so `portfolio_max_drawdown` was the only thing standing
+        # between a single option trade and the whole book. Measured
+        # against the 500 real option trades in the journal, ONE lot
+        # already risks a median ₹3,198 — 64% of the ₹5,000 portfolio
+        # cap — with a p90 of ₹4,778 and a maximum of ₹6,435. That last
+        # figure is the point: a single trade could exceed the entire
+        # portfolio drawdown allowance on its own, which makes the
+        # portfolio cap meaningless exactly when it matters.
+        #
+        # The SAME shared helper as futures, keyed differently. Not a
+        # second implementation — a per-trade cap that drifts from the
+        # futures one is precisely the two-copies failure this codebase
+        # keeps re-learning.
+        #
+        # NOTE ON WHAT THIS CAN AND CANNOT DO: at lots_per_trade=1 there
+        # is nothing to size down TO, so the cap can only block. It is
+        # therefore set at the portfolio cap rather than tighter — the
+        # motivated line is "no single trade may consume the entire
+        # portfolio allowance", which blocks ~8% of historical trades. A
+        # tighter cap (₹2,500, matching futures) would block 69% of them,
+        # and that is not a risk control, it is a shutdown. Tightening
+        # further requires narrowing the STOPS first, which is a strategy
+        # change, not a risk-layer change.
+        _cap_lots, _cap_why = sizing.cap_by_rupee_risk(
+            cfg, sym, sig["entry"], sig["stoploss"], n_lots,
+            key="option_risk_per_trade_rupees")
+        if _cap_why:
+            self.bus.log(self.name, f"🛡 {sym} option risk cap: {_cap_why}")
+        if _cap_lots < 1:
+            self.bus.alert("medium", self.name, sym,
+                           f"option trade refused — {_cap_why}")
+            return {"error": f"per-trade risk cap: {_cap_why}"}
+        n_lots = _cap_lots
         if n_lots < 1:
             self.bus.log(self.name, f"⚠ {sym} order skipped — not enough "
                                     f"available capital for even 1 lot")
