@@ -40,6 +40,15 @@ DEFAULTS = {
     "auto_execute": False,       # autopilot may only place orders when True
     "min_confidence": 70,        # AI confidence needed to act
     "max_trades_per_day": 3,     # hard cap for autopilot
+    # DO NOT raise above the sum of the per-class budgets
+    # (budget_futures/spread/option_daily_loss = 7,500). Those deliberately
+    # sum to MORE than this global ceiling — see class_budget_blocked() —
+    # so no ONE class can spend the whole day's allowance. Push this past
+    # 7,500 and the sub-budgets become binding and the global ceiling can
+    # never fire. It was briefly raised to 20,000 on 2026-08-02 on a bogus
+    # comparison with portfolio_max_drawdown; that is an UNREALISED
+    # force-close cap and this is a REALISED order-blocking limit. Not the
+    # same scale, not orderable against each other. Reverted same day.
     "daily_loss_limit": 5000,    # ₹; risk agent blocks orders beyond this
     "daily_profit_target": 0,    # ₹; 0 = disabled. Once today's combined
                                  # P&L (trades + spreads) reaches this,
@@ -93,7 +102,14 @@ DEFAULTS = {
     # 57% of trades on n=106 with no demonstrated edge anywhere. Picking
     # a risk limit by back-fitted outcomes is the thing this engagement
     # exists to refuse.
-    "option_risk_per_trade_rupees": 4000,
+    # DEFAULTS ships risk_pct_per_trade = 1.0, so the budget here is
+    # 1% x 200,000 = 2,000 and the cap must match it. The running config
+    # uses 2.0 and therefore 4,000 — an operator choice, not a
+    # disagreement: the INVARIANT is cap == risk_pct x capital WITHIN
+    # whichever config is in force, which sizing.risk_coherence() checks.
+    # Lowered here rather than raising DEFAULTS' risk_pct deliberately: a
+    # shipped default must not increase the risk a fresh install takes.
+    "option_risk_per_trade_rupees": 2000,
     "lots_per_trade": 1,
     "max_concurrent_positions": 1,   # allow >1 to trade multiple indices at once
     "fee_per_lot": 40,

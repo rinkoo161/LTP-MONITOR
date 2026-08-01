@@ -283,6 +283,64 @@ headline), so the veto logic is what is under test. 19/19.
 A green suite is the point. On 2026-08-01 a live regression hid inside an
 already-failing file for exactly as long as the red was being tolerated.
 
+## DEFAULTS aligned — and a bogus coherence rule retracted (2026-08-02)
+
+Both flagged DEFAULTS problems are closed, but fixing the second one
+exposed that ONE OF MY OWN COHERENCE RULES WAS WRONG.
+
+### Fixed: the option cap now equals the budget in whichever config it ships in
+
+`option_risk_per_trade_rupees` 4,000 -> **2,000** in DEFAULTS. DEFAULTS
+ships `risk_pct_per_trade` 1.0, so the budget is 1% x 200,000 = 2,000 and
+the cap must match. The running config uses 2.0 and therefore 4,000 —
+that is an operator choice, not a disagreement. **The invariant is
+`cap == risk_pct x capital` WITHIN whichever config is in force**, not a
+fixed rupee value. Lowered rather than raising DEFAULTS' `risk_pct`
+deliberately: a shipped default must not increase the risk a fresh
+install takes.
+
+### RETRACTED: daily_loss_limit vs portfolio_max_drawdown
+
+`risk_coherence()` had a rule saying a `daily_loss_limit` below
+`portfolio_max_drawdown` meant "the daily limit fires first, so the
+kill-switch is dead". **That rule was wrong.** The two measure different
+things:
+
+    daily_loss_limit         REALISED cumulative loss -> blocks new orders
+    portfolio_max_drawdown   UNREALISED across open positions -> force-closes
+
+They are not on the same scale and cannot be ordered against each other.
+A realised ceiling below an unrealised one is perfectly coherent — you
+stop opening new trades before you force-close existing ones.
+
+Acting on the bad rule, `daily_loss_limit` was raised 5,000 -> 20,000 —
+which broke a **documented** invariant in `class_budget_blocked()`:
+
+> *Sub-budgets deliberately sum to MORE than the global
+> `daily_loss_limit`. The global stays the hard ceiling; these only stop
+> any ONE class from consuming all of it.*
+
+The per-class budgets sum to 7,500. At a 20,000 global they become the
+binding constraint and the global ceiling can never fire — reintroducing
+the exact "threshold that cannot fire reads as protection and is not"
+problem one layer down. `test_futures_overhaul.py` caught it, having
+asserted the design property explicitly.
+
+**Reverted to 5,000.** The rule is replaced by the one that reflects the
+real design: per-class budgets must sum ABOVE the global ceiling, and no
+single class budget may reach it.
+
+### The corrected rule immediately found a LIVE problem
+
+    LIVE: per-class budgets sum to ₹7,500 <= daily_loss_limit ₹20,000
+
+Your running config has `daily_loss_limit` 20,000 against 7,500 of class
+budgets, so the global ceiling cannot fire. This PRE-DATES today's work.
+**Not changed** — either lower it below 7,500 or raise the class budgets,
+and that is a decision about how much a bad day may cost.
+
+DEFAULTS now reports CLEAN; the live config reports this one item.
+
 ## Portfolio cap raised 5,000 -> 12,000 (2026-08-02) — risk set now COHERENT
 
 `portfolio_max_drawdown` was a single-trade stop wearing a portfolio

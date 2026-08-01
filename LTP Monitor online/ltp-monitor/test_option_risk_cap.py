@@ -52,16 +52,23 @@ CFG = open(os.path.join(HERE, "config.py")).read()
 print("0) the cap IS the per-trade risk budget, not a new free parameter")
 _budget = (config.DEFAULTS["backtest_capital"]
            * config.DEFAULTS["risk_pct_per_trade"] / 100)
-# NOT asserted as an equality. DEFAULTS carries risk_pct_per_trade 1.0
-# while the running config uses 2.0, so the cap can only equal ONE of
-# them — and hard-coding either into a test just pins whichever the
-# author happened to look at. What must hold is that a divergence is
-# DETECTED, so sizing.risk_coherence() is the thing under test.
-_div = sizing.risk_coherence(dict(config.DEFAULTS, risk_pct_per_trade=1.0))
+# The INVARIANT is `cap == risk_pct x capital` within whichever config is
+# in force — not a fixed rupee value. DEFAULTS ships risk_pct 1.0 (cap
+# 2,000); the running config uses 2.0 (cap 4,000). Both are correct; only
+# a config where the two disagree is wrong. So assert the invariant holds
+# in DEFAULTS, and separately that a divergence WOULD be caught.
+check("DEFAULTS satisfies cap == risk_pct x capital",
+      config.DEFAULTS["option_risk_per_trade_rupees"] == _budget,
+      f"₹{config.DEFAULTS['option_risk_per_trade_rupees']:,.0f} "
+      f"== budget ₹{_budget:,.0f}")
+check("DEFAULTS is internally coherent end to end",
+      sizing.risk_coherence(dict(config.DEFAULTS)) == [],
+      str(sizing.risk_coherence(dict(config.DEFAULTS))))
+_div = sizing.risk_coherence(dict(config.DEFAULTS,
+                                  option_risk_per_trade_rupees=9999))
 check("a cap that diverges from the budget is REPORTED",
       any("per-trade budget" in x for x in _div),
-      f"₹{config.DEFAULTS['option_risk_per_trade_rupees']:,.0f} "
-      f"vs DEFAULTS budget ₹{_budget:,.0f} — flagged, not silent")
+      "the check must still bite when someone edits one key and not the other")
 _ok = sizing.risk_coherence({"backtest_capital": 200000,
                              "risk_pct_per_trade": 2.0,
                              "option_risk_per_trade_rupees": 4000,
@@ -82,14 +89,28 @@ check("portfolio cap survives at least 2 full-risk trades",
       _live["portfolio_max_drawdown"] / _live["option_risk_per_trade_rupees"] >= 2,
       f"{_live['portfolio_max_drawdown']/_live['option_risk_per_trade_rupees']:.1f} "
       f"concurrent trades")
-check("an inverted daily limit is REPORTED",
-      any("fires FIRST" in x for x in sizing.risk_coherence(
-          {"portfolio_max_drawdown": 12000, "daily_loss_limit": 5000})),
-      "a daily limit below the portfolio cap makes the kill-switch dead")
-check("an unreachable daily limit is REPORTED",
-      any("unreachable" in x for x in sizing.risk_coherence(
-          {"portfolio_max_drawdown": 1000, "daily_loss_limit": 20000})),
-      "20x the portfolio cap needs 20 kill cycles in one session")
+# 2026-08-02 — two checks here previously ORDERED daily_loss_limit against
+# portfolio_max_drawdown. That was wrong: the first is a REALISED loss
+# ceiling that blocks new orders, the second an UNREALISED drawdown that
+# force-closes. Different quantities, not orderable. Acting on the bogus
+# rule raised daily_loss_limit to 20,000 and broke the documented
+# class_budget_blocked() invariant. What daily_loss_limit MUST be ordered
+# against is the per-class budgets, which is now what is checked.
+check("class budgets summing BELOW the global ceiling is REPORTED",
+      any("binding constraint" in x for x in sizing.risk_coherence(
+          {"daily_loss_limit": 20000, "budget_futures_daily_loss": 2500,
+           "budget_spread_daily_loss": 3000, "budget_option_daily_loss": 2000})),
+      "sub-budgets must sum ABOVE the global or it can never fire")
+check("a single class able to eat the whole day is REPORTED",
+      any("consume the whole day" in x for x in sizing.risk_coherence(
+          {"daily_loss_limit": 5000, "budget_futures_daily_loss": 5000,
+           "budget_spread_daily_loss": 3000, "budget_option_daily_loss": 2000})),
+      "that is exactly what per-class budgets exist to prevent")
+check("the shipped DEFAULTS satisfy the class-budget invariant",
+      sum(config.DEFAULTS.get(f"budget_{k}_daily_loss", 0)
+          for k in ("futures", "spread", "option"))
+      > config.DEFAULTS["daily_loss_limit"],
+      f"₹7,500 sub-budgets vs ₹{config.DEFAULTS['daily_loss_limit']:,} global")
 check("and it sits BELOW the portfolio kill-switch",
       config.DEFAULTS["option_risk_per_trade_rupees"]
       < config.DEFAULTS["portfolio_max_drawdown"],
