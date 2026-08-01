@@ -44,8 +44,10 @@ print("1) the WRITER stores a price, not a P&L")
 check("no longer writes a negative stop",
       '"stoploss": -sp["loss_limit"]' not in SRC,
       "a negative stop price is impossible for anything tradeable")
-check("writes credit + loss_limit (the spread value at the stop)",
-      'sp["credit"] + sp["loss_limit"]' in SRC)
+check("writes credit + loss limit (the spread value at the stop)",
+      'sp["credit"]' in SRC and 'initial_loss_limit' in SRC,
+      "priced off the INITIAL limit — the defense zone tightens the live "
+      "one mid-life, and sizing was decided against entry")
 check("writes credit - profit_target (the value at the target)",
       'sp["credit"] - sp["profit_target"]' in SRC)
 check("labels the basis explicitly", '"stop_basis": "spread_value"' in SRC,
@@ -109,6 +111,28 @@ r4 = agents.trade_risk_fields({"leg": "SPREAD", "strategy": "bear_call_spread",
 check("bear call legacy row also converts", r4["stop"] == 75.0, str(r4["stop"]))
 check("every reconstructed stop is positive",
       all(x["stop"] > 0 for x in (r, r2, r3, r4)))
+
+print("\n7) the ENTRY stop is preserved, not the ratcheted one")
+SRC_AG = SRC if False else open(os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "agents.py")).read()
+check("options record initial_sl at entry", '"initial_sl": sig["stoploss"]' in SRC_AG,
+      "the trail overwrites p['stoploss'] in place")
+check("spreads record initial_loss_limit", '"initial_loss_limit": round(min(' in SRC_AG,
+      "the defense zone tightens loss_limit in place")
+check("the closed spread price uses the INITIAL limit",
+      'sp.get("initial_loss_limit")' in SRC_AG)
+check("the reader prefers initial_sl for options too",
+      't.get("initial_sl") or t.get("stoploss")' in SRC_AG)
+# A ratcheted record must resolve to the ENTRY stop, not the trailed one.
+r5 = agents.trade_risk_fields({"leg": "CE", "strategy": "orb", "entry": 100.0,
+                               "initial_sl": 70.0, "stoploss": 95.0,
+                               "target1": 160.0, "qty": 65, "ltp": 96.0,
+                               "pnl": -260})
+check("a trailed option resolves to its ENTRY stop", r5["stop"] == 70.0,
+      f"{r5['stop']} — 95.0 is the trailed stop and understates risk by 5x")
+check("risk reconstructs against entry, not exit",
+      abs(r5["entry"] - r5["stop"]) * r5["qty"] == 1950.0,
+      "sizing was decided against 30 points, not 5")
 
 print()
 if FAILED:

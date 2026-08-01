@@ -283,6 +283,72 @@ headline), so the veto logic is what is under test. 19/19.
 A green suite is the point. On 2026-08-01 a live regression hid inside an
 already-failing file for exactly as long as the red was being tolerated.
 
+## The "SENSEX concentration" was a measurement artefact (2026-08-02)
+
+Investigating why the ₹2,000 cap refused 42 of 47 NIFTY trades but only
+9 of 43 SENSEX ones did NOT find a cap defect. It found that the option
+journal never recorded the stop the trade was SIZED against.
+
+### What it is not
+
+**Not lot size.** Notional per lot is within 9% across all four indices
+(₹1.58m-1.72m) — exchanges revise lot sizes precisely to hold contract
+value in a band. A flat rupee cap is already notional-neutral.
+
+**Not volatility.** Real daily range is 0.70% (NIFTY), 1.03% (BANKNIFTY),
+1.00% (FINNIFTY), 0.77% (SENSEX) — consistent. But the stop widths imply
+an ATR of 0.34% / 0.27% / 0.03% / 0.08%. The stops are not tracking
+volatility at all.
+
+### What it is
+
+Stop widths cluster on DISCRETE values, which no ATR-derived rule
+produces:
+
+    NIFTY      43%:30   30%:11   5%:5
+    SENSEX     30%:39   5%:4
+    BANKNIFTY  14%:10   5%:5
+    FINNIFTY   5%:1
+
+The **5% cluster appears in every symbol** — and that is the tell.
+`p["stoploss"]` is RATCHETED IN PLACE by the trailing stop
+(`agents.py` ~5359) and the breakeven lock (~5328), so a closed option
+record carries the FINAL stop, not the entry stop. The 5% rows are
+trades that trailed, not trades opened with a 5% stop.
+
+**Every per-trade option risk figure in this engagement was therefore
+measuring the trailed stop and understating entry risk** — including the
+cap derivation. Futures have carried `initial_sl` since v58 for exactly
+this reason; options and spreads never did. Spreads have the same defect
+from the other direction: the defense zone TIGHTENS `loss_limit` in place
+(~4589), so a defended spread records the tightened limit.
+
+### The fix
+
+  - options record `initial_sl` at entry, never mutated;
+  - spreads record `initial_loss_limit`, and the closed record's stop
+    price is derived from it rather than the possibly-defended value;
+  - `trade_risk_fields()` prefers `initial_*` for options and spreads,
+    the rule the futures branch already used.
+
+A trailed option that entered at 100 with a 70 stop and exited with the
+stop at 95 now reconstructs risk against 70, not 95 — a 5x difference on
+that trade.
+
+### What this does NOT resolve
+
+The concentration cannot be re-diagnosed from existing history, because
+the entry stops were never written. It becomes answerable from
+2026-08-02 forward. Until then the honest statement is that the
+per-symbol refusal split is **not evidence of anything** — it mixes entry
+and trailed stops in unknown proportion, and the proportion differs by
+symbol because trailing depends on how trades went.
+
+**The ₹2,000 cap stays as set.** It is derived from the risk budget, not
+from this data, so the measurement defect does not undermine it — but the
+"58% refused" figure and the per-symbol split should be re-measured once
+entry stops accumulate.
+
 ## The risk ladder is now coherent end to end (2026-08-02) — with one caveat
 
 `option_risk_per_trade_rupees` 4,000 -> **2,000** and

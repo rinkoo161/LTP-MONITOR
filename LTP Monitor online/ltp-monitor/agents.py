@@ -532,7 +532,11 @@ def trade_risk_fields(t):
     else:
         qty = t.get("qty")
         lots = t.get("lots")
-        stop = t.get("stoploss") or t.get("sl")
+        # `initial_sl` FIRST, same rule the futures branch already used:
+        # the option trail and the spread defense zone both mutate the
+        # live stop, so `stoploss` on a closed record answers "where was
+        # the stop at exit", while sizing was decided against entry.
+        stop = t.get("initial_sl") or t.get("stoploss") or t.get("sl")
         target = t.get("target1") or t.get("target")
         # LEGACY SPREAD ROWS. Until 2026-08-02, exit_spread() wrote
         # `stoploss = -loss_limit` and `target1 = +profit_target` — both
@@ -4515,8 +4519,15 @@ class ExecutionAgent(Agent):
             # win rate to break even.
             "profit_target": round(credit * target_pct / 100, 2),
             "profit_target_pct": target_pct, "profit_target_basis": target_basis,
+            # Same as the option case above: the defense zone TIGHTENS
+            # loss_limit in place, so the closed record shows the
+            # defended limit rather than the one the position was opened
+            # against. Preserved below as initial_loss_limit.
             "loss_limit": round(min(credit * cfg.get("spread_loss_limit_multiple", 1.0),
                                     spread["max_loss"]), 2),
+            "initial_loss_limit": round(min(
+                credit * cfg.get("spread_loss_limit_multiple", 1.0),
+                spread["max_loss"]), 2),
             "opened": now_ist().strftime("%H:%M:%S"), "opened_ts": time.time(),
             "pnl": 0.0, "paper": True, "ai_advice": None, "ai_ts": 0,
         }
@@ -4917,7 +4928,13 @@ class ExecutionAgent(Agent):
             #
             # The P&L-basis numbers are kept under names that say what
             # they are, so nothing is lost and neither can be misread.
-            "stoploss": round(sp["credit"] + sp["loss_limit"], 2),
+            # Priced off the INITIAL limit: the defense zone may have
+            # tightened `loss_limit` mid-life, and sizing was decided
+            # against the limit at entry.
+            "stoploss": round(sp["credit"]
+                              + (sp.get("initial_loss_limit")
+                                 or sp["loss_limit"]), 2),
+            "initial_loss_limit": sp.get("initial_loss_limit"),
             "target1": round(sp["credit"] - sp["profit_target"], 2),
             "target2": sp["credit"],
             "stop_basis": "spread_value",
@@ -5072,6 +5089,16 @@ class ExecutionAgent(Agent):
             "symbol": sym, "strike": sig["strike"], "leg": leg, "qty": qty,
             "lots": n_lots,
             "entry": fill, "stoploss": sig["stoploss"],
+            # 2026-08-02 — `stoploss` is RATCHETED IN PLACE by the trail
+            # and the breakeven lock, so by the time a trade closes it is
+            # the FINAL stop, not the one sizing was decided against.
+            # Futures have carried `initial_sl` for exactly this reason;
+            # options did not, so every per-trade risk figure derived
+            # from the option journal was measuring the trailed stop and
+            # therefore UNDERSTATING entry risk. It is why 5% stop widths
+            # appear across all four symbols in the history: those are
+            # trailed stops, not entry stops. Never mutated.
+            "initial_sl": sig["stoploss"],
             "target1": sig["target1"], "target2": sig["target2"],
             "spot_invalidation": sig.get("spot_invalidation"),
             "security_id": sig.get("security_id"), "order_id": order_id,
