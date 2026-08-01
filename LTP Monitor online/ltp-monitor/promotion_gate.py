@@ -72,7 +72,25 @@ import math
 # --- provisional, see module docstring. Do not promote to a constant. ---
 PROXY_SD_PER_TRADE = 1143.0
 PROXY_SD_PROVENANCE = ("provisional: n=74 trades, 4 sessions (2026-07-27..30), "
-                       "one regime, measured against a 5-day chain archive")
+                       "one regime, measured against a 5-day chain archive, "
+                       "at lot sizes NIFTY 75 / BANKNIFTY 30 / FINNIFTY 65 / "
+                       "SENSEX 20 (NIFTY and FINNIFTY have since been corrected "
+                       "to 65 / 60, so this rupee figure is ~15% / ~8% high for "
+                       "those symbols)")
+# WHY THE LOT SIZE IS PART OF THE PROVENANCE (v59.0 item 42).
+# ₹1,143 is an absolute rupee quantity, and rupees per trade scale with
+# contract size. On 2026-08-01 the config lot map was corrected from
+# NIFTY 75 / FINNIFTY 65 to 65 / 60, so "n=74, 4 sessions, one regime" no
+# longer identifies the measurement — the same 74 trades re-measured
+# today would produce a smaller number. Anything expressed in rupees has
+# to name the contract size it was calibrated at, or it silently means
+# something different after the next exchange revision.
+#
+# Deliberately NOT rescaled by hand. The gate's verdict is unaffected: t
+# is scale-invariant because net and sd scale together, and `required`
+# moved only 1-3%. Applying a scalar correction to a provisional constant
+# would add a second unverified transform to a number already labelled
+# provisional. Re-measure it properly when the chain archive has depth.
 DEFAULT_K = 2.0
 CALIBRATION_N = 74      # trades the ₹1,143 was measured on
 

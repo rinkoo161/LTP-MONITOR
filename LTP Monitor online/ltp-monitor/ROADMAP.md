@@ -389,11 +389,50 @@ So the defensible statement is the hedged one: *no strategy's edge is
 distinguishable from zero, and measurement uncertainty is wide enough
 that one could plausibly be above it.*
 
-### AND SIZING JUST QUADRUPLED (item 38, 2026-08-01)
+### SIZING RETURNED TO 1 LOT (item 41, 2026-08-01) — RESOLVED
 
-Read this next to the 0-of-11 above, because the two together are the
-risk. **No strategy has demonstrated an edge, and position size just went
-up ~4.3x.**
+`lots_per_trade` **5 -> 1**, applied. Rationale: nothing has demonstrated
+an edge, three strategies have raw t under 0.25, and every measurement
+this system possesses was generated at ONE lot. There is no case for
+trading above the size the data came from.
+
+Note `config.DEFAULTS` already held 1 — only the LIVE config had drifted
+to 5. Worth remembering when reasoning about behaviour: DEFAULTS is not
+what the system is running.
+
+**Post-reduction the thresholds are sound and need no change:**
+
+    stop     loss/trade   % of ₹5,000 kill   trades to trip kill
+     10 pts     ₹650             13%                7.7
+     20 pts   ₹1,300             26%                3.8
+     30 pts   ₹1,950             39%                2.6
+     50 pts   ₹3,250             65%                1.5
+
+The kill-switch is a genuine PORTFOLIO limit again: it now takes 2-4
+concurrent losing positions to trip, which is what a portfolio cap should
+mean, rather than one trade at a 20-point stop. **`portfolio_max_drawdown`
+stays at ₹5,000.** Raising it was the wrong move — at 5 lots it would
+have removed the only real constraint on an oversized book; at 1 lot it
+is not needed.
+
+`daily_loss_limit` (₹20,000) is **no longer dead configuration**. It
+needs 4 kill-switch cycles at a 10-minute cooldown = ~40 minutes minimum
+in a 375-minute session, so it is reachable in a bad day and functions as
+a genuine final backstop. The size reduction resurrected it; no config
+change required. (At 5 lots it was unreachable in the sense that mattered
+— the kill-switch fired on single trades, so the daily limit could never
+be the operative constraint.)
+
+Left as-is deliberately: the ₹2,500 `futures_risk_per_trade_rupees` cap
+remains futures-only. There is still no per-trade rupee cap on the
+options path; at 1 lot that is tolerable, and it must be revisited before
+`lots_per_trade` is ever raised again.
+
+### The sizing episode, for the record (item 38)
+
+RESOLVED by item 41 above; kept because the interaction is the lesson.
+For a period, position size was ~4.3x anything the system had measured
+while no strategy had demonstrated an edge.
 
     units per trade   historical  1 lot x 75 =  75
                       forward     5 lots x 65 = 325     4.33x
@@ -411,9 +450,9 @@ Against absolute rupee thresholds that did not move:
       30 pts       ₹9,750           195%                     49%
       50 pts      ₹16,250           325%                     81%
 
-**A single losing trade at a 20-point stop now breaches the portfolio
+**A single losing trade at a 20-point stop breached the portfolio
 kill-switch on its own.** The ₹2,500 per-trade cap is futures-only and
-does not apply here.
+does not apply to options.
 
 `portfolio_max_drawdown` (5,000) vs `daily_loss_limit` (20,000) is 1:4,
 so the kill-switch trips four times before the daily limit is ever
@@ -423,14 +462,11 @@ sized for 1-lot trades. A portfolio-wide unrealized cap must sit above
 any single permitted position loss or it becomes a single-trade stop
 wearing a portfolio label.
 
-Proposed rescale, NOT APPLIED — needs a decision:
-
-    portfolio_max_drawdown   5,000 -> 15,000   (3 permitted trades, not 0.5)
-    daily_loss_limit        20,000 -> 20,000   (unchanged; now actually reachable)
-    lots_per_trade               5 -> 1..2     until something clears the gate
-
-The cleanest single action is the last one: nothing has demonstrated
-edge, so size is the wrong lever to have moved first.
+The action taken was the last line only — `lots_per_trade` 5 -> 1. The
+threshold rescale was NOT applied and is not needed: raising a cap to
+accommodate an oversized book removes the only constraint on it. Fix the
+size, and the thresholds that were calibrated for that size become
+correct again. Order matters — sizing first, thresholds second.
 
 ### This is the first time the system has been ABLE to say this
 
@@ -626,6 +662,67 @@ reader does not double-count them.
 
 **The decision.** Auto-promotion stopped (wired into `is_live_enabled`,
 fails closed). No strategy disabled — all eleven continue in paper.
+
+## THE PHASE 0 FINDING — targets were never reachable (2026-08-01)
+
+**Across 40 futures trades, the median trade reached 1.1% of its target.
+Not one reached half.** That is the finding, and it does not depend on
+any cost model, any P&L proxy, or the ₹1,143.
+
+The decisive cut is by exit type, because it isolates opportunity:
+
+    exit type        n     MFE as a share of target: median / mean / best
+    EOD square-off  15           5.5%  /  8.0%  /  30.1%
+    kill-switch     11           0.1%  /  2.9%  /  12.8%
+    manual          13           0.4%  /  3.5%  /  20.5%
+    stoploss         1
+    AT TARGET        0
+    ALL 40          median 1.1% of target;  0 of 40 reached even HALF
+
+The 15 EOD trades ran a **full session with no interference** — maximum
+opportunity to reach target — and their median still got 5.5% of the way.
+The targets were geometrically unreachable within a session. ATR-derived
+target distance is the defect.
+
+### H4 was TESTED and REJECTED, not left open
+
+H4 proposed that the exits were an artefact of the portfolio kill-switch
+rather than of target geometry — that trades were being force-closed
+before they could work. Tested directly (item 37):
+
+  - the kill-switch **is** real: 5 trips force-closed 11 of 40, always
+    closing the whole book, always at ₹5,050-6,222 against a ₹5,000 cap;
+  - in 3 of 5 trips the summed futures P&L fell well short of the trip
+    figure, so those futures were collateral damage from losing OPTIONS
+    positions — the cap is portfolio-wide;
+  - **but the trades it never touched did no better.** If the kill-switch
+    were the cause, the untouched EOD cohort would show targets in reach.
+    It shows 5.5%.
+
+H4 is rejected. The kill-switch is a genuine, separate defect worth
+fixing on its own merits — it is not the explanation for Phase 0.
+
+### The BANKNIFTY trade — keep this one permanently
+
+One trade illustrates the kill-switch defect better than any summary.
+A **BANKNIFTY SHORT, 2 lots, entry 57,083.6** reached **MFE +₹3,516** —
+a real, substantial move in its favour — and was then force-closed at
+**-₹1,968** by the portfolio kill-switch, because the *combined* book had
+touched -₹5,233. The position that was working paid for positions that
+were not.
+
+The cap that closed it, `portfolio_max_drawdown` = ₹5,000, was **smaller
+than the loss a single permitted position could take** at the size then
+configured. A portfolio-wide cap sized below single-position risk is not
+a portfolio cap; it is a single-trade stop wearing a portfolio label, and
+it liquidates winners to pay for losers.
+
+It happened while this same system was concluding that futures had no
+edge — which is the point. Part of the measured "no edge" was the risk
+layer closing trades that were working. That does not overturn the
+finding above (the untouched cohort settles it), but any future
+re-measurement of futures must fix the cap first or it will measure the
+cap again.
 
 ## v59.0 Phase A FINDING — futures stay disabled (2026-08-01)
 
