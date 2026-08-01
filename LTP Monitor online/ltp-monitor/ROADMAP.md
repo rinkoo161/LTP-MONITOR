@@ -95,6 +95,39 @@ never be the reason a trade happens. Rejections surface through the same
 `<strategy>_require_basis_agreement` overrides the global key; both
 default False.
 
+## Credential audit — CLOSED (2026-08-01)
+
+Full-history audit of the public repo (github.com/rinkoo161/LTP-MONITOR).
+Recorded here so it is not re-run from scratch next session.
+
+**Nothing was ever exposed publicly.** One local-only commit (`a04215f`,
+path `LTP Option chain/ltp-monitor 2/config.json`) held a real
+`config.json` with a Dhan client id, a Dhan access token and an Anthropic
+key. Verified against the GitHub API by FULL SHA — 422 for that commit,
+404 for the blob, with a known-public commit returning 200 as the control
+— so it never reached the remote. All 8 pushed commits scanned
+individually and clean, including `8c1a15d`, which is orphaned by a
+force-push yet still reachable on GitHub by SHA.
+
+Disposition:
+- Anthropic key — **revoked by the user, 2026-08-01.** Closed.
+- Dhan access token — JWT, expired 2026-07-17, and not the live token.
+- Dhan client id `1112539363` — real and permanent, but never public.
+- Kotak / Zerodha — **no credential value exists anywhere in history.**
+  The scan hits were `dashboard.html` reading `getElementById(...).value`,
+  i.e. field names, and `zerodha_login.py` using `getpass`.
+
+Local remediation: branch `docs/claude-md` deleted (its only unique
+content was the pre-rewrite tree plus a `CLAUDE.md` verified identical to
+the copy in `main`), reflog expired, `gc --prune=now`. Both objects
+confirmed destroyed; full-store and working-tree re-scans clean.
+
+`.gitignore` had `config.json` — which is why the live file was never
+committed — but not `.env`, `*_token`, `*_secret`, `*.pem`, `*.key`, or
+the runtime state filenames. All added. The runtime dir is normally
+`~/.ltp-monitor`, outside the repo, but `store.py` honours
+`LTP_MONITOR_HOME`, so those names are ignored wherever they land.
+
 ## THE HEADLINE (2026-08-01) — no strategy's edge is distinguishable from zero, and the measurement is too coarse to rule one out
 
 Read the second clause as carefully as the first. The claim is **not**
