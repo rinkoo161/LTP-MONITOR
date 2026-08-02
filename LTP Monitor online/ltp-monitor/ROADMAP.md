@@ -3628,6 +3628,85 @@ Prints a diagnostic checklist when the table is empty rather than
 writing a silently useless file.
 
 
+## STOP SCALING — TESTED AND NOT IMPLEMENTED (2026-08-03)
+
+Asked to scale the stops to the travel distribution. Measured it first,
+and the measurement says **no stop scale makes these entries pay**, so
+the change was NOT made. Shipping a rewrite of every strategy's exit
+geometry on evidence that says it does not help would be worse than
+leaving it alone.
+
+### The distributions overlap almost completely
+
+Per symbol, MFE/MAE over a fixed 60-bar window after entry, in ATR:
+
+    sym          n     MFE med   MFE p25   MAE med   MAE p75   MAE p90
+    NIFTY     1600      3.57      1.64      3.18      5.69      8.97
+    BANKNIFTY 1774      3.20      1.55      2.99      5.35      8.42
+    FINNIFTY  1778      3.36      1.56      3.02      5.32      8.85
+    SENSEX    1746      3.56      1.64      3.18      5.84      8.90
+    ALL       6898      3.41      1.59      3.08      5.57      8.79
+
+**Price moves about as far against these entries as for them** (3.41 vs
+3.08 ATR). That is the signature of no directional edge, and it is fatal
+to the exercise before any stop rule is chosen.
+
+A stop wide enough to survive the noise 75% of eventual 2-ATR winners
+endure is **3.90 ATR**, against a median favourable travel of 3.41 ATR —
+an **implied RR of 0.88**, below the RiskAgent's 1.95 floor. The geometry
+these entries produce cannot satisfy the risk layer, and the risk layer
+is right.
+
+### Path-dependent first-touch, every stop scale and every RR
+
+MFE/MAE maxima say nothing about ORDER, so this walks each entry bar by
+bar and records which level is touched first — a bar spanning both is
+charged as the STOP, the pessimistic convention the replay engine
+already uses. Expectancy per trade in R, undecided counted as 0:
+
+    stop\RR      1.0      1.5      2.0      2.5      3.0
+       1.0     -0.42    -0.42    -0.41    -0.42    -0.42
+       1.5     -0.11    -0.11    -0.11    -0.10    -0.13
+       2.0     -0.01    -0.02    -0.03    -0.08    -0.14
+       2.5     +0.02    +0.02    -0.04    -0.11    -0.19
+       3.0     +0.03    -0.01    -0.07    -0.16    -0.23
+       4.0     +0.03    -0.04    -0.13    -0.20    -0.23
+
+**Best cell: +0.03R** (stop 4.0 ATR, RR 1.0). Costs are a further
+0.02-0.06R per trade at typical stop sizes, so the best cell is zero or
+negative after costs. Every cell at RR >= 2.0 — the shipped `rr_target`
+and the RiskAgent floor — is negative. The few positive cells sit at
+RR <= 1.5 with very wide stops, which the risk layer forbids and which
+are inside noise anyway.
+
+### Why this matters beyond the stop question
+
+This is the **most independent** evidence in the engagement that the
+strategies have no edge. It uses:
+
+  - no cost model, no P&L proxy, no ₹1,143, no promotion gate;
+  - raw index candles and first-touch logic only;
+  - every stop scale from 1 to 4 ATR and every RR from 1.0 to 3.0;
+  - 6,898 entries across 4 strategies and 4 symbols.
+
+It converges on the same conclusion as the promotion gate (0 of 11) by a
+completely different route. Two independent methods agreeing is worth
+more than either alone — and unlike the gate, this one cannot be
+attacked on the cost model or the provisional sd.
+
+### What this closes
+
+  - **Stop scaling: closed.** No scale helps; not implemented.
+  - **Target geometry: closed.** Already shown structure and Fib targets
+    are worse than the RR target.
+  - **Entry filters: closed.** The surviving filters lift MFE 15-26%,
+    nowhere near enough to move a -0.03R expectancy positive.
+
+The remaining lever is the ENTRY SIGNAL itself — what makes the system
+decide to trade at all — not the geometry wrapped around it. Everything
+downstream of the entry has now been tested and found not to be the
+binding constraint.
+
 ## ENTRY QUALITY — RESULT (2026-08-03). The stop is not scaled to how far price travels
 
 `entry_quality.py`, 6,897 entries. MFE measured over a FIXED 60-bar
