@@ -113,6 +113,55 @@ check("exactly one INFO summary line",
       str([m for lv, m in lines if lv == "info"]))
 check("it does not return empty", len(q3) >= 1)
 
+print("\n4b) the summary must AGREE with the quotes it describes")
+# The two kinds of stale are counted separately on purpose: "we could not
+# reach anyone" and "the market is shut" need different responses.
+cache_b = mp.QuoteCache()
+cache_b.put(mp.Quote("GOLD", 9.0, last_updated=time.time() - 99999))   # dead
+weekend = Stub("W", {})           # returns a stale-but-successful quote
+
+
+class Weekend(mp.MacroDataProvider):
+    name = "W"
+
+    def supports(self, symbol, cfg=None):
+        return symbol == "SILVER"
+
+    def fetch_many(self, symbols, cfg):
+        # A successful fetch whose data is simply old — a Saturday.
+        return {"SILVER": mp.Quote("SILVER", 57.8,
+                                   last_updated=time.time() - 120000,
+                                   source="W")}
+
+
+q5, s5 = mp.fetch(["GOLD", "SILVER"], cfg=CFG, chain=[Weekend()], cache=cache_b)
+check("a successful-but-old fetch counts as stale_on_arrival",
+      s5["stale_on_arrival"] == 1 and s5["stale_on_arrival_symbols"] == ["SILVER"],
+      str(s5["stale_on_arrival_symbols"]))
+check("a provider-failure fallback counts as from_stale_cache",
+      s5["from_stale_cache"] == 1
+      and s5["from_stale_cache_symbols"] == ["GOLD"],
+      str(s5["from_stale_cache_symbols"]))
+check("the two are NOT double-counted",
+      s5["stale_on_arrival"] + s5["from_stale_cache"]
+      == sum(1 for x in q5.values() if x.is_stale(CFG)),
+      "the summary must reconcile against the quotes exactly")
+_lines = []
+mp.fetch(["GOLD", "SILVER"], cfg=CFG, chain=[Weekend()], cache=cache_b,
+         log=lambda lv, m: _lines.append((lv, m)))
+_info = [m for lv, m in _lines if lv == "info"][0]
+check("INFO names stale-on-arrival explicitly", "stale on arrival" in _info, _info)
+check("and stale-cache separately", "from stale cache" in _info, _info)
+# The regression this fixes: a Sunday run reported "0 stale" while every
+# quote was stale, because only the cache-fallback path was counted.
+check("a run where EVERYTHING is stale does not report zero",
+      mp.fetch(["SILVER"], cfg=CFG, chain=[Weekend()],
+               cache=mp.QuoteCache())[1]["stale_on_arrival"] == 1,
+      "the summary previously contradicted the data it summarised")
+check("the legacy `stale` key keeps its old meaning",
+      s5["stale"] == s5["from_stale_cache"],
+      "an older reader must not silently switch definition")
+
 print("\n5) staleness across session boundaries")
 now = time.time()
 fut = mp.Quote("SPX_FUT", 5000.0, last_updated=now - 1200)     # 20 min

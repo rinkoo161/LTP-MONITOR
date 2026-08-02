@@ -594,10 +594,34 @@ def fetch(symbols, cfg=None, cache=None, chain=None, market_open=False,
             stale_served.append(s)
             pending.remove(s)
 
+    # TWO KINDS OF STALE, deliberately not merged (2026-08-02).
+    #
+    #   from_stale_cache   every provider failed; we served old data
+    #                      because it beats returning nothing
+    #   stale_on_arrival   the fetch SUCCEEDED, but the quote is older
+    #                      than its freshness threshold — normal on a
+    #                      weekend or outside a symbol's session
+    #
+    # "we could not reach anyone" and "the market is shut" are different
+    # states and need different responses, so one counter cannot serve
+    # both. The summary previously counted only the first, which made it
+    # report "0 stale" on a Sunday while all 17 quotes were stale — a log
+    # line asserting the opposite of the data underneath it, which is the
+    # exact failure mode this module was written to remove.
+    stale_on_arrival = sorted(s for s, q in quotes.items()
+                              if s not in stale_served and q.is_stale(cfg))
     summary = {"requested": len(symbols), "served": len(served),
-               "cached": len(from_cache), "stale": len(stale_served),
+               "cached": len(from_cache),
+               "from_stale_cache": len(stale_served),
+               "from_stale_cache_symbols": sorted(stale_served),
+               "stale_on_arrival": len(stale_on_arrival),
+               "stale_on_arrival_symbols": stale_on_arrival,
+               # Legacy key, unchanged meaning, so any older reader keeps
+               # working rather than silently switching definition.
+               "stale": len(stale_served),
                "failed": len(pending), "failed_symbols": pending,
                "by_provider": served}
     log("info", f"macro: {len(served)} served, {len(from_cache)} cached, "
-                f"{len(stale_served)} stale, {len(pending)} failed")
+                f"{len(pending)} failed; {len(stale_on_arrival)} stale on "
+                f"arrival, {len(stale_served)} from stale cache")
     return quotes, summary
