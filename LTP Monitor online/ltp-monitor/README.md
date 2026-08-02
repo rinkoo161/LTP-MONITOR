@@ -37,6 +37,13 @@ harder than residential ones. If the macro panel goes quiet, check the
 pin in `requirements.txt` first. The chain is ordered so demoting it to
 secondary is a one-line change.
 
+During the session (09:15-15:30 IST) the **index futures are refreshed
+every 5 minutes** (`macro_intrasession_refresh_sec`), separately from the
+once-daily checkpoints. That cadence must stay below the futures
+freshness threshold in `macro_symbols` (15 min) — otherwise the quote
+ages out between refreshes and `global_risk_sentiment`, which refuses
+stale quotes, flickers between a value and `None`.
+
 Every quote carries `last_updated` and `is_stale`. Cash indices
 (`SPX_CASH`, `DJI_CASH`) do not update during the IST session — they show
 the previous US close and are flagged, never presented as live. The

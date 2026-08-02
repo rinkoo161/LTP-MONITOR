@@ -235,6 +235,38 @@ check("and refuses to act on a stale quote",
       'if d.get("is_stale")' in agent_src,
       "a frozen cash index must not drive an MTF confidence input")
 
+print("\n11) intra-session futures refresh")
+import macro_providers as _mp
+check("refresh cadence is BELOW the futures staleness threshold",
+      config.DEFAULTS["macro_intrasession_refresh_sec"]
+      < _mp.freshness_threshold("SPX_FUT", config.DEFAULTS),
+      f"{config.DEFAULTS['macro_intrasession_refresh_sec']}s refresh vs "
+      f"{_mp.freshness_threshold('SPX_FUT', config.DEFAULTS):.0f}s threshold — "
+      f"if cadence exceeded it, sentiment would flicker between a value and None")
+check("it refreshes the FUTURES, not the cash indices",
+      set(__import__('news_macro_agent').INTRASESSION_SYMBOLS)
+      == {"SPX_FUT", "NDX_FUT", "DJI_FUT", "RUT_FUT"},
+      "cash does not move during the IST session, which is the whole point")
+check("gated on market_open", "market_open(now)" in agent_src)
+check("and on its own switch", "macro_intrasession_enabled" in agent_src)
+check("routine refreshes do NOT spam the macro event log",
+      "quiet=True" in agent_src and "if not quiet or moved:" in agent_src,
+      "~75 refreshes a session would bury the daily checkpoints")
+check("but a MATERIAL move still logs an event",
+      "if not quiet or moved:" in agent_src)
+check("a refresh failure cannot kill the cycle",
+      "intra-session refresh failed" in agent_src)
+
+print("\n12) the agent no longer idles without API keys")
+check("market data does not require any key",
+      "idle — no API keys configured" not in agent_src,
+      "yfinance is primary and needs none; idling threw away the only "
+      "provider that works")
+check("only the NEWS half is gated on newsapi_api_key",
+      'if not cfg.get("newsapi_api_key")' in agent_src)
+check("and it says market data is unaffected",
+      "Market data is unaffected" in agent_src)
+
 print()
 if FAILED:
     print(f"{len(FAILED)} FAILED: {', '.join(FAILED)}")

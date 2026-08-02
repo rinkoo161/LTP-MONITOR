@@ -104,6 +104,24 @@ CHECKPOINTS = [
     (8,  30, "fii_dii",        "news",        None),   # placeholder — see docstring
 ]
 
+# ---------------------------------------------------- intra-session refresh
+# 2026-08-02. The daily CHECKPOINTS all fire pre-market (05:00-08:30 IST),
+# which was fine when the monitor read CASH indices — they do not move
+# during the IST session anyway. It is NOT fine now that the primary read
+# is the e-mini FUTURES, which were chosen precisely because they trade
+# THROUGH 09:15-15:30.
+#
+# It was also an outright regression: `_update_global_sentiment` now
+# refuses stale quotes, and the futures freshness threshold is 15 minutes.
+# A quote taken at 05:00 is 4h15m old at the opening bell, so the sentiment
+# input MTFConfluenceAgent reads would have been None for the entire
+# session — safer than reporting yesterday's move as today's, but silent.
+#
+# A single extra checkpoint would not fix it: the quote would go stale 15
+# minutes later. This is a REPEATING refresh, futures only, and only while
+# the market is open. The daily checkpoints are untouched.
+INTRASESSION_SYMBOLS = ("SPX_FUT", "NDX_FUT", "DJI_FUT", "RUT_FUT")
+
 # TTL (seconds) per symbol group before a re-check re-hits the API
 TTL_FAST = 600     # 10 min — crude/gold/silver/USDINR move quickly
 TTL_SLOW = 3600    # 60 min — indices only matter at their fixed checkpoint
@@ -346,6 +364,7 @@ class NewsMacroAgent(threading.Thread):
         self._done_today = set()
         self._today = None
         self._warned_no_keys = False
+        self._last_intrasession = 0.0
 
     def start(self):
         return threading.Thread.start(self)
@@ -375,16 +394,19 @@ class NewsMacroAgent(threading.Thread):
 
     def cycle(self):
         cfg = config.load()
-        if not any([cfg.get("alpha_vantage_api_key"), cfg.get("twelve_data_api_key"),
-                    cfg.get("newsapi_api_key")]):
+        # 2026-08-02 — this used to idle the WHOLE agent when no provider
+        # key was configured. That predates the provider refactor: market
+        # data now comes from yfinance first, which needs no key and
+        # covers every symbol, so idling here threw away the only
+        # provider that actually works. Only the NEWS half needs a key
+        # now, and it says so instead of stopping everything.
+        if not cfg.get("newsapi_api_key"):
             if not self._warned_no_keys:
                 self.bus.log(self.name,
-                             "no macro data provider keys configured "
-                             "(alpha_vantage_api_key / twelve_data_api_key / "
-                             "newsapi_api_key) — agent idle")
+                             "no newsapi_api_key — macro NEWS checkpoints "
+                             "will be skipped. Market data is unaffected "
+                             "(yfinance needs no key).")
                 self._warned_no_keys = True
-            self.summary = "idle — no API keys configured"
-            return
 
         now = now_ist()
         today = now.strftime("%Y-%m-%d")
@@ -396,6 +418,26 @@ class NewsMacroAgent(threading.Thread):
         due = self._due_checkpoints(now)
         for cp in due:
             self._run_checkpoint(cp, cfg)
+
+        # Repeating futures refresh while the session is open. Cadence is
+        # deliberately shorter than the futures freshness threshold (15
+        # min) so the sentiment input stays FRESH rather than flickering
+        # between a value and None as each quote ages out.
+        try:
+            every = max(60, int(cfg.get("macro_intrasession_refresh_sec", 300)))
+        except (TypeError, ValueError):
+            every = 300
+        if (cfg.get("macro_intrasession_enabled", True) and market_open(now)
+                and time.time() - self._last_intrasession >= every):
+            self._last_intrasession = time.time()
+            try:
+                # quiet=True: this runs ~75x a session. Writing a macro
+                # EVENT every time would bury the daily checkpoints it is
+                # meant to complement — only a material move is logged.
+                self._fetch_market_data("intrasession", INTRASESSION_SYMBOLS,
+                                        cfg, quiet=True)
+            except Exception as e:
+                self.bus.log(self.name, f"⚠ intra-session refresh failed: {e}")
 
         if due:
             self.summary = f"ran checkpoint(s): {', '.join(c[2] for c in due)}"
@@ -449,7 +491,7 @@ class NewsMacroAgent(threading.Thread):
 
     # --------------------------------------------------------- market data
 
-    def _fetch_market_data(self, checkpoint_key, symbols, cfg):
+    def _fetch_market_data(self, checkpoint_key, symbols, cfg, quiet=False):
         """Fetch via the macro_providers chain. Checkpoints are UNCHANGED —
         this still fires at fixed IST times, it just batches within the
         checkpoint instead of making one keyed request per symbol.
@@ -512,8 +554,11 @@ class NewsMacroAgent(threading.Thread):
         note = f"{checkpoint_key}: " + ", ".join(
             f"{s}={v}" for s, v in results.items() if v is not None) or f"{checkpoint_key}: no data"
         impact = "Risk" if moved else "Info"
-        self._log_event("Market Data", note, impact,
-                        "monitor" if moved else "none", major=bool(moved))
+        # `quiet` suppresses the routine event; a MATERIAL move still logs,
+        # because that is the thing worth interrupting someone for.
+        if not quiet or moved:
+            self._log_event("Market Data", note, impact,
+                            "monitor" if moved else "none", major=bool(moved))
 
     def _update_global_sentiment(self, market_data):
         """Turns the raw DJI/NASDAQ/SPX/RUSSELL2000 numbers into an

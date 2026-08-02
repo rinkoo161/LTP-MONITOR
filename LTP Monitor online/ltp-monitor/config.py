@@ -744,6 +744,11 @@ DEFAULTS = {
     # Per-symbol provider detail at DEBUG; the one-line cycle summary is
     # always at INFO. Off by default — this is a high-volume log path.
     "macro_debug_logging": False,
+    # Repeating futures refresh during 09:15-15:30 IST. MUST stay below
+    # the futures freshness threshold in macro_symbols (900s) or the
+    # sentiment input flickers between a value and None as quotes age out.
+    "macro_intrasession_enabled": True,
+    "macro_intrasession_refresh_sec": 300,
     "macro_yf_interval": "1h",
     "macro_yf_period": "5d",
     "macro_cache_ttl_open": 600,
