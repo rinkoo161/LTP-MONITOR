@@ -3628,6 +3628,97 @@ Prints a diagnostic checklist when the table is empty rather than
 writing a silently useless file.
 
 
+## ENTRY SIGNAL — TESTED, THREAD CLOSED (2026-08-03)
+
+Asked to fix the entry signal. Tested whether there is a signal to fix.
+There is a small one; it does not replicate, and it is smaller than
+costs. **No code or config was changed.**
+
+### Are the entries better than random?
+
+Matched random baseline — same count per symbol, random timestamps,
+random direction, 20 draws so the baseline's own sampling error is
+known (sd 0.010-0.015R, which is the same order as every effect here):
+
+    geometry     REAL    RANDOM mean     sd      z    verdict
+    2.0 / RR2.0  -0.030R    -0.037R   0.015  +0.45   indistinguishable
+    3.0 / RR1.0  +0.027R    -0.007R   0.011  +3.16   better
+    2.5 / RR1.0  +0.016R    -0.006R   0.010  +2.02   better
+
+**At the SHIPPED geometry (RR 2.0) the entries are indistinguishable
+from random.** Any information they carry appears only at wide stops and
+RR ~1.0 — a high-win-rate, low-payoff configuration the system does not
+use and `RiskAgent`'s 1.95 floor forbids.
+
+A one-draw version of this baseline said the entries were WORSE than
+random on 4 of 5 geometries. That was wrong and was corrected: with
+baseline sd ~0.012R, a single draw cannot resolve effects of 0.01-0.03R.
+Multi-draw baselines are mandatory at these magnitudes.
+
+### Does it replicate?
+
+Chronological 60/40 split, random baseline drawn from each half's OWN
+time range so regime is not the confound:
+
+    half            n      REAL   RANDOM      sd       z   verdict
+    IN-SAMPLE    4138   +0.011R  -0.001R   0.014   +0.91   indistinguishable
+    OUT-OF-SAMPLE 2760   +0.050R  -0.005R   0.021   +2.69   better
+
+**Absent in the larger half, present in the smaller one — backwards.** A
+stable edge shows most clearly in-sample, where there is more data and
+less noise. The full-sample z of +3.16 was carried by the last 40% of
+the period. The direction-shuffle test (same timestamps, direction
+randomised) splits identically — "timing only" in-sample, "directional
+skill" out-of-sample — which is the same instability seen twice, not two
+findings.
+
+**The fair reading, both ways:** the effect fails to replicate where it
+should be easiest to see, and after ~5 geometries and 2 splits one z>2 is
+unremarkable by chance. But the halves are not significantly different
+from EACH OTHER either (difference 0.039R against a combined sd 0.025R,
+z~1.5), so the data is also consistent with one small effect of ~+0.027R
+under wide error bars. **Both readings agree on the magnitude, and
+0.027R does not clear costs of 0.02-0.06R.**
+
+### Why the thread is closed rather than continued
+
+Five geometries, a 30-cell grid, two splits and a direction shuffle have
+now been run against the same 6,898 entries. Each further test on this
+dataset makes a surviving result less trustworthy, not more — that is
+the curve-fitting this engagement exists to refuse, and one artifact has
+already passed an out-of-sample test here (see ENTRY QUALITY).
+
+### What is now closed, and what is not
+
+CLOSED — tested, none is the binding constraint:
+
+  - stop scaling (no scale is positive after costs)
+  - target geometry (structure and Fib targets are worse than RR)
+  - entry filters (15-26% MFE lift, far short of moving -0.03R positive)
+  - the entry signal itself (indistinguishable from random at the shipped
+    geometry; the RR~1.0 effect does not replicate and is below costs)
+
+**FOUR INDEPENDENT METHODS NOW AGREE**: the promotion gate (0 of 11), the
+target-reach test, the first-touch expectancy grid, and the random
+baseline. They share no cost model, no P&L proxy, no provisional
+constant and no gate. That convergence is the strongest statement this
+engagement has produced.
+
+NOT CLOSED — and the only honest routes left:
+
+  - **new data.** The `chain_snapshots` archive began 2026-08-02 and the
+    futures OHLCV series began 2026-08-01. Neither existed for any of the
+    work above. Signal research on data this system has never had is a
+    different question from re-testing 6,898 entries.
+  - **observation.** Keep the eleven running in paper, let the archive
+    build, and re-measure when there is data the current conclusions were
+    not derived from.
+
+Nothing here argues for disabling anything: paper costs nothing and
+generates the data that makes the next answer possible. It argues
+against adding a twelfth strategy, loosening the RR floor, or tuning
+geometry — all three are now measured and none of them is the problem.
+
 ## STOP SCALING — TESTED AND NOT IMPLEMENTED (2026-08-03)
 
 Asked to scale the stops to the travel distribution. Measured it first,
