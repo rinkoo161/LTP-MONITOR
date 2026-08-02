@@ -283,6 +283,73 @@ headline), so the veto logic is what is under test. 19/19.
 A green suite is the point. On 2026-08-01 a live regression hid inside an
 already-failing file for exactly as long as the red was being tolerated.
 
+## ONE option stop rule, not four (2026-08-02)
+
+The discrete stop widths had a concrete cause: option stops were set in
+FOUR places that disagreed about everything.
+
+    analyzer  (x3 sites)  entry * 0.70                flat 30%, no vol input
+    agents ~6285 / ~6990  entry * (1 - risk_pct)      clamp [5%, 30%]
+    agents ~6575          atr_pct * atr_stop_multiplier, fallback 0.15
+    agents ~6796 / ~7211  1.5 * ATR * 0.5             clamp [10%, 60%]
+
+Two clamps, two fallbacks, one path ignoring volatility entirely. A
+trade's risk depended on which code path generated it — the same failure
+already collapsed for the OI quadrant classifier, the market-session
+check and the news regexes.
+
+### The ATR branch was DIMENSIONALLY WRONG
+
+`atr_pct` is index ATR as a percentage of SPOT. The rule computed
+`atr_pct * multiplier / 100` and used the result as a fraction of
+PREMIUM. For NIFTY that is 0.70 x 2.5 / 100 = **1.75%**, below the 5%
+floor — so the ATR branch ALWAYS returned the clamp. **Every
+"volatility-based" stop in this system was really the lower bound**, which
+is exactly why a 5% cluster appears in all four symbols.
+
+Correct translation: an index move of `atr_pct%` moves the premium by
+that many index points times delta.
+
+    idx_pts   = atr_pct/100 * spot * option_stop_atr_mult
+    risk_pct  = idx_pts * delta / entry
+
+### Consolidated into `analyzer.option_stop_geometry()`
+
+Preference order, most informative first: a STRUCTURAL stop already in
+index points, then ATR, then a flat fallback — and the branch used is
+reported in `meta["basis"]`, so "why is this stop 43%?" is answerable
+from the record for the first time. Clamping is reported too, with the
+raw value preserved.
+
+Output at real per-symbol volatility:
+
+    sym         prem   atr%   stop %   risk/lot ₹   basis
+    NIFTY        146  0.70%     29%        2,764    atr
+    BANKNIFTY    814  1.03%     18%        4,426    atr
+    FINNIFTY     121  1.00%     54%        3,945    atr
+    SENSEX       163  0.77%     60%        1,956    atr (clamped)
+
+Widths now differ for a REAL reason — how expensive the option is
+relative to spot — rather than by code path. SENSEX still clamps because
+the options being traded there are only 0.20% of spot, so an ATR-sized
+move genuinely threatens most of the premium.
+
+### Two deliberate choices, both about NOT shifting risk under a refactor
+
+  - `option_stop_atr_mult` = **0.5**, chosen so the median NIFTY stop
+    lands at 29% — matching the 30% that dominated the journal. A new
+    key rather than reusing `atr_stop_multiplier`, whose 2.5 was tuned
+    against the dimensionally wrong expression and means something else.
+  - `STOP_FALLBACK_PCT` = **0.30**, not the 0.15 one caller used. 0.15
+    would have been systematically tighter than the rule it stands in
+    for — a silent risk change smuggled in under a consolidation.
+    `test_signal_invariants` caught this: it asserts the fallback
+    reproduces the old rule-engine numbers exactly (70.0 / 160.0).
+
+Residual rupee-risk variation across symbols (₹1,956-₹4,426) is genuine
+and is SIZING's job, not the stop's — handled by the per-trade cap today,
+and by dynamic sizing if it is ever enabled.
+
 ## The "SENSEX concentration" was a measurement artefact (2026-08-02)
 
 Investigating why the ₹2,000 cap refused 42 of 47 NIFTY trades but only

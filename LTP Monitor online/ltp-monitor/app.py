@@ -616,6 +616,7 @@ class SettingsIn(BaseModel):
     trail_sl_trigger_pct: int | None = None
     trail_sl_gap_pct: int | None = None
     stop_mode: str | None = None
+    option_stop_atr_mult: float | None = None
     atr_stop_multiplier: float | None = None
     trail_sl_mode: str | None = None
     atr_trail_multiplier: float | None = None

@@ -6792,9 +6792,18 @@ class MTFConfluenceAgent(Agent):
             return "no ATM ltp"
         atr = result["daily_atr14"] or 0
         sl_pts_index = 1.5 * atr if atr else entry * 0.30
-        sl_pts_premium = sl_pts_index * 0.5
-        sl_pts_premium = min(max(sl_pts_premium, entry * 0.10), entry * 0.60)
-        stoploss = round(entry - sl_pts_premium, 2)
+        # 2026-08-02 — routed through analyzer.option_stop_geometry(), the
+        # single definition. This site used its OWN clamp ([10%, 60%])
+        # while two other paths used [5%, 30%] and a third used a flat
+        # 30%, which is what produced discrete stop widths in the journal.
+        from analyzer import option_stop_geometry as _osg
+        _atr_pct = (100.0 * atr / analysis["spot"]) if (atr and analysis.get("spot")) else None
+        # cfg=None so the helper loads it: `webhook_signal` (the other
+        # call site) has no `cfg` in scope, and passing one there would
+        # NameError at runtime while compiling cleanly.
+        stoploss, _t1, _t2, _sg_meta = _osg(entry, None, atr_pct=_atr_pct,
+                                            spot=analysis.get("spot"))
+        sl_pts_premium = entry - stoploss
         risk = entry - stoploss
         if risk <= 0:
             return "degenerate stop distance"
@@ -7207,9 +7216,18 @@ class Orchestrator:
         # an unclamped ATR-scaled distance can exceed the ENTIRE
         # premium when ATR is large relative to that day's IV).
         sl_pts_index = 1.5 * atr if atr else entry * 0.30
-        sl_pts_premium = sl_pts_index * 0.5
-        sl_pts_premium = min(max(sl_pts_premium, entry * 0.10), entry * 0.60)
-        stoploss = round(entry - sl_pts_premium, 2)
+        # 2026-08-02 — routed through analyzer.option_stop_geometry(), the
+        # single definition. This site used its OWN clamp ([10%, 60%])
+        # while two other paths used [5%, 30%] and a third used a flat
+        # 30%, which is what produced discrete stop widths in the journal.
+        from analyzer import option_stop_geometry as _osg
+        _atr_pct = (100.0 * atr / analysis["spot"]) if (atr and analysis.get("spot")) else None
+        # cfg=None so the helper loads it: `webhook_signal` (the other
+        # call site) has no `cfg` in scope, and passing one there would
+        # NameError at runtime while compiling cleanly.
+        stoploss, _t1, _t2, _sg_meta = _osg(entry, None, atr_pct=_atr_pct,
+                                            spot=analysis.get("spot"))
+        sl_pts_premium = entry - stoploss
         risk = entry - stoploss
         if risk <= 0:
             return {"error": "Degenerate stop distance — refusing to trade"}

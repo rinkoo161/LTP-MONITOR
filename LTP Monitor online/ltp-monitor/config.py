@@ -125,6 +125,14 @@ DEFAULTS = {
     # more volatile the premium moves vs. the underlying.
     "stop_mode": "fixed_pct",       # "fixed_pct" (default, entry*0.85 style)
                                     # or "atr" (entry - atr_pct%*multiplier)
+    # 2026-08-02 — used by analyzer.option_stop_geometry() to turn index
+    # ATR into an option stop. SEPARATE from atr_stop_multiplier, which
+    # was applied to a dimensionally wrong expression (index ATR as a %
+    # of SPOT, used as a fraction of PREMIUM) and therefore always hit
+    # the lower clamp. 0.5 is chosen so the median NIFTY stop lands ~29%,
+    # matching the 30% that dominated the journal — this consolidates the
+    # rules WITHOUT shifting the typical risk level.
+    "option_stop_atr_mult": 0.5,
     "atr_stop_multiplier": 2.5,     # SL distance = entry * atr_pct% * this
     "trail_sl_mode": "fixed_pct",   # "fixed_pct" (trail_sl_gap_pct above)
                                     # or "atr" (peak - atr_pct%*multiplier)

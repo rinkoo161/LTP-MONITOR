@@ -721,6 +721,102 @@ def option_chain_ai_output(bias, support, resistance, atm, confidence,
     }
 
 
+
+# --------------------------------------------------------------- stops
+# ONE definition of option stop geometry (2026-08-02).
+#
+# There were FOUR, and they disagreed about everything that matters:
+#
+#   analyzer  (x3 sites)  entry * 0.70                 flat 30%, no vol input
+#   agents ~6285 / ~6990  entry * (1 - risk_pct)       clamp [5%, 30%]
+#   agents ~6575          atr_pct * atr_stop_multiplier, fallback 0.15
+#   agents ~6796 / ~7211  1.5*ATR*0.5                  clamp [10%, 60%]
+#
+# Two different clamps, two different fallbacks, one path ignoring
+# volatility entirely. The result is visible in the journal as stop
+# widths clustered on discrete values — 43%, 30%, 14%, 5% — which no
+# volatility-derived rule produces. A trade's risk therefore depended on
+# which code path happened to generate it, not on the market, and that
+# made per-symbol risk incomparable: NIFTY signals came mostly from the
+# widest rule, SENSEX from the flat 30% one.
+#
+# This is the same failure the OI quadrant classifier, the market-session
+# check and the news regexes each had: two near-identical implementations
+# that silently drift. Collapsed to one, with the others as callers.
+STOP_BOUNDS = (0.05, 0.60)      # fraction of premium; the UNION of the old
+                                # clamps, so no existing path is truncated
+                                # by the consolidation itself
+# Used ONLY when no volatility reading exists. 0.30, not the 0.15 the
+# agents paths used: the ATR branch produces ~29% for a typical NIFTY
+# case, and 30% is what dominated the journal, so a fallback of 0.15
+# would be systematically TIGHTER than the rule it stands in for — a
+# silent risk change smuggled in under a consolidation.
+STOP_FALLBACK_PCT = 0.30
+
+
+def option_stop_geometry(entry, cfg=None, atr_pct=None, spot=None,
+                         spot_risk_pts=None, delta=0.5, rr=2.0, rr2=2.67):
+    """(stoploss, target1, target2, meta) for a long option.
+
+    Preference order, most informative first:
+
+      1. `spot_risk_pts` — a STRUCTURAL stop already expressed in index
+         points (e.g. the entry candle's low). Translated to premium via
+         `delta`. This is the best input because it comes from price
+         structure rather than an average.
+      2. `atr_pct` — index ATR as a percentage of spot, scaled by
+         `atr_stop_multiplier`. Volatility-proportional, so it is
+         comparable across symbols.
+      3. `STOP_FALLBACK_PCT` — a flat fraction, used ONLY when neither
+         exists, and reported as such in `meta["basis"]` so a fallback is
+         never mistaken for a measurement.
+
+    Returns the fraction actually used in `meta["risk_pct"]` and which
+    branch produced it in `meta["basis"]`, because "why is this stop
+    43%?" was previously unanswerable from the record.
+    """
+    import config as _cfg
+    cfg = cfg if cfg is not None else _cfg.load()
+    entry = float(entry or 0)
+    if entry <= 0:
+        return None, None, None, {"basis": "no entry price"}
+    lo, hi = STOP_BOUNDS
+    if spot_risk_pts:
+        risk_pct = abs(float(spot_risk_pts)) * float(delta) / entry
+        basis = "structural"
+    elif atr_pct and spot:
+        # DIMENSIONS. `atr_pct` is index ATR as a percentage of SPOT. The
+        # old rule did `atr_pct * multiplier / 100` and used the result
+        # directly as a fraction of PREMIUM — comparing a spot quantity
+        # to a premium one. For NIFTY that yields 1.75%, below the 5%
+        # floor, so the ATR branch ALWAYS produced the lower clamp: every
+        # "volatility-based" stop was really the clamp, which is why the
+        # journal shows a 5% cluster in every symbol.
+        #
+        # Correct translation: an index move of `atr_pct%` of spot moves
+        # the premium by that many points times delta.
+        idx_pts = float(atr_pct) / 100.0 * float(spot) * \
+            cfg.get("option_stop_atr_mult", 0.5)
+        risk_pct = (idx_pts * float(delta)) / entry
+        basis = "atr"
+    elif atr_pct:
+        # ATR known but no spot to translate it through — refuse to guess
+        # rather than reuse the dimensionally wrong shortcut.
+        risk_pct = STOP_FALLBACK_PCT
+        basis = "fallback (ATR present but no spot to translate it)"
+    else:
+        risk_pct = STOP_FALLBACK_PCT
+        basis = "fallback (no ATR reading)"
+    clamped = max(lo, min(hi, risk_pct))
+    meta = {"basis": basis, "risk_pct": round(clamped, 4),
+            "raw_risk_pct": round(risk_pct, 4),
+            "clamped": abs(clamped - risk_pct) > 1e-9,
+            "bounds": STOP_BOUNDS}
+    return (round(entry * (1 - clamped), 2),
+            round(entry * (1 + clamped * rr), 2),
+            round(entry * (1 + clamped * rr * (rr2 / rr if rr else 1)), 2),
+            meta)
+
 def analyze(chain: dict, momentum: dict | None = None,
             indicators: dict | None = None, snapshot_ctx: dict | None = None) -> dict:
     rows = chain["rows"]
@@ -1298,9 +1394,13 @@ def _rule_signal(analysis: dict) -> dict:
         "signal": "BUY_CE" if leg == "ce" else "BUY_PE",
         "strike": atm,                      # ATM only — never OTM
         "entry": round(ltp, 1),
-        "stoploss": round(ltp * 0.70, 1),   # risk = 30% of premium
-        "target1": round(ltp * 1.60, 1),    # reward = 60% -> RR 1:2 minimum
-        "target2": round(ltp * 2.05, 1),
+        # 2026-08-02 — was a flat 30% of premium with no volatility input.
+        # Now the shared geometry, so this path cannot drift from the
+        # others. `atr_pct` comes from the regime engine when available;
+        # without it the shared fallback applies and SAYS SO.
+        **dict(zip(("stoploss", "target1", "target2"),
+                   option_stop_geometry(ltp, atr_pct=analysis.get("atr_pct"),
+                                        spot=spot)[:3])),
         "spot_invalidation": sup if leg == "ce" else res,
         "confidence": analysis["confidence"],
         "timeframe": "intraday",
@@ -1372,7 +1472,13 @@ def enforce_signal_invariants(sig, analysis, cfg=None, log=lambda m: None):
             if new_ltp:
                 repairs.append(f"entry {entry} -> {new_ltp} (re-read at ATM)")
                 entry = sig["entry"] = round(new_ltp, 1)
-                sl = sig["stoploss"] = round(new_ltp * 0.70, 1)
+                # Re-derive the stop for the NEW strike through the shared
+                # geometry rather than reapplying a flat 30%: the premium
+                # just changed, so the risk fraction has to be recomputed
+                # on the same basis every other path uses.
+                sl = sig["stoploss"] = option_stop_geometry(
+                    new_ltp, atr_pct=analysis.get("atr_pct"),
+                    spot=analysis.get("spot"))[0]
 
     # --- risk-reward floor (the prompt says min 1:2) ---
     min_rr = cfg.get("signal_min_rr", 2.0)
@@ -1390,7 +1496,8 @@ def enforce_signal_invariants(sig, analysis, cfg=None, log=lambda m: None):
         # rule-engine's own fractions rather than inventing something.
         repairs.append(f"stoploss {sl} invalid vs entry {entry} — "
                        "reset to rule-engine 30%/60%")
-        sig["stoploss"] = round(entry * 0.70, 1)
+        _sl, _t1, _t2, _m = option_stop_geometry(entry)
+        sig["stoploss"] = _sl
         sig["target1"] = round(entry * 1.60, 1)
         sig["target2"] = round(entry * 2.05, 1)
 
