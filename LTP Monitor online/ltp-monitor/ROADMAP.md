@@ -3628,6 +3628,104 @@ Prints a diagnostic checklist when the table is empty rather than
 writing a silently useless file.
 
 
+## ENTRY QUALITY — RESULT (2026-08-03). The stop is not scaled to how far price travels
+
+`entry_quality.py`, 6,897 entries. MFE measured over a FIXED 60-bar
+window after entry rather than to the exit, so the number describes the
+ENTRY alone and is not confounded by exit timing.
+
+### FIRST, A METHOD FAILURE WORTH MORE THAN THE RESULT
+
+Hypothesis E — "entries with >=2R of structural headroom travel further" —
+produced a **+3.51R in-sample lift that SURVIVED out-of-sample at
++3.76R**. Same sign, same magnitude, n=1451/4779. By the usual standard
+that is a finding.
+
+**It was an artifact.** Headroom and MFE were both divided by R, and R is
+chosen by the strategy:
+
+    headroom band   median R    median headroom_abs   median MFE_abs
+    0   - 0.5 R      111.2 pt          9.5 pt            63.1 pt
+    0.5 - 1   R       34.5 pt         24.0 pt            69.0 pt
+    1   - 2   R       20.1 pt         29.4 pt            61.7 pt
+    2   - 4   R       15.1 pt         43.3 pt            54.9 pt
+    4   - 8   R       12.0 pt         65.4 pt            61.6 pt
+    8   - 99  R        8.8 pt        108.7 pt            56.7 pt
+
+    corr(headroom_R, 1/R)       = +0.55
+    corr(headroom_ABS, MFE_ABS) = +0.07   <- artifact-free, ~nothing
+
+A tight stop inflates both ratios simultaneously. **An out-of-sample
+split does NOT protect against a mechanical confound** — it reproduces
+it faithfully, because the mechanism is present in both halves. Only
+re-testing in absolute units exposed it.
+
+### THE ACTUAL FINDING, and it is in that table
+
+**Median favourable travel is ~60 points REGARDLESS of the stop.** MFE
+runs 54.9-69.0 points across every band while the stop R varies **12x**,
+from 8.8 to 111.2 points. Stop distance is essentially uncorrelated with
+how far price actually goes (corr(R, MFE_ABS) = +0.14).
+
+That is the entry/exit geometry defect, and it explains the earlier
+target result directly:
+
+  - a trade with a 111-point stop needs 222 points to reach 2R, against
+    ~60 points of typical travel — unreachable by construction;
+  - a trade with an 8.8-point stop reaches 2R on noise, and is stopped
+    out by noise just as easily.
+
+The strategies are not choosing stops with any reference to the
+distribution of moves they are trying to capture. `rr_target` of 2.0 is
+then applied to an arbitrary denominator.
+
+### Re-testing every hypothesis artifact-free (MFE in ATR, a MARKET property)
+
+    hypothesis              IS lift   OOS lift   verdict
+    A trend-aligned          +0.14     +0.28     fails (and FLIPPED sign
+                                                  vs the R-normalised run)
+    B first hour             -0.92     -0.79     survives
+    C ATR above median       -0.26     -0.43     survives
+    D near VWAP              -0.68     -0.51     survives
+    E headroom >= 2 ATR      -0.10     -0.04     fails
+
+Baseline median MFE = 3.41 ATR. Three survive, **all with the OPPOSITE
+sign to the hypothesis**: entries AFTER the first hour, in LOWER
+volatility, and FURTHER from VWAP travel more. D is the most coherent —
+distance from VWAP means an established move, proximity means chop.
+
+C is partly a normalisation effect and should not be over-read: elevated
+ATR mean-reverts, so MFE/ATR shrinks somewhat by construction.
+
+### What is NOT recommended
+
+**Do not turn B/C/D into entry filters.** Three reasons:
+
+1. MFE is not P&L. A filter that raises favourable travel also cuts
+   trade count, and the promotion gate margin scales with 1/sqrt(n) —
+   fewer, better trades can clear the gate LESS easily.
+2. Lifts of 0.5-0.9 ATR on a 3.41 ATR baseline are 15-26%. Real, but not
+   the difference between 0-of-11 and a demonstrated edge.
+3. Picking the three that survived out of five tested, on data that has
+   already produced one artifact that passed OOS, is exactly the
+   curve-fitting this engagement exists to refuse.
+
+### What IS worth doing
+
+**Scale the stop to the observed travel distribution rather than to
+structure.** If typical favourable travel is ~60 points, a stop should be
+set as a fraction of that, not from a candle low that happens to sit 111
+points away. This is a change to shared exit geometry
+(`analyzer.option_stop_geometry`, `pa_strategies`' structural stops), not
+a per-strategy tweak, and it makes `rr_target` mean something for the
+first time.
+
+It is NOT applied. It changes every strategy's sizing and stop placement
+simultaneously, and the measurement stack it would be validated against
+only became trustworthy on 2026-08-02 (`initial_sl` recording). Worth its
+own session, with the travel distribution measured per symbol and per
+session-hour first.
+
 ## TARGET GEOMETRY — RESULT (2026-08-03). The defect is NOT ATR-specific, and structure does not fix it
 
 `target_geometry.py`, 6,899 replayed trades across 4 strategies x 4
