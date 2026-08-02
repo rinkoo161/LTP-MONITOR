@@ -3628,6 +3628,53 @@ Prints a diagnostic checklist when the table is empty rather than
 writing a silently useless file.
 
 
+## TARGET GEOMETRY TEST — startable now, separable from the 1H MTF port (2026-08-03)
+
+**The question:** is the Phase 0 target defect specific to ATR-derived
+targets, or general to how this system sets targets at all?
+
+Phase 0 established that futures targets were geometrically unreachable
+— median trade reached **1.1%** of target, **0 of 40** reached even half,
+and the cohort that ran a full session with no interference still only
+got to **5.5%**. Those targets were ATR multiples
+(`futures_atr_target_mult`, and the same shape in `option_stop_geometry`'s
+`rr` multiple on the options side).
+
+The deferred **1H MTF Reversal port** would set targets from **Fibonacci
+extensions or nearest support/resistance** — structure, not a volatility
+multiple. That difference is the port's single most valuable property,
+and it does NOT require porting the strategy to test.
+
+**The cheap version:** replay the EXISTING strategies' entries, and for
+each trade compute where a structure-based target would have sat
+(nearest S/R from `analyzer`'s existing support/resistance levels, or a
+Fib extension of the entry swing) versus the ATR-multiple target actually
+used. Then compare realised MFE against BOTH. The entries, exits and MFE
+are already recorded; only the target definition changes.
+
+**Why it is worth more than a twelfth strategy:** the answer applies to
+all eleven strategies currently running, not to one new one.
+
+  - If structure-based targets are reachable where ATR multiples were
+    not, that is a defect in every strategy's exit geometry and fixing it
+    is a change to shared code, not a new module.
+  - If they are equally unreachable, the defect is in ENTRY quality or in
+    holding period, and the 1H port's headline feature is not the
+    advantage it appears to be — which materially lowers the case for
+    building it.
+
+**Preconditions:** none blocking. MFE is recorded for options
+(`agents.py` ~5183) and futures (~3544); `analyzer.analyze()` already
+produces support/resistance per strike. Cleaner from 2026-08-02 onward,
+when `initial_sl` began being recorded — before that, per-trade risk in
+the journal is the TRAILED stop, so any risk:reward figure computed
+against older rows understates the denominator.
+
+**Relationship to the 1H MTF port:** run this FIRST. It is the port's
+main diagnostic value at a fraction of the cost, and its result should
+decide whether the port is worth a dedicated session. See the deferred
+entry under "Explicitly deferred (not built...)".
+
 ## PENDING WORK — current as of v58.47
 
 Rewritten 2026-07-29 after nine releases closed most of the previous
