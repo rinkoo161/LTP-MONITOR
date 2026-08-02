@@ -3628,6 +3628,82 @@ Prints a diagnostic checklist when the table is empty rather than
 writing a silently useless file.
 
 
+## TARGET GEOMETRY — RESULT (2026-08-03). The defect is NOT ATR-specific, and structure does not fix it
+
+`target_geometry.py`, 6,899 replayed trades across 4 strategies x 4
+symbols, 6,230 with a confirmed prior pivot. Only the TARGET DEFINITION
+changes; entries, exits and realised MFE are held fixed.
+
+    target type          median dist   median MFE/target   reached   half
+    RR (rr_target x risk)      99 pt          45.9%       1418/6230  2952
+    STRUCTURE (nearest pivot)  19 pt         242.0%       4119/6230  4811
+    FIB 1.272 extension       454 pt          10.5%         19/6230   393
+
+**Read the DISTANCE column before the reach column.** The structure
+target is reached far more often only because it sits 5x CLOSER — 19
+points against a median risk of ~50. That is well under 1R, so it loses
+money at any realistic win rate no matter how often it is hit. The Fib
+extension is the opposite error: 454 points, 4.6x the RR target, reached
+19 times in 6,230. Neither is a fix; they are opposite failures, and a
+naive reading of "structure targets are reached 66% of the time" would
+have been badly wrong.
+
+### What the data DOES determine
+
+Expressed in units of each trade's own risk, which is comparable across
+strategies and symbols:
+
+    median MFE = 0.89R      mean = 1.82R
+    50% of trades reach >= 0.89R      75% reach >= 1.73R
+    a 1.0R target is reached by 46.3% of trades
+    a 1.5R target by 29.1%,  a 2.0R target by 20.9%
+
+**The strategies ship a 2.0R target (`rr_target` default) that 20.9% of
+trades reach.** The achievable target is roughly **1R**, not 2R. This is
+the same defect Phase 0 found in futures, in the same direction — the
+target is set about twice as far as price actually travels — so it is a
+property of how this system sets targets generally, not of ATR
+specifically.
+
+### But 1R does not rescue anything
+
+A 1R target hit 46.3% of the time is a losing system before costs, and
+the cost correction is ~₹18-56/trade on top. It is consistent with, not a
+way out of, the 0-of-11 promotion-gate finding: moving the target to
+where price actually goes converts an unreachable target into a
+reachable one that still does not pay.
+
+**So this does NOT argue for lowering `rr_target` to 1.0.** `RiskAgent`
+enforces a 1.95 floor and `PA_BOUNDS` keeps `rr_target` at 1.95+
+deliberately, because a low RR needs a high win rate these strategies do
+not have. The finding is that the ENTRIES do not produce 2R of favourable
+travel — which is an entry-quality problem, not a target problem.
+
+### Consequence for the 1H MTF Reversal port
+
+Its headline feature — structure/Fib targets instead of a multiple — is
+**tested and does not deliver**. Both structure variants perform worse
+than the RR target they would replace. That removes the main diagnostic
+reason to build it. The remaining case is timeframe diversification (1H
+is the one band not covered) and pivot-based divergence as a mechanism,
+which are real but much weaker arguments than "it fixes the target
+defect".
+
+**Recommendation: keep it deferred.** Revisit only if entry quality
+improves enough that 2R becomes reachable, at which point target
+geometry stops being the binding constraint anyway.
+
+### Method notes
+
+Pivots are confirmed STRICTLY before the entry bar (a pivot needs k bars
+each side, so it is only usable at j+k < entry). Confirming them with
+post-entry bars would let the target be chosen using the move it is meant
+to predict — lookahead that would make structure targets look reachable
+regardless. MFE is measured on 1m bars so intra-bar excursion is
+invisible; every figure is a LOWER bound, equally for all three target
+types, so the comparison holds even though absolute reach rates are
+conservative.
+
 ## TARGET GEOMETRY TEST — startable now, separable from the 1H MTF port (2026-08-03)
 
 **The question:** is the Phase 0 target defect specific to ATR-derived
