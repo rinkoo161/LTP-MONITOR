@@ -3628,6 +3628,60 @@ Prints a diagnostic checklist when the table is empty rather than
 writing a silently useless file.
 
 
+## v59.1 — measurement, not features (2026-08-03)
+
+23 commits since v59.0. Almost none of it adds capability; most of it
+makes existing numbers mean what they claim to. What changed and why:
+
+**The research thread — four independent methods, one conclusion.** The
+promotion gate (0 of 11), the target-reach test, the first-touch
+expectancy grid and the random-entry baseline all say the eleven live
+strategies have no edge that survives costs. Three of the four use no
+cost model, no P&L proxy and no provisional constant, so they cannot all
+be wrong the same way. Stop scaling, target geometry, entry filters and
+the entry signal itself were each tested and each found NOT to be the
+binding constraint. No strategy was disabled: paper costs nothing and
+generates the data the next answer needs.
+
+**Two measurement defects that were silently corrupting analysis.**
+`stoploss` was ratcheted in place, so every per-trade risk figure ever
+computed from the journal was the TRAILED stop, not the one sizing was
+decided against — `initial_sl` is now recorded for options and
+`initial_loss_limit` for spreads. And spread rows stored a P&L floor in
+a field meaning price, so 385 of 500 journal rows carried an impossible
+negative stop; the writer now stores a real spread-value price and the
+reader converts the legacy rows.
+
+**One option stop rule instead of four.** Two clamps, two fallbacks and
+one path that ignored volatility entirely, so a trade's risk depended on
+which code path generated it. The ATR branch was also dimensionally
+wrong — index ATR as a % of SPOT used as a fraction of PREMIUM — and
+therefore always returned the lower clamp, which is why a 5% stop-width
+cluster appears in every symbol.
+
+**A coherent risk ladder, checked rather than remembered.** Per-trade
+caps, per-class budgets, the daily ceiling and the portfolio cap are now
+ordered against each other and `sizing.risk_coherence()` reports any
+divergence daily. `lots_per_trade` returned to 1 — every measurement
+this system holds was generated at one lot.
+
+**Macro data actually works.** yfinance is primary (no key, no cap, full
+coverage) with ECB as a keyless secondary; Alpha Vantage sits last behind
+a persistent daily counter. 17/17 symbols served. Every quote carries
+`last_updated` and `is_stale`, and the US e-mini futures replaced cash
+indices as the live read during the IST session, refreshed every 5
+minutes.
+
+**An expired login no longer looks like a dead trading system.** The
+agents never stopped — the dashboard simply had no 401 handling, so
+every panel rendered empty and the login page never appeared.
+
+**Credential audit closed.** Nothing was ever exposed publicly, verified
+by SHA against the GitHub API. `.gitignore` hardened.
+
+Suite 109/111 with 2 explicit env-gated skips, up from 84/103 failing
+19 at the start of the engagement.
+
 ## ENTRY SIGNAL — TESTED, THREAD CLOSED (2026-08-03)
 
 Asked to fix the entry signal. Tested whether there is a signal to fix.
