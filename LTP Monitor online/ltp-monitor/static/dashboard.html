@@ -1358,6 +1358,48 @@
 </div>
 
 <script>
+/* ---------------- session expiry -> login page (2026-08-02) ----------------
+   The auth middleware is HTTP-only: it 401s API calls and 302s page loads.
+   It does NOT and cannot stop the agents — those are in-process threads
+   started at app startup and never signalled by the auth path.
+
+   But this page never checked for 401. After the 12-hour session expired,
+   every /api/* poll came back 401 JSON, the surrounding `.catch(){}`
+   swallowed it, and every panel rendered empty — which reads as "all
+   agents stopped" when the agents are in fact still trading. The user was
+   never shown the login page either, because a single-page dashboard
+   never reloads and only a full page load gets the 302.
+
+   One interceptor at the fetch boundary, for the same reason the server
+   enforces auth in ONE middleware rather than per-route: there are ~90
+   fetch call sites here and a per-call check protects exactly the ones
+   somebody remembered.
+
+   Deliberate details:
+   - `clone()` before reading the body, so the caller's own .json()/.text()
+     still works while the redirect is in flight.
+   - a latch, so N in-flight polls 401ing at once cause ONE navigation.
+   - the destination comes from the payload's `login` field when present,
+     falling back to /login, and is only ever used as a same-origin path.
+   - the response is still returned, so no caller sees a changed contract. */
+(function () {
+  var _fetch = window.fetch;
+  var redirecting = false;
+  window.fetch = function () {
+    return _fetch.apply(this, arguments).then(function (r) {
+      if (r && r.status === 401 && !redirecting) {
+        redirecting = true;
+        r.clone().json().catch(function () { return {}; }).then(function (j) {
+          var dest = (j && typeof j.login === "string"
+                      && j.login.charAt(0) === "/" && j.login.indexOf("//") !== 0)
+                     ? j.login : "/login";
+          if (window.location.pathname !== dest) window.location.href = dest;
+        });
+      }
+      return r;
+    });
+  };
+})();
 const SYMBOLS=["NIFTY","BANKNIFTY","FINNIFTY","SENSEX"];
 let current="NIFTY", lastSig=null, settings={};
 let curIv="5", soundOn=false, seenAlertIds=new Set(), currentView="dash";

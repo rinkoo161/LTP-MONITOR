@@ -95,6 +95,49 @@ never be the reason a trade happens. Rejections surface through the same
 `<strategy>_require_basis_agreement` overrides the global key; both
 default False.
 
+## Session expiry looked like a dead trading system (2026-08-02)
+
+Reported live: *"after 12 hours login session, all agents stopped"*.
+
+**They had not.** The auth middleware is HTTP-only — it 401s API calls
+and 302s page loads, and it never signals the agent threads, which are
+started once at app startup and run independently of any request. Live
+test: expire a session, and `pilot.running` is still True while
+`/api/*` returns 401 and `GET /` returns 302 to `/login`.
+
+What actually broke is that `dashboard.html` had **no 401 handling at
+all** — `/login` appeared exactly once in the whole file, inside the
+manual sign-out handler. So after 12 hours every poll came back 401, the
+surrounding `.catch(){}` swallowed it, and every panel rendered empty.
+Empty panels read as "agents stopped". And because a single-page
+dashboard never reloads, the 302 that would have shown the login page
+never fired — the user was left staring at a dead-looking UI with no
+prompt.
+
+Fixed with ONE interceptor at the `window.fetch` boundary, for the same
+reason the server enforces auth in one middleware rather than per route:
+there are ~90 fetch call sites here, and a per-call check protects
+exactly the ones somebody remembered.
+
+Details that matter, all pinned by `test_session_expiry_keeps_agents.py`:
+
+  - the body is **cloned** before reading, so the caller's own `.json()`
+    still works while the redirect is in flight;
+  - a **latch** means N concurrent polls 401ing at once cause ONE
+    navigation, not N;
+  - the destination comes off the wire (`login` in the payload) and is
+    accepted **only** as a same-origin path — an absolute URL there would
+    be an open redirect;
+  - it does not navigate when already on the target, so a 401 on the
+    login page cannot loop;
+  - the response is still returned, so no caller sees a changed contract.
+
+The test also asserts the half that must NOT change: nothing on the auth
+path may touch `pilot.stop`, `stop_evt` or `pilot.start`, and
+`pilot.stop()` keeps exactly one call site — the explicit
+`/api/autopilot/stop` endpoint. Stopping the book has to be a deliberate
+act, never a side effect of a cookie expiring.
+
 ## v59.0 items 29-36 — sizing reality, the research page, and un-reddening the suite (2026-08-01)
 
 ### Item 32 — the config lot map was STALE, and it is load-bearing
