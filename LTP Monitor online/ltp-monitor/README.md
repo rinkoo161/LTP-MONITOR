@@ -12,6 +12,37 @@ python app.py
 
 Open http://127.0.0.1:8000 — pick an index tab; data refreshes every 30 seconds.
 
+## Macro data providers
+
+The macro monitor (Macro/News page) fetches global markets through a
+fallback chain defined in `macro_providers.py`:
+
+1. **yfinance** — primary. No key, no daily cap, covers every symbol. One
+   batched call per checkpoint.
+2. **Stooq** — secondary. Currently answers with an anti-bot challenge
+   rather than CSV from some hosts; kept because it costs one skipped
+   step when unavailable.
+3. **Twelve Data** — FX and metals only. Its free tier does not serve
+   indices.
+4. **Alpha Vantage** — last resort, behind a persistent daily counter
+   (`alpha_vantage_daily_budget`, default 20 of its 25/day free cap).
+
+The canonical-symbol → provider-ticker map lives in
+`config["macro_symbols"]`, so swapping a provider is a settings edit.
+Downstream consumers only ever see the canonical key.
+
+**yfinance is pinned and will need periodic bumping.** It is unofficial —
+Yahoo changes endpoints without notice, and cloud IPs are throttled
+harder than residential ones. If the macro panel goes quiet, check the
+pin in `requirements.txt` first. The chain is ordered so demoting it to
+secondary is a one-line change.
+
+Every quote carries `last_updated` and `is_stale`. Cash indices
+(`SPX_CASH`, `DJI_CASH`) do not update during the IST session — they show
+the previous US close and are flagged, never presented as live. The
+index **futures** (`SPX_FUT` etc.) are what the monitor reads during the
+session, and they are what drives `global_risk_sentiment`.
+
 ## AI deep-analysis mode (optional)
 
 Set your Anthropic API key before starting, then click "Run deep analysis":

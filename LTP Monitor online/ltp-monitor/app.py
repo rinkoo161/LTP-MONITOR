@@ -602,6 +602,16 @@ class SettingsIn(BaseModel):
     market_data_feed: str | None = None
     anthropic_api_key: str | None = None
     twelve_data_api_key: str | None = None
+    # Macro provider refactor (2026-08-02). macro_symbols is the
+    # canonical->provider ticker map; it lives in config so swapping a
+    # provider is a settings edit rather than a code change.
+    macro_symbols: dict | None = None
+    alpha_vantage_daily_budget: int | None = None
+    macro_cache_ttl_open: int | None = None
+    macro_cache_ttl_closed: int | None = None
+    macro_yf_interval: str | None = None
+    macro_yf_period: str | None = None
+    macro_debug_logging: bool | None = None
     alpha_vantage_api_key: str | None = None
     newsapi_api_key: str | None = None
     theme: str | None = None
@@ -4246,11 +4256,17 @@ def api_macro_digest():
         # underlying data was there (confirmed in the activity log —
         # yfinance fallback succeeding for every symbol), the digest
         # just never looked at the right key casing to find it.
+        # 2026-08-02 — canonical keys from config["macro_symbols"]. The
+        # legacy names are kept in the lookup so a payload written before
+        # the provider refactor still renders instead of vanishing.
         "indices": {k: market.get(k) for k in
-                   ("DJI", "NASDAQ", "SPX", "RUSSELL2000", "NIKKEI")
+                   ("SPX_FUT", "NDX_FUT", "DJI_FUT", "RUT_FUT", "NIKKEI",
+                    "HSI", "SPX_CASH", "DJI_CASH",
+                    "DJI", "NASDAQ", "SPX", "RUSSELL2000")
                    if k in market},
         "commodities_fx": {k: market.get(k) for k in
-                          ("CRUDE", "GOLD", "SILVER", "USDINR") if k in market},
+                          ("CRUDE_WTI", "CRUDE_BRENT", "GOLD", "SILVER",
+                           "USDINR", "DXY", "CRUDE") if k in market},
         "headline_events_24h": [
             {"type": e.get("type"), "note": e.get("note"),
              "impact": e.get("impact"), "time": e.get("time")}

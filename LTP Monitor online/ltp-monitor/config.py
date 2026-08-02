@@ -695,6 +695,59 @@ DEFAULTS = {
                                            # the LLM rewords it each cycle
     # ---- News/Macro Agent (global markets + macro events) ----
     "twelve_data_api_key": "",   # Twelve Data — equity indices (US/Asia)
+    # ---- Macro data providers (2026-08-02 refactor) ----
+    # Canonical key -> per-provider ticker. IN CONFIG, not hardcoded in the
+    # fetch logic, so a provider change is a settings edit. Downstream
+    # consumers only ever see the canonical key.
+    #
+    # `freshness_sec` is per symbol on purpose: an e-mini trades around the
+    # clock and is stale after minutes, while a CASH index between 09:15
+    # and 15:30 IST is EXPECTED to be hours old — it returns the previous
+    # US close. Flagging that every cycle would train people to ignore the
+    # flag, so cash gets a long threshold and is labelled instead.
+    #
+    # Twelve Data has entries ONLY for FX/metals: its free tier does not
+    # serve indices, which is what produced the SPX/DJI 404s. Alpha
+    # Vantage entries are (from, to) for its FX function or a bare
+    # function name for its commodity endpoints.
+    "macro_symbols": {
+        "SPX_FUT":    {"yf": "ES=F",      "stooq": "es.f",   "freshness_sec": 900},
+        "NDX_FUT":    {"yf": "NQ=F",      "stooq": "nq.f",   "freshness_sec": 900},
+        "DJI_FUT":    {"yf": "YM=F",      "stooq": "ym.f",   "freshness_sec": 900},
+        "RUT_FUT":    {"yf": "RTY=F",                        "freshness_sec": 900},
+        "NIKKEI":     {"yf": "^N225",     "stooq": "^nkx",   "freshness_sec": 21600},
+        "HSI":        {"yf": "^HSI",      "stooq": "^hsi",   "freshness_sec": 21600},
+        "GOLD":       {"yf": "GC=F",      "stooq": "xauusd",
+                       "td": "XAU/USD",   "av": ["XAU", "USD"], "freshness_sec": 900},
+        "SILVER":     {"yf": "SI=F",      "stooq": "xagusd",
+                       "td": "XAG/USD",   "av": ["XAG", "USD"], "freshness_sec": 900},
+        "CRUDE_WTI":  {"yf": "CL=F",      "stooq": "cl.f",   "av": "WTI",
+                       "freshness_sec": 900},
+        "CRUDE_BRENT": {"yf": "BZ=F",     "stooq": "cb.f",   "av": "BRENT",
+                        "freshness_sec": 900},
+        "USDINR":     {"yf": "USDINR=X",  "stooq": "usdinr",
+                       "td": "USD/INR",   "av": ["USD", "INR"], "freshness_sec": 900},
+        "DXY":        {"yf": "DX-Y.NYB",                     "freshness_sec": 1800},
+        "NIFTY":      {"yf": "^NSEI",     "stooq": "^nsei",  "freshness_sec": 900},
+        "BANKNIFTY":  {"yf": "^NSEBANK",                     "freshness_sec": 900},
+        "INDIAVIX":   {"yf": "^INDIAVIX",                    "freshness_sec": 1800},
+        # Cash indices: kept for post-close context ONLY. Stale during the
+        # IST session by construction — see freshness_sec.
+        "SPX_CASH":   {"yf": "^GSPC",     "stooq": "^spx",   "freshness_sec": 86400},
+        "DJI_CASH":   {"yf": "^DJI",      "stooq": "^dji",   "freshness_sec": 86400},
+    },
+    # Hard local ceiling, checked BEFORE the request. AV's free tier is 25
+    # a day; 20 leaves headroom for a manual probe.
+    "alpha_vantage_daily_budget": 20,
+    # Hourly bars: a DAILY bar is stamped at the bar's start, which makes
+    # every quote read stale. See YFinanceProvider.
+    # Per-symbol provider detail at DEBUG; the one-line cycle summary is
+    # always at INFO. Off by default — this is a high-volume log path.
+    "macro_debug_logging": False,
+    "macro_yf_interval": "1h",
+    "macro_yf_period": "5d",
+    "macro_cache_ttl_open": 600,
+    "macro_cache_ttl_closed": 3600,
     "alpha_vantage_api_key": "", # Alpha Vantage — commodities/FX (tight free-tier budget)
     "newsapi_api_key": "",       # NewsAPI.org — macro/geopolitical/constituent news
     # ---- Option Chain Intelligence Engine (Feature #4) ----

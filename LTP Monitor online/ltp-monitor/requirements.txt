@@ -7,7 +7,13 @@ dhanhq>=2.2.0           # official Dhan Live Market Feed websocket (dhan_ws.py) 
                         # pulls in pandas, pyOpenSSL, websockets (asyncio) as
                         # transitive deps; the REST path (broker_adapter.py)
                         # does NOT need this package, only dhan_ws.py does
-yfinance>=0.2.40        # News/Macro Agent fallback when Alpha Vantage / Twelve Data fail
+# PINNED (2026-08-02). yfinance is UNOFFICIAL: Yahoo changes endpoints
+# without notice and an unpinned bump can break the macro monitor
+# silently. It is now the PRIMARY macro provider, not a fallback, so a
+# breakage matters more than it used to. Expect to bump this
+# periodically; macro_providers.CHAIN is ordered so demoting it is a
+# one-line change rather than a rewrite.
+yfinance==1.5.2
 # AI runs locally via Ollama (install separately from https://ollama.com) — no Python package needed
 segno>=1.6                # QR for the MFA enrollment page (auth.py). Pure
                           # Python, zero deps, OPTIONAL: without it the

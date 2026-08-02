@@ -328,15 +328,44 @@ def classify_headline_ai(title, cfg=None):
 
 # ------------------------------------------------------------ RSS fetch
 
+
+class FeedPermanentError(Exception):
+    """A feed failed in a way that WILL fail again this cycle (403/404).
+
+    Separated from transient errors so the caller can drop the source for
+    the cycle rather than re-requesting it — repeated MINING.COM 403s were
+    filling the activity log with a failure that could never resolve on
+    retry.
+    """
+
 def fetch_rss(url, timeout=10, max_items=20):
     """Fetch and parse an RSS 2.0 / Atom feed. Returns a list of
     {"title": str, "link": str, "published": str|None} dicts. Raises
     on network/parse failure -- callers decide whether to log-and-skip
     or propagate, matching broker_adapter.py's convention of not
     swallowing errors silently."""
-    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        raw = resp.read()
+    # 2026-08-02 — a bare "Mozilla/5.0" is a well-known bot signature and
+    # several publishers 403 it. A full, realistic UA plus the Accept
+    # headers a feed reader actually sends gets served normally.
+    req = urllib.request.Request(url, headers={
+        "User-Agent": ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                       "AppleWebKit/537.36 (KHTML, like Gecko) "
+                       "Chrome/122.0.0.0 Safari/537.36"),
+        "Accept": ("application/rss+xml, application/atom+xml, "
+                   "application/xml;q=0.9, text/xml;q=0.8, */*;q=0.5"),
+        "Accept-Language": "en-US,en;q=0.9",
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read()
+    except urllib.error.HTTPError as e:
+        # 403/404 are PERMANENT for this source this cycle. Raising a
+        # typed error lets the caller drop the source for the cycle
+        # instead of retrying it in a tight loop, which is what filled
+        # the log with repeated MINING.COM 403s.
+        if e.code in (401, 403, 404, 410):
+            raise FeedPermanentError(f"HTTP {e.code} for {url[:80]}") from e
+        raise
     root = ET.fromstring(raw)
     items = []
     channel_items = root.findall(".//item")
@@ -371,6 +400,10 @@ def test_feed(url, timeout=10):
                     "webpage that merely links to one."}
         return {"ok": True, "sample_items": items,
                "message": f"Fetched {len(items)} sample item(s) successfully."}
+    except FeedPermanentError as e:
+        return {"ok": False, "permanent": True, "error":
+                f"{e} -- permanent for this source; the URL needs fixing, "
+                f"retrying will not help"}
     except urllib.error.HTTPError as e:
         return {"ok": False, "error": f"HTTP {e.code} -- {e.reason}"}
     except urllib.error.URLError as e:
@@ -540,8 +573,15 @@ def fetch_all_enabled(max_items_per_feed=10):
             items = fetch_rss(feed["url"], max_items=max_items_per_feed)
             for it in items:
                 events.append(process_item(it, feed["name"], feed.get("region", "india")))
+        except FeedPermanentError as e:
+            # Permanent for this cycle (403/404/410). Recorded as such so
+            # the operator can see it needs a URL fix, not a retry — and
+            # so it is not re-requested in this pass.
+            errors.append({"feed": feed["name"], "id": feed["id"],
+                           "error": str(e), "permanent": True})
         except Exception as e:
-            errors.append({"feed": feed["name"], "id": feed["id"], "error": str(e)})
+            errors.append({"feed": feed["name"], "id": feed["id"],
+                           "error": str(e), "permanent": False})
     return events, errors
 
 

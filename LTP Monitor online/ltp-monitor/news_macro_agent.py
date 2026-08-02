@@ -87,10 +87,19 @@ NO_FREE_SOURCE = {"SGX_NIFTY"}
 # ---------------------------------------------------------------- schedule
 # (hh, mm, key, kind, symbols) — fires ONCE per IST day, at/after this time.
 # kind: "market_data" | "news"
+# 2026-08-02 — symbols are now the canonical keys from
+# config["macro_symbols"]. US CASH indices are replaced by the e-mini
+# FUTURES as the primary read: ^GSPC/^DJI do not update between 09:15 and
+# 15:30 IST, so a macro monitor for an Indian intraday strategy was
+# reading the previous US close and presenting it as current. Cash is
+# retained alongside for post-close context and flagged stale.
 CHECKPOINTS = [
-    (5,  0,  "us_close",       "market_data", ("DJI", "NASDAQ", "SPX", "RUSSELL2000")),
-    (7,  15, "asia_markets",   "market_data", ("NIKKEI", "SGX_NIFTY")),
-    (7,  30, "commodities_fx", "market_data", ("CRUDE", "GOLD", "SILVER", "USDINR")),
+    (5,  0,  "us_close",       "market_data", ("SPX_FUT", "NDX_FUT", "DJI_FUT",
+                                               "RUT_FUT", "SPX_CASH", "DJI_CASH")),
+    (7,  15, "asia_markets",   "market_data", ("NIKKEI", "HSI", "NIFTY",
+                                               "BANKNIFTY", "INDIAVIX")),
+    (7,  30, "commodities_fx", "market_data", ("CRUDE_WTI", "CRUDE_BRENT",
+                                               "GOLD", "SILVER", "USDINR", "DXY")),
     (8,  0,  "global_macro",   "news",        None),
     (8,  30, "fii_dii",        "news",        None),   # placeholder — see docstring
 ]
@@ -331,7 +340,9 @@ class NewsMacroAgent(threading.Thread):
         self.last_run = None
         self.status = "idle"
         self.summary = ""
-        self.cache = MacroDataCache()
+        self.cache = MacroDataCache()      # legacy; kept for the news path
+        self._quote_cache = None           # macro_providers.QuoteCache
+        self._last_quotes = {}             # symbol -> Quote, for staleness
         self._done_today = set()
         self._today = None
         self._warned_no_keys = False
@@ -439,60 +450,37 @@ class NewsMacroAgent(threading.Thread):
     # --------------------------------------------------------- market data
 
     def _fetch_market_data(self, checkpoint_key, symbols, cfg):
-        av_key = cfg.get("alpha_vantage_api_key", "")
-        td_key = cfg.get("twelve_data_api_key", "")
-        results = {}
-        for sym in symbols:
-            if sym in NO_FREE_SOURCE:
-                results[sym] = None
-                continue
-            ttl = TTL_FAST if sym in ("CRUDE", "GOLD", "SILVER", "USDINR") else TTL_SLOW
-            cached = self.cache.get(sym, ttl)
-            if cached is not None:
-                results[sym] = cached
-                continue
-            # Provider allocation: commodities/FX -> Alpha Vantage first
-            # (keeps AV's ~25/day budget tiny); equity indices -> Twelve
-            # Data first (comfortable ~800/day budget). Either falls back
-            # to the other, then to yfinance, with every fallback AND
-            # every failure reason logged (bug found 2026-07-22: the old
-            # code swallowed the actual AV/TD error/rate-limit message —
-            # both return HTTP 200 with an error string in the JSON body,
-            # not an exception — so every symbol silently fell back to
-            # yfinance with no way to tell why).
-            value = None
-            source = None
-            reasons = []
-            if sym in ALPHAVANTAGE_FX or sym in ALPHAVANTAGE_COMMODITY_FN:
-                value, err = fetch_alpha_vantage(sym, av_key)
-                if err: reasons.append(err)
-                source = "alpha_vantage" if value is not None else None
-                if value is None:
-                    value, err = fetch_twelve_data(sym, td_key)
-                    if err: reasons.append(err)
-                    source = "twelve_data" if value is not None else None
-            else:
-                value, err = fetch_twelve_data(sym, td_key)
-                if err: reasons.append(err)
-                source = "twelve_data" if value is not None else None
-                if value is None:
-                    value, err = fetch_alpha_vantage(sym, av_key)
-                    if err: reasons.append(err)
-                    source = "alpha_vantage" if value is not None else None
-            if value is None:
-                value = fetch_yfinance(sym)
-                if value is not None:
-                    source = "yfinance_fallback"
-                    self.bus.log(self.name,
-                                 f"{sym}: primary providers failed "
-                                 f"({'; '.join(reasons)}) — used yfinance fallback")
-            if value is None:
-                self.bus.log(self.name,
-                             f"{sym}: no data from any provider — "
-                             f"{'; '.join(reasons) if reasons else 'yfinance also unavailable'}")
-            else:
-                self.cache.set(sym, value)
-            results[sym] = value
+        """Fetch via the macro_providers chain. Checkpoints are UNCHANGED —
+        this still fires at fixed IST times, it just batches within the
+        checkpoint instead of making one keyed request per symbol.
+
+        2026-08-02 refactor. What this replaces: an if/else that put Alpha
+        Vantage FIRST for FX/commodities (25 requests per DAY, so it was
+        exhausted by mid-morning), consulted Twelve Data for indices its
+        free tier does not serve (the 404s), and reached yfinance — the
+        only uncapped, keyless provider that covers everything — last.
+        """
+        import macro_providers as mprov
+        import redaction as _red
+        if self._quote_cache is None:
+            self._quote_cache = mprov.QuoteCache()
+        wanted = [s for s in symbols if s not in NO_FREE_SOURCE]
+
+        def _log(level, msg):
+            # Provider text is redacted and truncated by the chain before
+            # it reaches here; INFO is the one-line cycle summary, DEBUG
+            # is per-symbol and only surfaces when explicitly enabled.
+            if level == "info" or cfg.get("macro_debug_logging", False):
+                self.bus.log(self.name, _red.redact(msg, cfg, mprov.ERR_LIMIT))
+
+        quotes, summary = mprov.fetch(wanted, cfg=cfg, cache=self._quote_cache,
+                                      market_open=market_open(), log=_log)
+        results = {s: (quotes[s].value if s in quotes else None)
+                   for s in symbols}
+        self._last_quotes = quotes
+        if summary["failed_symbols"]:
+            self.bus.log(self.name, "macro: no data for "
+                         + ", ".join(summary["failed_symbols"]))
 
         prev = self.bus.get("macro_market_data", {}) or {}
         moved = []
@@ -503,7 +491,19 @@ class NewsMacroAgent(threading.Thread):
             chg_pct = None
             if prev_val:
                 chg_pct = round((value - prev_val) / prev_val * 100, 2)
+            # `value`/`chg_pct`/`ts` keep their exact meaning so existing
+            # consumers are untouched; the staleness fields are ADDITIVE.
+            # Never present a stale quote as current — a cash index during
+            # the IST session is the previous US close, not a live number.
+            q = (self._last_quotes or {}).get(sym)
             prev[sym] = {"value": value, "chg_pct": chg_pct, "ts": time.time()}
+            if q is not None:
+                prev[sym].update({
+                    "last_updated": q.last_updated,
+                    "is_stale": q.is_stale(cfg),
+                    "age_sec": round(q.age()),
+                    "source": q.source, "ticker": q.ticker,
+                })
             if chg_pct is not None and abs(chg_pct) >= 1.0:
                 moved.append(f"{sym} {chg_pct:+.1f}%")
         self.bus.set("macro_market_data", prev)
@@ -531,9 +531,33 @@ class NewsMacroAgent(threading.Thread):
         since this is a supportive-only signal (a few points of
         confidence, never a block), not a standalone trading trigger.
         """
-        us_indices = ("DJI", "NASDAQ", "SPX", "RUSSELL2000")
-        chgs = [market_data[s]["chg_pct"] for s in us_indices
-               if s in market_data and market_data[s].get("chg_pct") is not None]
+        # 2026-08-02 — FUTURES FIRST, cash only as fallback. The cash
+        # indices this used to read are frozen at the previous US close
+        # during the entire IST session, so a "global risk" input feeding
+        # MTFConfluenceAgent was re-reporting yesterday's move as though
+        # it were today's. The e-minis trade through the IST session and
+        # are the honest read; cash is kept as a fallback so a futures
+        # outage degrades rather than silently zeroing the signal.
+        US_FUT = ("SPX_FUT", "NDX_FUT", "DJI_FUT", "RUT_FUT")
+        US_CASH = ("SPX_CASH", "DJI_CASH", "DJI", "NASDAQ", "SPX", "RUSSELL2000")
+
+        def _fresh_chgs(keys):
+            out = []
+            for s in keys:
+                d = market_data.get(s) or {}
+                if d.get("chg_pct") is None:
+                    continue
+                # A stale quote must not drive a decision input.
+                if d.get("is_stale"):
+                    continue
+                out.append(d["chg_pct"])
+            return out
+
+        chgs = _fresh_chgs(US_FUT)
+        basis = "futures"
+        if not chgs:
+            chgs = _fresh_chgs(US_CASH)
+            basis = "cash (futures unavailable)"
         if not chgs:
             self.bus.set("global_risk_sentiment", None)
             return
@@ -547,7 +571,7 @@ class NewsMacroAgent(threading.Thread):
         self.bus.set("global_risk_sentiment", sentiment)
         self.bus.set("global_risk_sentiment_detail",
                      {"avg_chg_pct": round(avg_chg, 2), "n_indices": len(chgs),
-                      "sentiment": sentiment})
+                      "sentiment": sentiment, "basis": basis})
 
     # --------------------------------------------------------------- news
 
