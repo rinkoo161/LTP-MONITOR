@@ -235,6 +235,32 @@ check("and refuses to act on a stale quote",
       'if d.get("is_stale")' in agent_src,
       "a frozen cash index must not drive an MTF confidence input")
 
+print("\n10b) the Stooq replacement — and its documented limit")
+check("Stooq is NOT in the default chain",
+      "stooq" not in config.DEFAULTS["macro_providers_enabled"],
+      "it answers with an anti-bot challenge; enabling it costs a wasted "
+      "request per symbol per cycle for a provider that cannot succeed")
+check("the chain is config-driven, not hardcoded",
+      [p.name for p in mp.build_chain(config.DEFAULTS)]
+      == config.DEFAULTS["macro_providers_enabled"])
+check("ECB is the keyless secondary", "ecb" in config.DEFAULTS["macro_providers_enabled"])
+_ecb = mp.FrankfurterProvider()
+check("ECB supports a symbol with an fx pair", _ecb.supports("USDINR", config.DEFAULTS),
+      "the base supports() looks for a key named after the provider; this "
+      "one keys off 'fx', and without the override it was never asked")
+check("ECB does NOT claim symbols it cannot serve",
+      not _ecb.supports("SPX_FUT", config.DEFAULTS)
+      and not _ecb.supports("GOLD", config.DEFAULTS),
+      "the ECB publishes currency reference rates, not futures or metals")
+# The honest coverage gap, asserted so it cannot be forgotten.
+_keyless = [n for n in config.DEFAULTS["macro_providers_enabled"]
+            if n in ("yf", "ecb", "stooq")]
+_fx_only = {k for k, v in config.DEFAULTS["macro_symbols"].items() if v.get("fx")}
+check("only ONE keyless provider covers non-FX symbols",
+      _keyless == ["yf", "ecb"] and _fx_only == {"USDINR"},
+      "futures, indices and metals have no keyless secondary — yfinance "
+      "is a single point of failure for them, by documented necessity")
+
 print("\n11) intra-session futures refresh")
 import macro_providers as _mp
 check("refresh cadence is BELOW the futures staleness threshold",

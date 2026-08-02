@@ -726,7 +726,8 @@ DEFAULTS = {
         "CRUDE_BRENT": {"yf": "BZ=F",     "stooq": "cb.f",   "av": "BRENT",
                         "freshness_sec": 900},
         "USDINR":     {"yf": "USDINR=X",  "stooq": "usdinr",
-                       "td": "USD/INR",   "av": ["USD", "INR"], "freshness_sec": 900},
+                       "td": "USD/INR",   "av": ["USD", "INR"],
+                       "fx": ["USD", "INR"], "freshness_sec": 900},
         "DXY":        {"yf": "DX-Y.NYB",                     "freshness_sec": 1800},
         "NIFTY":      {"yf": "^NSEI",     "stooq": "^nsei",  "freshness_sec": 900},
         "BANKNIFTY":  {"yf": "^NSEBANK",                     "freshness_sec": 900},
@@ -747,6 +748,12 @@ DEFAULTS = {
     # Repeating futures refresh during 09:15-15:30 IST. MUST stay below
     # the futures freshness threshold in macro_symbols (900s) or the
     # sentiment input flickers between a value and None as quotes age out.
+    # Active providers, IN ORDER. Stooq is deliberately absent: it stopped
+    # serving CSV (its /q/l/ endpoint 404s, /q/d/l/ answers with a
+    # JavaScript anti-bot challenge), so enabling it costs a wasted
+    # request per symbol per cycle for a provider that cannot succeed.
+    # Add "stooq" back here if it ever starts serving again.
+    "macro_providers_enabled": ["yf", "ecb", "td", "av"],
     "macro_intrasession_enabled": True,
     "macro_intrasession_refresh_sec": 300,
     "macro_yf_interval": "1h",

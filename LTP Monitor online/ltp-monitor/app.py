@@ -609,6 +609,7 @@ class SettingsIn(BaseModel):
     alpha_vantage_daily_budget: int | None = None
     macro_cache_ttl_open: int | None = None
     macro_cache_ttl_closed: int | None = None
+    macro_providers_enabled: list | None = None
     macro_intrasession_enabled: bool | None = None
     macro_intrasession_refresh_sec: int | None = None
     macro_yf_interval: str | None = None

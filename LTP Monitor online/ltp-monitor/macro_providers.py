@@ -418,8 +418,89 @@ class AlphaVantageProvider(MacroDataProvider):
         return out
 
 
-CHAIN = [YFinanceProvider(), StooqProvider(), TwelveDataProvider(),
-         AlphaVantageProvider()]
+class FrankfurterProvider(MacroDataProvider):
+    """ECB reference rates. Keyless, uncapped, genuinely independent.
+
+    2026-08-02 — added as the Stooq replacement, with an honest limit:
+    it serves FX ONLY. The ECB publishes currency reference rates, not
+    index futures, metals or equity indices, so it restores a real
+    secondary for USDINR and nothing else.
+
+    That is worth having anyway. USDINR is the single most India-relevant
+    number in the map, and it is the one symbol where the chain now has
+    true upstream independence rather than two code paths to the same
+    Yahoo endpoint.
+
+    ECB publishes ONCE per working day (~16:00 CET). The quote is
+    correspondingly coarse — `last_updated` is the publication DATE, so
+    it will read stale against USDINR's 15-minute threshold outside the
+    publication window. That is accurate, not a defect: this is a
+    reference rate, not a live tick.
+    """
+    name = "ecb"
+    URL = "https://api.frankfurter.dev/v1/latest?base={b}&symbols={q}"
+
+    def supports(self, symbol, cfg=None):
+        # The base implementation looks for a map entry named after the
+        # provider. This one keys off "fx" instead, because the pair is a
+        # property of the SYMBOL (USD->INR) rather than of this provider —
+        # any FX source can use it. Without this override `supports()`
+        # looked for "ecb", found nothing, and the provider was silently
+        # never asked: the chain reported USDINR served by Twelve Data
+        # while a keyless feed sat unused behind it.
+        return len((symbol_map(cfg).get(symbol) or {}).get("fx") or ()) == 2
+
+    def fetch_many(self, symbols, cfg):
+        m = symbol_map(cfg)
+        out = {}
+        for s in symbols:
+            pair = (m.get(s) or {}).get("fx")
+            if not pair or len(pair) != 2:
+                continue
+            base, quote = pair
+            try:
+                body = with_backoff(
+                    lambda b=base, q=quote: _http(self.URL.format(b=b, q=q)))
+                j = json.loads(body)
+                rate = (j.get("rates") or {}).get(quote)
+                if rate is None:
+                    continue
+                ts = None
+                if j.get("date"):
+                    try:
+                        ts = time.mktime(time.strptime(j["date"], "%Y-%m-%d"))
+                    except ValueError:
+                        ts = None
+                out[s] = Quote(s, float(rate), last_updated=ts,
+                               source=self.name, ticker=f"{base}/{quote}",
+                               note="ECB daily reference rate")
+            except ProviderError:
+                continue
+            except Exception:
+                continue
+        return out
+
+
+# ORDER MATTERS. yfinance first (keyless, uncapped, full coverage), then
+# the keyless FX-only ECB feed, then the two keyed providers with hard
+# daily caps. Stooq is present but DISABLED by default — see
+# `macro_providers_enabled` and the StooqProvider docstring: it stopped
+# serving CSV and now answers with an anti-bot challenge, so leaving it
+# enabled costs a wasted request (and up to 3 retries) per symbol per
+# cycle for a provider that cannot succeed.
+_ALL = {p.name: p for p in (YFinanceProvider(), FrankfurterProvider(),
+                            StooqProvider(), TwelveDataProvider(),
+                            AlphaVantageProvider())}
+DEFAULT_ORDER = ["yf", "ecb", "td", "av"]
+
+
+def build_chain(cfg=None):
+    cfg = cfg if cfg is not None else config.load()
+    order = cfg.get("macro_providers_enabled") or DEFAULT_ORDER
+    return [_ALL[n] for n in order if n in _ALL]
+
+
+CHAIN = build_chain(config.DEFAULTS)
 
 
 # ------------------------------------------------------------------- cache
@@ -464,7 +545,7 @@ def fetch(symbols, cfg=None, cache=None, chain=None, market_open=False,
     """
     cfg = cfg if cfg is not None else config.load()
     cache = cache if cache is not None else QuoteCache()
-    chain = chain if chain is not None else CHAIN
+    chain = chain if chain is not None else build_chain(cfg)
     ttl = ttl_for(cfg, market_open)
     log = log or (lambda level, msg: None)
 

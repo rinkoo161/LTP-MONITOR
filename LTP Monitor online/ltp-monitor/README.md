@@ -19,13 +19,30 @@ fallback chain defined in `macro_providers.py`:
 
 1. **yfinance** — primary. No key, no daily cap, covers every symbol. One
    batched call per checkpoint.
-2. **Stooq** — secondary. Currently answers with an anti-bot challenge
-   rather than CSV from some hosts; kept because it costs one skipped
-   step when unavailable.
+2. **ECB / Frankfurter** — keyless, uncapped, genuinely independent of
+   Yahoo. **FX only** — the ECB publishes currency reference rates, not
+   futures, metals or equity indices. In this map that means `USDINR`.
+   Its quote is a once-daily reference rate, so it reads stale outside
+   the publication window; that is accurate, not a defect.
 3. **Twelve Data** — FX and metals only. Its free tier does not serve
    indices.
 4. **Alpha Vantage** — last resort, behind a persistent daily counter
    (`alpha_vantage_daily_budget`, default 20 of its 25/day free cap).
+
+**Stooq is implemented but disabled** (`macro_providers_enabled`). Its
+documented `/q/l/` quote endpoint now 404s and `/q/d/l/` answers with a
+JavaScript anti-bot challenge instead of CSV, regardless of User-Agent.
+Beating it would need a headless browser. Re-add `"stooq"` to
+`macro_providers_enabled` if it ever starts serving again.
+
+### Known coverage gap
+
+With yfinance forcibly disabled, **2 of 17 symbols survive** (`USDINR`
+via ECB, `GOLD` via Twelve Data). Futures, equity indices, `DXY` and the
+other metals have **no keyless secondary** — there is no free,
+no-registration, uncapped provider that covers them, which is exactly
+why yfinance is primary. Treat it as a single point of failure for those
+symbols and check the pin first if the panel goes quiet.
 
 The canonical-symbol → provider-ticker map lives in
 `config["macro_symbols"]`, so swapping a provider is a settings edit.
