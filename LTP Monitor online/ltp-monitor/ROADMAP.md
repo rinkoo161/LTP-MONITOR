@@ -4,6 +4,86 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.5 — B1 was wrong, A3 is answered, and the swallow the fix missed (2026-08-03)
+
+### TWO CORRECTIONS TO MY OWN CLAIMS, BOTH SHIPPED
+
+**1. "The Shadow Journal has no strategy field" (v59.3) is FALSE.**
+Written into PENDING WORK as the highest-value item and into a commit
+message. It came from sampling `rows[0].keys()` — the OLDEST record,
+dated 2026-07-20 — and generalising from one row. The journal on disk:
+
+    291  no source key      2026-07-20 -> 2026-07-24   pre-field format
+    184  kind="futures"                                separate schema
+    389  attributed         2026-07-27 -> today
+
+    vwap_pullback 59 · momentum_confluence 46 · orb 33 · sg_ema 28
+    ema_mtf 7 · AI 171 · rule-engine variants 46
+
+Attribution has worked since 27 July. The lesson is the one this
+codebase already documents and I broke anyway: a single sample is not a
+schema. `rows[0]` in an append-only log is by definition the OLDEST
+record, which is the worst possible probe for "does this field exist".
+
+**2. "momentum_confluence has never opened a position" (v59.3) is TOO
+STRONG.** It has 46 signals, 45 rejected and 1 APPROVED, resolution
+"taken". The claim it supported — that the MACD histogram exit has never
+fired — still holds (0 of 229 closed trades carry `dynamic_exit`), and
+the conclusion that the exit is not defective is unchanged. But the
+stated reason was wrong: the path was reachable at least once, and the
+histogram simply never turned against that position before it closed.
+
+The correct version: one position, and no evidence either way about the
+exit condition on a sample of one.
+
+### A3 ANSWERED — S8 and S9 have never produced a signal
+
+Across 389 attributed records:
+
+    ew_reversal  (S8)   0 signals
+    ta_elliott   (S9)   0 signals
+
+Not "never traded" — never even generated a candidate. For S9 this
+corroborates v59.4 independently: a strategy blind until 11:05 daily and
+logging 3 of 54 post-gate candles is not one that was going to fire.
+A3 needed no live session after all; it needed the journal read
+correctly.
+
+C4 (S4 vs S7 collapse) also becomes answerable: ema_mtf 7 vs sg_ema 28
+attributed signals, timestamped, ready to compare for near-identical
+bars. It was never blocked on evidence — the evidence was on disk.
+
+### THE ACTUAL BUG FOUND WHILE LOOKING
+
+`_log_shadow_signal` ended in `except Exception: pass` — TWENTY LINES
+BELOW the comment in `log_futures_shadow` explaining why that exact
+pattern had been removed there (v59.0 Phase 0 §3.3):
+
+    the entries most likely to fail a write are not a random sample, so
+    dropping them silently does not degrade the record, it BIASES it
+
+The reasoning transfers unchanged and was simply never applied to the
+sibling function. And this is the LARGER evidence base: 389 attributed
+option/price-action signals against 184 futures ones.
+
+Now split the same way — serialisation is a programming error and
+propagates with "Fix the caller"; I/O is an environment error, reported
+on the bus and counted in the shared `_shadow_write_failures`, never
+killing a loop that may be holding a position.
+
+`test_futures_shadow_failloud.py` grew a section 5 asserting the same
+three properties of the options writer, verified against the pre-fix
+code (4 checks fail, including the behavioural ones). One check was
+written as `check(..., True, ...)` and deleted — the checks after it
+already prove the call returned, so it asserted nothing.
+
+### The pattern in all four items today
+
+futures archive · repair-layer log · S9 skip counters · this swallow.
+Every one was SILENT, and in every case the missing trace cost more than
+the defect. Three of the five fixes shipped today are instruments rather
+than repairs.
+
 ## v59.4 — A1 diagnosed: two hours blind, and an instrument for the rest (2026-08-03)
 
 `ta_calibration` captured 9 rows for the 2026-08-03 session against a
@@ -4540,9 +4620,10 @@ REST fallback depended on the websocket (see v59.2). The fix landed
 tonight and has never run through a live session.
 ACTION: confirm 2026-08-04 gains rows, THEN assess.
 
-**A3. S8 first observation.** NOT ANSWERABLE FROM THE CURRENT JOURNAL —
-see B1. The Shadow Journal has no strategy field, so "has S8 ever
-fired" cannot be asked of the 863 records on disk.
+**A3. S8 first observation.** ANSWERED 2026-08-03 (v59.5): across 389
+attributed records `ew_reversal` appears 0 times and `ta_elliott` 0
+times. Neither has ever generated a candidate signal, let alone traded.
+No live session was needed — only reading the journal correctly.
 
 **A4. Verify shipped fixes live.** RESOLVED 2026-08-03, see v59.3.
 `profit floor:` works (28 occurrences). `LLM signal repaired` was a
@@ -4562,7 +4643,11 @@ arriving to 15:40, and `future_oi_snapshots` gains rows.
 
 ### B. CAN BE PICKED NOW
 
-**B1. The Shadow Journal cannot attribute a signal to a strategy.**
+**B1. WITHDRAWN 2026-08-03 — the premise was wrong (see v59.5).**
+The journal HAS carried `source` since 27 July; 389 records are
+attributed. The claim below came from sampling the oldest record in an
+append-only log. A3 is answered and C4 is unblocked as a result.
+Superseded text:
 863 records, and the schema is `id, ts, symbol, signal, strike, entry,
 stoploss, target1/2, confidence, verdict, checks, failed_checks,
 resolution` — no strategy/name field anywhere. This single omission
@@ -4608,8 +4693,9 @@ Tide needs multi-day 15m in `pa_candles`.
 **C3. Index volume.** The deck leans on volume; index spot has none.
 Futures volume or chain volume are the substitutes.
 
-**C4. S4 vs S7 collapse.** BLOCKED ON B1, not on time — the evidence it
-waits for cannot be produced by a journal with no strategy field.
+**C4. S4 vs S7 collapse.** UNBLOCKED 2026-08-03 (v59.5): ema_mtf has 7
+attributed signals and sg_ema 28, timestamped, ready to compare for
+near-identical bars. The evidence was on disk the whole time.
 
 **C5. Strategy-class objectives.** CORRECTED: the previous entry said
 "`max_concurrent_spreads` 10 vs `max_concurrent_positions` 1, a 10:1

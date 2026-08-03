@@ -3060,12 +3060,40 @@ def _log_shadow_signal(bus, job, verdict, checks):
         "s7_gates": sig.get("s7_gates"),
         "resolution": "taken" if verdict == "APPROVED" else "pending",
     }
+    # 2026-08-03 — this was `except Exception: pass`, twenty lines below
+    # the comment explaining why that exact pattern was removed from the
+    # FUTURES writer above (v59.0 Phase 0 §3.3). The reasoning transfers
+    # unchanged and was simply never applied here: the entries most
+    # likely to fail a write are not a random sample, so dropping them
+    # silently does not degrade the record, it BIASES it — and a journal
+    # that loses rows without saying so still looks complete.
+    #
+    # This half is the larger evidence base of the two: 389 attributed
+    # option/price-action signals, against which "was the risk agent
+    # right to reject that?" is asked. Same split as the futures writer —
+    # serialisation is a programming error and propagates; I/O is an
+    # environment error, reported without killing a loop that may be
+    # holding a position.
+    try:
+        line = json.dumps(entry)
+    except (TypeError, ValueError) as e:
+        raise TypeError(
+            f"shadow entry is not serialisable ({type(e).__name__}: {e}) "
+            f"— signal={sig!r}. Fix the caller; do not drop the record.") from e
     try:
         os.makedirs(os.path.dirname(SHADOW_PATH), exist_ok=True)
         with open(SHADOW_PATH, "a") as f:
-            f.write(json.dumps(entry) + "\n")
-    except Exception:
-        pass
+            f.write(line + "\n")
+    except OSError as e:
+        _shadow_write_failures[0] += 1
+        msg = (f"⚠ shadow journal WRITE FAILED ({type(e).__name__}: {e}) — "
+               f"{_shadow_write_failures[0]} lost so far. Rejected signals "
+               f"exist nowhere else; the record is now incomplete.")
+        try:
+            bus.log("shadow", msg)
+            bus.alert("high", "shadow", sym or "", "shadow journal write failed")
+        except Exception:
+            print("  " + msg)
     if verdict == "REJECTED":
         pending = bus.get("shadow_pending", [])
         pending.append(entry)
