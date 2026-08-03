@@ -4,6 +4,95 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.8 — C4 answered, and a deploy that should have been refused (2026-08-03)
+
+### C4 — S4 and S7 ARE firing on the same bars
+
+`ema_mtf` (S4) and `sg_ema` (S7) overlap, and not by chance.
+`strategy_overlap.py` compares each S4 signal against S7 signals on the
+same symbol, scored against 400 draws with the S4 timestamps reshuffled
+uniformly inside the same session:
+
+    window   observed        random          z
+     5 min     2/7      0.29 +/- 0.53     +3.20
+    15 min     3/7      0.88 +/- 0.89     +2.38
+    60 min     5/7      2.41 +/- 1.22     +2.13
+
+The SHAPE is the check that matters. Real coincidence is strongest at
+the shortest lag and decays; a spurious hit has no reason to. It decays:
++3.20 > +2.38 > +2.13. Three windows is a mild multiple comparison, and
+reading the gradient rather than any single z is what keeps that from
+mattering.
+
+Every nearest pair agrees on all three of symbol, DIRECTION and STRIKE:
+
+    07-27 14:46 SENSEX    BUY_CE vs BUY_CE   +0m   76900 vs 76900
+    07-27 15:02 NIFTY     BUY_CE vs BUY_CE  -16m   24000 vs 24000
+    07-27 15:22 SENSEX    BUY_CE vs BUY_CE   -2m   76800 vs 76800
+    07-28 14:42 FINNIFTY  BUY_PE vs BUY_PE  -19m   26050 vs 26050
+    07-28 14:48 NIFTY     BUY_PE vs BUY_PE   +9m   24000 vs 24000
+
+Direction 5/5, strike 5/5 — and read against S7's 71% BUY_CE base rate,
+with 3 CE and 2 PE among the pairs, so this is not both defaulting one
+way.
+
+WHAT THIS DOES NOT SAY. n=7. It establishes that the two OVERLAP, not
+how often they would over a longer record. And the decision to collapse
+S4 into S7 is a design call, not a conclusion this analysis can make —
+recorded for you, not acted on.
+
+### A dormancy worth watching, NOT yet a finding
+
+Signals per strategy per day:
+
+                    07-27 07-28 07-29 07-30 07-31 08-03
+    orb                 9     4     8     9     3     0
+    vwap_pullback      17    15    10    14     2     1
+    ema_mtf             3     3     1     0     0     0
+    sg_ema              7     4     6     4     3     4
+    momentum_confluence 0    19    12    12     1     2
+
+The broad collapse on 07-31 and 08-03 is ALREADY EXPLAINED and is not
+five strategies breaking: 07-31 wrote 2,039 candles against a normal
+140-200k, and 08-03 ran the whole session with the websocket dead
+(v59.2). Data starvation, not strategy failure.
+
+`ema_mtf` is the one that does not fit that story — it went 3, 3, 1, 0
+starting 07-30, a day with 141,434 candles. That is either a genuine
+stop or a low base rate looking like one; 1 -> 0 is not evidence. Worth
+a look once real sessions resume, and explicitly NOT claimed as a bug.
+
+### A spread was deployed at 23:13 at night
+
+    23:10  [regime] broker returned no candles (market closed)
+           — using 400 persisted bars from the local DB instead
+    23:13  POST /api/strategies/deploy -> 200 OK
+    23:13  PAPER SPREAD bull_put_spread NIFTY ... credit 36.65 x 65
+    23:13  SPREAD CLOSED — market closed — forced square-off — net -120
+
+The button was pressed; the SERVER should have refused. `api_strategies_
+deploy` carries a carefully argued guard — "a deploy must never be
+evaluated against the last session's regime… enforced here rather than
+only by disabling the button, because this endpoint is directly
+callable" — but it tests `if not regime`, and out of hours the regime
+engine REBUILDS a present-looking regime from persisted DB bars. So the
+guard passes and nothing behind it checks the clock. It defends against
+a STALE regime, not against a CLOSED market.
+
+`_auto_spreads` is properly gated (`or not market_open(): return`). Only
+the manual/API door is open. NOT caused by the v59.1 boundary work: 4 of
+173 spread opens ever were out of hours, 3 of them on 30 July.
+
+Underneath sits a larger gap this codebase already documents at
+agents.py:5166 — "spreads never go through risk.evaluate() at all
+(_auto_spreads() calls enter_spread() directly)" — which contradicts
+CLAUDE.md's "every order passes the risk agent", and the market-open
+check lives INSIDE `RiskAgent.evaluate`. Tonight's 120 rupees is the
+visible symptom of that.
+
+NOT FIXED — a live gating change needs explicit approval, and that holds
+even when the change only tightens. See PENDING B5.
+
 ## v59.7 — B4: a success message whose absence means nothing (2026-08-03)
 
 The futures OI archive announced "archive active" behind
@@ -4811,6 +4900,19 @@ data needed, and it speaks directly to the v59.0 finding.
 Top rejection reasons are concentrated: timeframe confluence
 (219 PE + 206 CE) and regime (167 rangebound + 120 choppy).
 
+**B5. The manual deploy endpoint has no market-hours guard.** A spread
+was opened at 23:13 on 2026-08-03 through `POST /api/strategies/deploy`;
+the endpoint's guard tests `if not regime`, and out of hours the regime
+engine rebuilds a present-looking regime from persisted bars, so it
+passes. `_auto_spreads` IS gated; only the manual door is open. 4 of 173
+spread opens ever were out of hours. Fix is one line
+(`if not market_open(): return {"error": ...}`) plus a test, but it is a
+LIVE GATING CHANGE and needs explicit approval. The deeper gap —
+`_auto_spreads` calling `enter_spread` directly so spreads skip
+`RiskAgent.evaluate` entirely, against CLAUDE.md's "every order passes
+the risk agent" — is a much larger change and should be scoped
+separately.
+
 **B3. Deck setup 7 — the correction after Wave 5.** The only unbuilt
 feature item. v58.48 absorbed setups 4, 5 and 6 into S3 on the grounds
 that they are one trade in three costumes; 7 was held back because it
@@ -4841,9 +4943,12 @@ Tide needs multi-day 15m in `pa_candles`.
 **C3. Index volume.** The deck leans on volume; index spot has none.
 Futures volume or chain volume are the substitutes.
 
-**C4. S4 vs S7 collapse.** UNBLOCKED 2026-08-03 (v59.5): ema_mtf has 7
-attributed signals and sg_ema 28, timestamped, ready to compare for
-near-identical bars. The evidence was on disk the whole time.
+**C4. S4 vs S7 collapse.** ANSWERED 2026-08-03 (v59.8): they DO fire on
+the same bars — z=+3.20 at a 5-minute window against a 400-draw random
+baseline, decaying correctly with window, and every nearest pair agrees
+on symbol, direction AND strike (5/5). n=7, so this shows overlap, not
+its long-run rate. `strategy_overlap.py` reproduces it. Whether to
+collapse S4 into S7 remains YOUR call — the analysis cannot make it.
 
 **C5. Strategy-class objectives.** CORRECTED: the previous entry said
 "`max_concurrent_spreads` 10 vs `max_concurrent_positions` 1, a 10:1
