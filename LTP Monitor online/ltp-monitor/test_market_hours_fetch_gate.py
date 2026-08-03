@@ -72,6 +72,13 @@ def make_fake_agent(get_chain_calls):
     fake_self.bus.set("symbols", ["NIFTY"])
     fake_self.name = "market_data"
     fake_self._sync_ws_feed = lambda sym, chain: None
+    # 2026-08-03 — futures resolution moved OUT of _sync_ws_feed and is
+    # now called unconditionally from the cycle, because gating it on the
+    # websocket left the REST fallback with an empty contract map for a
+    # whole session. Stubbed here for the same reason the two above are:
+    # this test is about the market-hours gate, and what it asserts is
+    # that NONE of these run when the market is closed.
+    fake_self._ensure_futures_subscribed = lambda client=None: None
     fake_self._poll_futures_via_rest = lambda: None
 
     def fake_get_chain(sym):

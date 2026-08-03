@@ -903,6 +903,18 @@ class MarketDataAgent(Agent):
         self.bus.set(f"chain_ts:{sym}", time.time())
         self.bus.set("chain_ts", time.time())
         self._sync_ws_feed(sym, chain)
+        # 2026-08-03 — futures data was dead for a full session and
+        # nothing said so. `_sync_ws_feed` returns early whenever the
+        # websocket can't start (REST mode, or `dhanhq` missing from the
+        # interpreter the app happens to be running under), and it was
+        # the ONLY caller of _ensure_futures_subscribed — so
+        # _future_sec_ids stayed empty and the REST poller below returned
+        # instantly on an empty map. No error, no log: the futures OI
+        # archive simply wrote nothing, which is indistinguishable from
+        # "this account has no futures". Resolved unconditionally here so
+        # REST is a real fallback rather than one that depends on the
+        # websocket it is falling back FROM.
+        self._ensure_futures_subscribed(None)
         self._poll_futures_via_rest()
         # spot history for intraday momentum (no extra API calls)
         hist = self.bus.get(f"spot_hist:{sym}", [])
@@ -968,9 +980,30 @@ class MarketDataAgent(Agent):
                     self.bus.log(self.name, f"ws subscribe_more failed for "
                                  f"{sym} {sec_id}: {e}")
 
-    def _ensure_futures_subscribed(self, client):
-        """Subscribe the current-month future per symbol via the scrip
-        master lookup, re-checked once per trading day. Re-checking
+    def _ensure_futures_subscribed(self, client=None):
+        """Resolve (and, with a client, subscribe) the current-month
+        future per symbol via the scrip master lookup, re-checked once
+        per trading day.
+
+        RESOLUTION AND SUBSCRIPTION ARE SEPARATE PASSES (2026-08-03).
+        They used to be one: a contract entered `_future_sec_ids` only
+        if `client.subscribe_more()` returned True. But `_future_sec_ids`
+        is also what `_poll_futures_via_rest` reads, and the only caller
+        of this method was `_sync_ws_feed`, which returns early whenever
+        the websocket can't start. So on 2026-08-03 — `dhanhq` missing
+        from the interpreter the app was launched with — the websocket
+        never started, no contract was ever registered, the REST poller
+        returned instantly on an empty map, and futures LTP/OI produced
+        NOTHING for a full session while every log line looked normal.
+        `future_oi_snapshots` has exactly one day in it for this reason.
+        The REST fallback depended on the websocket it falls back FROM.
+
+        Now resolution runs off the scrip master alone and is called
+        unconditionally from the cycle; subscription is a second pass
+        that needs a client and retries until it sticks. `client=None`
+        is the REST-mode call and is not an error.
+
+        Re-checking
         daily (rather than once ever) is what makes monthly rollover
         automatic: dhan_scrip_master.get_current_futures_detailed()
         always resolves to whichever contracts are nearest-unexpired —
@@ -1026,43 +1059,52 @@ class MarketDataAgent(Agent):
         # startup (or on any day a new month's contract needs
         # resolving). get_current_futures_for_symbols() does the
         # expensive parse ONCE for all requested symbols together.
+        contracts = getattr(self, "_future_contracts", None)
+        if contracts is None:
+            contracts = {}
+            self._future_contracts = contracts
+        ws_subscribed = getattr(self, "_future_ws_subscribed", None)
+        if ws_subscribed is None:
+            ws_subscribed = set()
+            self._future_ws_subscribed = ws_subscribed
         pending = [sym for sym in self.bus.get("symbols", [])
                   if checked.get(sym) != today]
-        if not pending:
-            return
-        try:
-            results_by_symbol = dhan_scrip_master.get_current_futures_for_symbols(
-                pending, n=3)
-        except Exception as e:
-            for sym in pending:
-                self.bus.log(self.name, f"futures lookup failed for {sym}: {e}")
-                checked[sym] = today   # don't hammer this every 3s cycle today
-            return
-        for sym in pending:
+        results_by_symbol = None
+        if pending:
+            try:
+                results_by_symbol = dhan_scrip_master.get_current_futures_for_symbols(
+                    pending, n=3)
+            except Exception as e:
+                for sym in pending:
+                    self.bus.log(self.name, f"futures lookup failed for {sym}: {e}")
+                    checked[sym] = today   # don't hammer this every 3s cycle today
+        for sym in (pending if results_by_symbol is not None else []):
             futures, detail = results_by_symbol.get(sym, ([], {}))
             if not futures:
                 self.bus.log(self.name, f"no current future found for {sym}: {detail}")
                 checked[sym] = today
                 continue
-            all_subscribed = True
-            newly_subscribed = []
+            newly_resolved = []
             for i, future in enumerate(futures):
                 role = "front" if i == 0 else f"month{i + 1}"
                 sec_id = int(future["security_id"])
                 if sec_id in future_map:
-                    continue   # already subscribed to this exact contract
-                if client.subscribe_more(sym, future["security_id"]):
-                    future_map[sec_id] = sym
-                    future_roles[sec_id] = role
-                    newly_subscribed.append((role, future))
-                else:
-                    # connection not up yet — leave `checked` unset so
-                    # the next cycle retries the whole symbol rather
-                    # than silently giving up on futures for the day
-                    all_subscribed = False
-            for role, future in newly_subscribed:
+                    continue   # already resolved this exact contract
+                # REGISTERED ON RESOLUTION, NOT ON SUBSCRIPTION. See the
+                # docstring: _poll_futures_via_rest reads these two maps,
+                # so gating them on subscribe_more() made the REST
+                # fallback depend on the websocket it falls back FROM.
+                future_map[sec_id] = sym
+                future_roles[sec_id] = role
+                contracts[sec_id] = {
+                    "sym": sym, "raw": future["security_id"], "role": role,
+                    "name": future.get("symbol_name", "?"),
+                    "expiry": future["expiry"]}
+                newly_resolved.append((role, future))
+            checked[sym] = today
+            for role, future in newly_resolved:
                 self.bus.log(self.name,
-                            f"{sym} {role} future subscribed: "
+                            f"{sym} {role} future resolved: "
                             f"{future.get('symbol_name', '?')} "
                             f"(security_id={future['security_id']}, "
                             f"expiry={future['expiry'].date()})")
@@ -1080,8 +1122,36 @@ class MarketDataAgent(Agent):
                     # both problems.
                     self.bus.set(f"future_expiry:{sym}",
                                  future["expiry"].strftime("%Y-%m-%d"))
-            if all_subscribed:
-                checked[sym] = today
+
+        # ------------------------------------------------ subscription pass
+        # Separate from resolution above and retried every cycle until it
+        # sticks, so a websocket that connects late — or reconnects, or
+        # only becomes importable after a restart — still picks up
+        # contracts that were resolved without it. `checked` deliberately
+        # no longer gates this: it stamps RESOLUTION, which is a
+        # once-a-day scrip-master lookup, not subscription, which is a
+        # connection state that can change any time.
+        if client is None:
+            return
+        for sec_id, c in list(contracts.items()):
+            if sec_id in ws_subscribed:
+                continue
+            try:
+                ok = client.subscribe_more(c["sym"], c["raw"])
+            except Exception as e:
+                if should_log_throttled(self, "_fut_sub_fail", str(sec_id),
+                                        f"{type(e).__name__}: {e}"):
+                    self.bus.log(self.name,
+                                 f"⚠ {c['sym']} {c['role']} future subscribe "
+                                 f"failed ({type(e).__name__}: {e}) — REST "
+                                 f"polling still covers LTP/OI")
+                continue
+            if ok:
+                ws_subscribed.add(sec_id)
+                self.bus.log(self.name,
+                            f"{c['sym']} {c['role']} future subscribed: "
+                            f"{c['name']} (security_id={c['raw']}, "
+                            f"expiry={c['expiry'].date()})")
 
     def _future_month_tick(self, sym, sec_id, tick):
         """Lightweight LTP/OI tracker for the 2nd/3rd month contracts
@@ -1130,6 +1200,19 @@ class MarketDataAgent(Agent):
         future_roles = getattr(self, "_future_roles", None)
         future_sec_ids = getattr(self, "_future_sec_ids", None)
         if not future_roles or not future_sec_ids:
+            # 2026-08-03 — this bare `return` hid a whole dead session.
+            # An empty map means NO futures data at all: no LTP, no OI,
+            # no future_oi_snapshots rows, and therefore no S10 futures
+            # backtest — and it looked exactly like a quiet market. Say
+            # so, throttled, because it is a real outage of a data feed
+            # and silence is what made it cost a session to notice.
+            if should_log_throttled(self, "_fut_unresolved", "all",
+                                    "no futures resolved"):
+                self.bus.log(self.name,
+                             "⚠ no futures contracts resolved — futures "
+                             "LTP/OI unavailable and the OI archive is "
+                             "writing nothing (S10 backtests stay "
+                             "mode=chain_only)")
             return
         # 2026-07-25 — real bug found from a live log: repeated "429 Too
         # Many Requests" on this endpoint for ~9 minutes straight with

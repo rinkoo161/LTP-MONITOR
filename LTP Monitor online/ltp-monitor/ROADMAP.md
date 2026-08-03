@@ -4,6 +4,94 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.2 — the REST fallback depended on the websocket (2026-08-03)
+
+`future_oi_snapshots` held exactly ONE day (31 July) while
+`chain_snapshots` held 5.4 days. The app ran the full session on 3
+August and archived no futures OI at all.
+
+### The chain, every link silent
+
+    dhanhq missing from the interpreter the app was launched with
+      -> _ensure_ws_client() returns None
+      -> _sync_ws_feed() returns early
+      -> _ensure_futures_subscribed() never runs   (its ONLY caller)
+      -> _future_sec_ids stays empty
+      -> _poll_futures_via_rest() returns on `if not future_sec_ids`
+      -> _classify_future_tick() never called
+      -> log_future_oi() never reached
+
+No exception, no log line. The archive's own success message ("futures
+OI archive active") had fired once on 31 July and never again — and
+because it only fires on the FIRST success after a restart, its absence
+across every later restart read as "still fine" rather than "has not
+run since".
+
+**The REST fallback depended on the websocket it falls back FROM.** A
+contract only entered `_future_sec_ids` if `client.subscribe_more()`
+returned True, but that same map is what the REST poller reads. So the
+"REST-based supplement for futures" was unreachable in REST mode — dead
+code that looked like a safety net.
+
+### Fix
+
+Resolution and subscription are now separate passes. Resolution runs off
+the scrip master alone, needs no client, and is called unconditionally
+from the cycle; subscription is a second pass that needs a client and
+retries until it sticks (tracked in `_future_ws_subscribed`, so a
+websocket connecting late — a reconnect, or dhanhq only importable after
+a restart — still picks up contracts resolved without it). `checked` now
+stamps resolution only, which is the once-a-day scrip-master lookup; it
+no longer gates subscription, which is connection state that can change
+at any moment.
+
+The bare `return` on an empty map now logs, throttled, and names the
+consequence: no futures LTP/OI and an archive writing nothing. Silence
+is what made this cost a session — an empty map looked identical to a
+quiet market.
+
+### What was NOT the cause
+
+Three plausible explanations were tested and rejected before the real
+one: the front-month contract had NOT expired (all four symbols resolve
+to 25 Aug), the quotes had NOT stopped carrying OI (ws ticks still map
+`data.get("OI")`, and futures subscribe in Full mode), and the app had
+NOT been down — activity.log shows it running every hour of the session.
+The archive also did not "stop after 31 July": it wrote 6,460 rows in
+the 09:00 hour, 83 in the 10:00 hour, then stopped — and 1-2 August were
+a weekend, so the real gap is ONE trading day, not three.
+
+### Cost of the fix
+
+REST mode now genuinely polls futures quotes, which it never did before.
+That is the point, but it adds ~0.25 req/s to `/marketfeed/quote` — an
+endpoint with a documented 429 escalation history in this codebase. The
+existing 4s pacing, the shared `rate_limit` registry and the escalating
+backoff all still apply, and the market-hours gate keeps it idle out of
+hours. Worth watching in the first live session.
+
+### Test
+
+`test_futures_rest_fallback.py` drives the real methods with a stub
+scrip master rather than scraping source, and each of its three
+detection paths was verified against the pre-fix code: resolution with
+`client=None` raised AttributeError, the empty-map poller emitted zero
+log lines, and there was exactly one call site. A test that cannot fail
+on the bug it was written for is worth nothing.
+
+`test_market_hours_fetch_gate.py` needed its fake agent taught the new
+collaborator — it stubs each one to assert NONE of them run when the
+market is closed, so a new call in the cycle is exactly what it should
+notice.
+
+### Still operator-dependent
+
+The trigger was launching the app with an interpreter lacking `dhanhq`
+(`~/venv/bin/python` has it; bare `python3` does not). This fix means
+that degrades to REST-with-futures instead of no-futures-at-all, and
+says so in the log — but the websocket is still the better feed, so the
+launch interpreter still matters.
+
 ## v59.0 Phase D + items 9, 24 (2026-08-01)
 
 ### Item 24 — the ₹1,143 is not a constant, and not independent either
