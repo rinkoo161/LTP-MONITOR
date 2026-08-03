@@ -4,6 +4,73 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.7 — B4: a success message whose absence means nothing (2026-08-03)
+
+The futures OI archive announced "archive active" behind
+
+    if not getattr(self, "_foi_archive_ok", False):
+
+— once per PROCESS, then silence forever. It fired on 31 July and never
+again. Because it can only ever fire once per restart, its absence
+across every LATER restart read as "still fine" rather than "has not run
+since", and the archive was dead for a whole session before anyone
+looked. That is the ONLY reason v59.2 took a day to find.
+
+### Two shapes, one root cause
+
+    SUCCESS latch   announce once, then never. Absence means BOTH
+                    "working" and "stopped three days ago".
+    FAILURE latch   warn once, then never. The same fault on Monday and
+                    on Friday is ONE line, and a relapse after a recovery
+                    is none.
+
+A per-process boolean standing in for state that changes over time. All
+three sites found:
+
+    _foi_archive_ok            success   futures OI archive
+    _fut_archive_announced     success   futures OHLCV+OI archive
+    _daily_ohlc_write_failed   FAILURE   daily OHLC persistence
+
+All now route through `should_log_throttled`, the throttle that already
+existed — extended rather than forked, the same rule that collapsed the
+market-session check, the news sentiment regexes and the OI quadrant
+classifier to single definitions.
+
+Success announces are now per DAY: the date IS the reason, so a new day
+always logs and a repeat inside the day does not. One line a session,
+and a MISSING line now unambiguously means the archive did not write
+today. The failure latch re-reports when the error CHANGES and otherwise
+at most every ten minutes, which keeps the 90s-cycle spam away without
+turning a recurring fault into a one-off.
+
+`levels_warned`/`indicators_warned` in app.py were checked and left
+alone — they are locals reset per websocket connection, which is a
+legitimate warn-once-per-connection, not this bug.
+
+### The fourth instance was in the tests
+
+`test_futures_oi_archive.py` sliced a FIXED 22 lines after the
+`log_future_oi()` call and asserted on their contents. Adding the
+comment block above pushed the asserted lines past the window, so it
+failed against CORRECT code — a false alarm, the worst kind of test
+failure because it trains you to ignore it.
+
+That is precisely the bug `test_futures_shadow_failloud.py` had already
+fixed in ITSELF; its comment reads "the previous version used
+src[i:i+3200] and silently stopped short of the lines it was asserting
+on". Fixed the same way here: slice the FUNCTION, which cannot drift
+with length. The pattern being hunted in production code had a fourth
+instance in the tests, found by tripping over it.
+
+### Honest limit of the new test
+
+`test_announce_latches.py` sections 2 and 4 characterise
+`should_log_throttled`, which was already correct — they pass against
+pre-fix code. What actually detects the bug is the regex sweep for
+`if not getattr(self, "_x", False)` plus the source-level wiring checks:
+6 checks fail pre-fix, and the sweep also guards against the pattern
+being reintroduced anywhere in the file.
+
 ## v59.6 — B2: the gates were right, and the record that said otherwise was biased (2026-08-03)
 
 The rejection record had never been costed. 653 rejected option/price-
@@ -4750,7 +4817,10 @@ that they are one trade in three costumes; 7 was held back because it
 is COUNTER-trend and genuinely different. Given the frame above, this
 should stay unbuilt until an edge exists to add it to.
 
-**B4. Retire or re-verify the `_foi_archive_ok` announce pattern.**
+**B4. DONE 2026-08-03 (v59.7).** All three latches (two success, one
+failure) now route through `should_log_throttled`; success announces are
+per DAY so a missing line means it did not run. A fourth instance was
+found in the test suite. Superseded text:
 "futures OI archive active" fires only on the FIRST success after a
 restart, so its absence looks identical to its success across every
 later restart — that is precisely why a dead archive went unnoticed for

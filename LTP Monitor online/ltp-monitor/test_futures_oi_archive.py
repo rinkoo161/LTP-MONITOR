@@ -57,15 +57,28 @@ check("exactly one implementation of the rule exists",
       str(src.count("prev_reason, prev_ts = last.get(")))
 
 print("\n3) the archive call site no longer swallows")
-_code = [ln.split("#", 1)[0] for ln in src.splitlines()]
-i = next(n for n, ln in enumerate(_code) if "log_future_oi(" in ln)
-window = "\n".join(_code[i:i + 22])
+# 2026-08-03 — this sliced a FIXED 22 lines after the log_future_oi()
+# call, and broke the moment that block gained comments (B4 replaced the
+# once-per-process announce latch with a daily throttle and documented
+# why). The lines it asserts on had simply moved past the window, so it
+# failed against CORRECT code. Exactly the bug test_futures_shadow_
+# failloud.py already fixed in itself — "the previous version used
+# src[i:i+3200] and silently stopped short of the lines it was asserting
+# on". Slice the FUNCTION instead; it cannot drift with length.
+_j = src.index("def _classify_future_tick")
+_rest = src[_j + 10:]
+_end = _rest.index("\n    def ") if "\n    def " in _rest else len(_rest)
+window = "\n".join(ln.split("#", 1)[0]
+                   for ln in src[_j:_j + 10 + _end].splitlines())
 check("no bare `except Exception: pass` guarding the archive",
       "pass" not in window.split("except Exception")[-1][:80],
       window.split("except Exception")[-1][:60].strip())
 check("a failure reaches the bus log", "futures OI archive FAILED" in window)
 check("it is throttled, not per-cycle spam", "should_log_throttled" in window)
-check("first success is announced once", "futures OI archive active" in window)
+check("the success announce is per DAY, not per process",
+      "futures OI archive active" in window and "_foi_archive_daily" in window,
+      "a once-per-process announce goes silent forever after the first "
+      "success, so its absence means both 'fine' and 'dead'")
 
 print("\n4) driving the real call site — failure must surface")
 class Bus(agents.Bus):

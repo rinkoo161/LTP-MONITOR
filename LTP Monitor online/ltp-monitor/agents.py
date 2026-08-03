@@ -1421,8 +1421,20 @@ class MarketDataAgent(Agent):
             import history as _h
             _h.log_future_oi(sym, time.time(), oi, oi - b["oi"],
                              ltp, ltp - b["ltp"], quadrant)
-            if not getattr(self, "_foi_archive_ok", False):
-                self._foi_archive_ok = True
+            # 2026-08-03 — was `if not getattr(self, "_foi_archive_ok",
+            # False)`: announce once per PROCESS, then silence forever.
+            # That is what let this archive die unnoticed. The line fired
+            # on 31 July and never again, and since it can only fire once
+            # per restart, its absence across every LATER restart read as
+            # "still fine" rather than "has not run since". A success
+            # signal whose absence is ambiguous is not a signal.
+            #
+            # Now once per DAY, through the shared throttle — the date IS
+            # the reason, so a new day always logs. One line a session,
+            # and a missing line unambiguously means it did not write.
+            if should_log_throttled(self, "_foi_archive_daily", "all",
+                                    now_ist().strftime("%Y-%m-%d"),
+                                    window=86400):
                 self.bus.log(self.name,
                              "futures OI archive active — S10 backtests can "
                              "run mode=full once a session is recorded")
@@ -1541,8 +1553,14 @@ class MarketDataAgent(Agent):
                               if cur["start_cum"] is not None
                               and cur["last_cum"] is not None else None),
                         "oi": cur["oi"]}])
-                    if n and not getattr(self, "_fut_archive_announced", False):
-                        self._fut_archive_announced = True
+                    # Same once-per-process latch as the OI archive above,
+                    # and the same fix: per DAY, per symbol. Announcing a
+                    # working archive exactly once and then never again
+                    # means silence covers both "running fine" and "stopped
+                    # three days ago".
+                    if n and should_log_throttled(
+                            self, "_fut_archive_daily", sym,
+                            now_ist().strftime("%Y-%m-%d"), window=86400):
                         self.bus.log(self.name,
                                      f"futures OHLCV+OI archive ACTIVE for {sym} "
                                      f"— first bar {now_ist().strftime('%Y-%m-%d %H:%M')}. "
@@ -2002,9 +2020,19 @@ class RegimeAgent(Agent):
                                       t["low"], t["close"])
         except Exception as e:
             # DB write failing shouldn't take down regime/bias/levels
-            # computation for this cycle — log once, not every 90s.
-            if not getattr(self, "_daily_ohlc_write_failed", False):
-                self._daily_ohlc_write_failed = True
+            # computation for this cycle — but it must not report only
+            # ONCE EVER either. 2026-08-03: this latch never reset, so the
+            # same failure on Monday and on Friday produced ONE line, and
+            # a recovery followed by a relapse produced none. The inverse
+            # of the success-latch problem two functions up, and the same
+            # root cause: a per-process boolean standing in for state that
+            # changes over time.
+            #
+            # The shared throttle re-reports when the ERROR CHANGES and
+            # otherwise at most every 10 minutes, which keeps the 90s-cycle
+            # spam away without turning a recurring fault into a one-off.
+            if should_log_throttled(self, "_daily_ohlc_fail", sym,
+                                    f"{type(e).__name__}: {e}"):
                 self.bus.log(self.name, f"⚠ failed to persist daily OHLC "
                                         f"for {sym}: {e}")
 
