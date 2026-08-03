@@ -3628,6 +3628,117 @@ Prints a diagnostic checklist when the table is empty rather than
 writing a silently useless file.
 
 
+## The ATR branch has never worked — third distinct cause (2026-08-03, live session)
+
+Found by running the system rather than reading it. Every option stop
+taken today was **exactly 30.0% of premium** — the fallback constant, not
+a volatility-derived number.
+
+    analyzer.py:1402   option_stop_geometry(ltp, atr_pct=analysis.get("atr_pct"))
+    analyze() sets atr_pct: False        <- the chain dict never holds it
+    agents.py:2181     "atr_pct": round(atr_pct, 2)   <- written to regime:{sym}
+
+**atr_pct was read from the wrong bus key.** It lives in `regime:{sym}`;
+the analyzer looked in the analysis/chain dict, found nothing, and fell
+back silently. Volatility has therefore never influenced a stop in this
+system, through three separate defects:
+
+    v58 and earlier  dimensionally wrong  -> always returned the LOWER clamp
+    2026-08-03 am    consolidated rules   -> always returned the FALLBACK
+    2026-08-03 pm    (this)               -> never REACHED the ATR branch
+
+Identical symptom every time. The `basis` field added this morning is the
+only reason it was visible at all — it named which branch produced each
+stop, and three identical 30.0% stops with basis "fallback" is not
+something a reading of the code would have surfaced.
+
+### The unit trap, which was the dangerous half
+
+`regime.atr_pct` is `_atr(c5, 14)` — a **5-MINUTE** ATR as a percent of
+spot. Measured: NIFTY 0.061%, BANKNIFTY 0.082%, FINNIFTY 0.082%,
+SENSEX 0.077%, median **0.079%** (~19.7 index points).
+
+`option_stop_atr_mult` was 0.5, calibrated against **DAILY** ATR
+(~0.70%). Wiring the bus key alone — the "obvious" one-line fix — would
+have produced:
+
+    stop 30% -> 8.8%, clamped to 9%     a 3.4x TIGHTER stop on every entry
+
+Recalibrated to **1.7** so median volatility reproduces ~30%, the level
+the fallback was already delivering. Consolidating and re-wiring must not
+shift the risk level; only WHICH volatility the stop responds to changes.
+
+Before/after on today's three real entries:
+
+    entry   was (30% flat)   now @0.079% vol   now @0.15% vol
+    56.20        39.34         39.56 (30%)      24.61 (56%)
+    70.25        49.17         53.61 (24%)      38.66 (45%)
+    48.80        34.16         32.16 (34%)      19.52 (60%)
+
+Wired at all THREE call sites (agents.py, app.py x2), passing a COPY so
+the shared bus object is not mutated. A missed call site degrades
+silently to fallback, so `test_stop_geometry.py` asserts every site
+supplies it, plus that median vol reproduces ~30% and doubled vol widens
+the stop by >1.5x.
+
+## Macro bar interval could never satisfy its own freshness threshold (2026-08-03)
+
+`macro_yf_interval` was **1h** while the futures `freshness_sec` was
+**15m**. A bar is stamped at its START, so an hourly bar is never less
+than an hour old — **the e-minis read STALE all session**, and since
+`global_risk_sentiment` refuses stale quotes, the MTF confidence input
+was dead every session, not just at weekends. Replacing the cash indices
+with futures had delivered nothing.
+
+Measured live mid-session:
+
+    1h  -> median futures age 51.3m, 0/4 fresh
+    15m -> 21.3m, 0/4 fresh
+    5m  -> 11.4m, 4/4 fresh
+
+Fixed to 5m bars, and the futures threshold widened 900s -> 1200s: the
+free feed carries ~10-11 minutes of inherent lag, so a 15m threshold left
+only ~4 minutes of genuine staleness detection.
+`macro_providers.interval_coherence()` now flags any symbol whose
+`freshness_sec` is finer than the bar interval — i.e. any staleness flag
+that can only ever be ON.
+
+## Journal double-counted nine days (2026-08-03)
+
+Days 07-16 to 07-24 each stored the CUMULATIVE history rather than that
+day's trades, an artefact of the `journal_done` bug fixed on 2026-07-26 —
+after those rows were written. Summing days multiplied the same trades up
+to nine times.
+
+    reported lifetime   -₹56,022 over 549 rows
+    actual              -₹3,831  over 229 unique trades      14.6x overstated
+    option class        -₹34,405 reported  ->  +₹4,577 actual (SIGN FLIP)
+    spread class        +₹2,246  reported  ->  +₹15,455 actual
+
+The corrected picture is materially different: options and spreads are
+both POSITIVE, and the entire lifetime loss is futures (-₹23,863 over 40
+trades, -₹597 each) — the class already disabled. What survives: 4
+profitable days of 12, median day -₹1,944, and one day (07-29, +₹24,429)
+carrying everything — without it, -₹28,260.
+
+Repaired in place from each row's own `closed_date`, de-duplicated on
+(order_id, closed_at, symbol, strike, leg). Backup at
+`journal.json.bak-20260803-dedup`. The WRITER needed no change.
+
+**Method note worth keeping**: the first analysis of this data took
+`d["pnl"]` at face value and reported every figure wrong. Recomputing
+from the underlying records is not optional when the aggregate and the
+detail can disagree.
+
+## Exit labels: a trailing stop in profit is not a stoploss (2026-08-03)
+
+8 of 34 "stoploss" exits in the journal were PROFITABLE — the trail and
+the breakeven lock ratchet `p["stoploss"]` upward, so hitting it once it
+sits above entry is a profit being banked. Any analysis bucketing by exit
+reason counted those as stopped-out losers. Now labelled "trailing stop
+in profit" / "trailing stop (raised from X)" / "stoploss". **The exit
+CONDITION is unchanged** — asserted in the test.
+
 ## v59.1 — measurement, not features (2026-08-03)
 
 23 commits since v59.0. Almost none of it adds capability; most of it

@@ -535,6 +535,43 @@ def ttl_for(cfg=None, market_open=False):
                        else "macro_cache_ttl_closed", 600 if market_open else 3600))
 
 
+_INTERVAL_SEC = {"1m": 60, "2m": 120, "5m": 300, "15m": 900, "30m": 1800,
+                 "60m": 3600, "1h": 3600, "1d": 86400, "1wk": 604800}
+
+
+def interval_coherence(cfg=None):
+    """Is the bar interval fine enough for the freshness thresholds?
+
+    2026-08-03, found live during a session. A bar is stamped at its
+    START, so the freshest age an interval can produce is about the
+    interval itself. An interval COARSER than a symbol's `freshness_sec`
+    therefore makes that symbol read STALE permanently — the flag fires
+    every cycle and means nothing, which is worse than not having it.
+
+    That is exactly what happened: `macro_yf_interval` was 1h against a
+    15-minute futures threshold, so the e-minis were stale all session
+    and replacing the cash indices with futures delivered nothing.
+
+    REPORTS ONLY. Returns a list of problem strings, empty when clean.
+    """
+    cfg = cfg if cfg is not None else config.load()
+    iv = str(cfg.get("macro_yf_interval") or "1h")
+    sec = _INTERVAL_SEC.get(iv)
+    out = []
+    if sec is None:
+        return [f"macro_yf_interval {iv!r} is not a recognised interval"]
+    for sym, m in (symbol_map(cfg) or {}).items():
+        try:
+            fresh = float(m.get("freshness_sec") or 0)
+        except (TypeError, ValueError):
+            continue
+        if fresh and sec >= fresh:
+            out.append(f"{sym}: bar interval {iv} ({sec}s) >= freshness_sec "
+                       f"{fresh:.0f}s — this symbol can NEVER read fresh, so "
+                       f"its staleness flag is permanently on and useless")
+    return out
+
+
 # ------------------------------------------------------------------- chain
 def fetch(symbols, cfg=None, cache=None, chain=None, market_open=False,
           log=None):

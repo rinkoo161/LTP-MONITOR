@@ -24,6 +24,7 @@ import store
 store.require_isolated("test_stop_geometry")
 
 import analyzer
+import config
 
 FAILED = []
 
@@ -99,6 +100,36 @@ _, _, _, mc = analyzer.option_stop_geometry(20.0, CFG, atr_pct=1.0, spot=80000)
 check("an extreme case clamps", mc["clamped"] is True)
 check("and the raw value is preserved for diagnosis",
       mc["raw_risk_pct"] > mc["risk_pct"], f"{mc['raw_risk_pct']:.2f} -> {mc['risk_pct']:.2f}")
+
+print("\n5b) atr_pct must actually REACH the geometry")
+# 2026-08-03. The ATR branch was dead in production: atr_pct lives in
+# regime:{sym} but the analyzer read analysis.get("atr_pct"), which never
+# contains it, so every option stop silently took the 30% fallback. The
+# `basis` field is what exposed it — assert every live call site now
+# supplies it, because a missed site fails SILENTLY back to fallback.
+AG_ = open(os.path.join(HERE, "agents.py")).read()
+APP_ = open(os.path.join(HERE, "app.py")).read()
+check("agents.py enriches analysis with regime atr_pct",
+      'atr_pct=_reg["atr_pct"]' in AG_,
+      "regime:{sym} is where the regime engine writes it")
+check("app.py does the same at BOTH its call sites",
+      APP_.count('atr_pct=_reg["atr_pct"]') + APP_.count('atr_pct=regime["atr_pct"]') >= 2,
+      "three call sites total; a missed one degrades to fallback silently")
+check("the bus object is not mutated",
+      "dict(analysis, atr_pct=" in AG_ and "dict(analysis, atr_pct=" in APP_,
+      "analysis comes off the bus and is shared")
+# The multiplier must match the TIMEFRAME of the atr_pct being fed in.
+_m = config.DEFAULTS["option_stop_atr_mult"]
+_sl, _, _, _mm = analyzer.option_stop_geometry(
+    56.2, {"option_stop_atr_mult": _m}, atr_pct=0.079, spot=24774)
+check("at median 5m volatility the ATR branch reproduces ~30%",
+      0.25 < _mm["risk_pct"] < 0.35 and _mm["basis"] == "atr",
+      f"{100*_mm['risk_pct']:.0f}% — consolidating must not shift the risk level")
+_, _, _, _hi = analyzer.option_stop_geometry(
+    56.2, {"option_stop_atr_mult": _m}, atr_pct=0.15, spot=24774)
+check("and widens when volatility doubles",
+      _hi["risk_pct"] > _mm["risk_pct"] * 1.5,
+      f"{100*_mm['risk_pct']:.0f}% -> {100*_hi['risk_pct']:.0f}% — the whole point")
 
 print("\n6) no caller keeps its own copy")
 check("the flat 30% rule is gone from analyzer",

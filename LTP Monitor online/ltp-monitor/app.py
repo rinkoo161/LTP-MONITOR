@@ -506,6 +506,10 @@ def api_signal(symbol: str, force: bool = False):
         context = {"news": pilot.bus.get("news"),
                    "social_mood": (pilot.bus.get("social") or {}).get("mood"),
                    "macro": (pilot.bus.get("macro") or {}).get("stance")}
+        # atr_pct lives in regime:{sym}; see the note in agents.py.
+        _reg = pilot.bus.get(f"regime:{sym}") or {}
+        if _reg.get("atr_pct"):
+            analysis = dict(analysis, atr_pct=_reg["atr_pct"])
         sig = ai_signal(analysis, context=context)
         sig["symbol"] = sym
         # AI Decision Engine + AI Probability Engine preview (Feature
@@ -1965,6 +1969,8 @@ def api_strategies(symbol: str):
     if analysis and not analysis.get("error"):
         try:
             from analyzer import _rule_signal
+            if (regime or {}).get("atr_pct"):
+                analysis = dict(analysis, atr_pct=regime["atr_pct"])
             rsig = _rule_signal(analysis)
             direction_ok = rsig["signal"] in (regime or {}).get("allowed_signals", [])
             confluence = (regime or {}).get("confluence", "no-alignment")

@@ -132,7 +132,16 @@ DEFAULTS = {
     # the lower clamp. 0.5 is chosen so the median NIFTY stop lands ~29%,
     # matching the 30% that dominated the journal — this consolidates the
     # rules WITHOUT shifting the typical risk level.
-    "option_stop_atr_mult": 0.5,
+    # 1.7, derived 2026-08-03 from what regime.atr_pct ACTUALLY is.
+    # It is _atr(c5, 14) — a FIVE-MINUTE ATR as a % of spot, median
+    # 0.079% across the four indices (NIFTY 0.061, BANKNIFTY 0.082,
+    # FINNIFTY 0.082, SENSEX 0.077), i.e. ~19.7 index points.
+    # 0.5 was calibrated against DAILY ATR (~0.70%) and is wrong by ~3.4x
+    # for this input: it produces an 8.8% stop that clamps to 9%, against
+    # the 30% the fallback branch has been using. 1.7 reproduces ~30% at
+    # median volatility, so wiring the ATR branch in changes WHICH
+    # volatility a stop responds to, not the typical risk level.
+    "option_stop_atr_mult": 1.7,
     "atr_stop_multiplier": 2.5,     # SL distance = entry * atr_pct% * this
     "trail_sl_mode": "fixed_pct",   # "fixed_pct" (trail_sl_gap_pct above)
                                     # or "atr" (peak - atr_pct%*multiplier)
@@ -711,10 +720,10 @@ DEFAULTS = {
     # Vantage entries are (from, to) for its FX function or a bare
     # function name for its commodity endpoints.
     "macro_symbols": {
-        "SPX_FUT":    {"yf": "ES=F",      "stooq": "es.f",   "freshness_sec": 900},
-        "NDX_FUT":    {"yf": "NQ=F",      "stooq": "nq.f",   "freshness_sec": 900},
-        "DJI_FUT":    {"yf": "YM=F",      "stooq": "ym.f",   "freshness_sec": 900},
-        "RUT_FUT":    {"yf": "RTY=F",                        "freshness_sec": 900},
+        "SPX_FUT":    {"yf": "ES=F",      "stooq": "es.f",   "freshness_sec": 1200},
+        "NDX_FUT":    {"yf": "NQ=F",      "stooq": "nq.f",   "freshness_sec": 1200},
+        "DJI_FUT":    {"yf": "YM=F",      "stooq": "ym.f",   "freshness_sec": 1200},
+        "RUT_FUT":    {"yf": "RTY=F",                        "freshness_sec": 1200},
         "NIKKEI":     {"yf": "^N225",     "stooq": "^nkx",   "freshness_sec": 21600},
         "HSI":        {"yf": "^HSI",      "stooq": "^hsi",   "freshness_sec": 21600},
         "GOLD":       {"yf": "GC=F",      "stooq": "xauusd",
@@ -756,7 +765,17 @@ DEFAULTS = {
     "macro_providers_enabled": ["yf", "ecb", "td", "av"],
     "macro_intrasession_enabled": True,
     "macro_intrasession_refresh_sec": 300,
-    "macro_yf_interval": "1h",
+    # 5-MINUTE bars, not hourly. A bar is stamped at its START, so the
+    # freshest age an interval can produce is about the interval itself —
+    # an interval COARSER than a symbol's freshness_sec makes that symbol
+    # read STALE permanently. Measured live in the 2026-08-03 session:
+    #   1h  -> median futures age 51.3m, 0/4 fresh
+    #   15m -> 21.3m, 0/4 fresh
+    #   5m  -> 11.4m, 4/4 fresh
+    # At 1h the e-minis were stale ALL SESSION, so replacing the cash
+    # indices with futures delivered nothing. Checked by
+    # macro_providers.interval_coherence().
+    "macro_yf_interval": "5m",
     "macro_yf_period": "5d",
     "macro_cache_ttl_open": 600,
     "macro_cache_ttl_closed": 3600,

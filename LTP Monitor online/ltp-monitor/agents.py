@@ -2785,6 +2785,15 @@ class StrategyAgent(Agent):
             analysis = self.bus.get(f"analysis:{sym}")
             if not analysis or analysis.get("error"):
                 continue
+            # 2026-08-03 — atr_pct lives in regime:{sym}, NOT in the
+            # analysis/chain dict. analyzer.option_stop_geometry reads
+            # analysis.get("atr_pct"), found nothing, and every option
+            # stop silently took the flat 30% fallback — volatility had
+            # no influence on stop placement at all. Passed through a
+            # COPY so the shared bus object is not mutated.
+            _reg = self.bus.get(f"regime:{sym}") or {}
+            if _reg.get("atr_pct"):
+                analysis = dict(analysis, atr_pct=_reg["atr_pct"])
             sig = ai_signal(analysis, context=context)
             self.bus.set(f"signal:{sym}", sig)
             if sig["signal"] != "WAIT" and \
@@ -5333,7 +5342,23 @@ class ExecutionAgent(Agent):
             # protect capital.
             reason = _dyn_exit
         elif ltp <= p["stoploss"]:
-            reason = f"stoploss (₹{ltp} ≤ ₹{p['stoploss']})"
+            # 2026-08-03 — this said "stoploss" whatever the stop had
+            # become. The trail and the breakeven lock RATCHET
+            # p["stoploss"] upward, so once it sits above entry, hitting
+            # it is a PROFIT being banked, not a loss being cut. 8 of 34
+            # "stoploss" exits in the journal were profitable, which
+            # makes any analysis that buckets by exit reason wrong —
+            # profitable trail exits counted as stopped-out losers.
+            # The exit behaviour is unchanged; only the label is honest.
+            _init = p.get("initial_sl")
+            if p["stoploss"] > p["entry"]:
+                reason = (f"trailing stop in profit (₹{ltp} ≤ ₹{p['stoploss']}, "
+                          f"locked above entry ₹{p['entry']})")
+            elif _init is not None and p["stoploss"] > _init:
+                reason = (f"trailing stop (₹{ltp} ≤ ₹{p['stoploss']}, "
+                          f"raised from ₹{_init})")
+            else:
+                reason = f"stoploss (₹{ltp} ≤ ₹{p['stoploss']})"
         elif ltp >= p["target2"]:
             reason = f"target-2 (₹{ltp})"
         elif p["t1_hit"] and ltp <= p["entry"]:
