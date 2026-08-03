@@ -40,8 +40,12 @@ src = open("agents.py").read()
 
 print("1) source-level: the gate exists, positioned before the actual "
      "API call (not just documented)")
-check("market_open() check is present in MarketDataAgent.cycle",
-      "if not market_open():" in src)
+# 2026-08-03 — MarketDataAgent is the DATA path. NSE split the boundary
+# (F&O trades to 15:40, intraday squares at 15:25), so data collection
+# gates on fno_session_open() while TRADING gates on market_open(). The
+# intent of this check is unchanged: the fetch must be gated.
+check("session gate is present in MarketDataAgent.cycle",
+      "if not fno_session_open():" in src)
 check("the gate's summary message clearly explains why nothing was "
      "fetched and that existing data is retained",
       "market closed — not fetching (last data retained)" in src)
@@ -83,10 +87,10 @@ print("\n2) BEHAVIORAL VERIFICATION: with the market marked CLOSED, "
      "actual calls to a fake get_chain, not just reading the source")
 calls_when_closed = []
 fake_self_closed = make_fake_agent(calls_when_closed)
-with patch("agents.market_open", return_value=False):
+with patch("agents.fno_session_open", return_value=False):
     agents.MarketDataAgent.cycle(fake_self_closed)
 
-check("get_chain was NOT called while market_open() returns False",
+check("get_chain was NOT called while the session is closed",
       len(calls_when_closed) == 0, str(calls_when_closed))
 check("the chain bus key was never set (existing/last value untouched, "
      "not overwritten with anything new)",
@@ -100,10 +104,10 @@ print("\n3) BEHAVIORAL VERIFICATION: with the market marked OPEN, the "
      "an accidental always-skip regression")
 calls_when_open = []
 fake_self_open = make_fake_agent(calls_when_open)
-with patch("agents.market_open", return_value=True):
+with patch("agents.fno_session_open", return_value=True):
     agents.MarketDataAgent.cycle(fake_self_open)
 
-check("get_chain WAS called while market_open() returns True",
+check("get_chain WAS called while the session is open",
       len(calls_when_open) == 1, str(calls_when_open))
 check("the chain bus key was correctly populated from the fetch",
       fake_self_open.bus.get("chain:NIFTY", {}).get("spot") == 24000)

@@ -31,6 +31,16 @@ _lock = threading.Lock()
 DEFAULTS = {
     "dhan_client_id": "",
     "dhan_access_token": "",
+    # ---- Session boundaries (NSE change effective 2026-08-03) ----
+    # Index F&O now trades until 15:40 (was 15:30), while INTRADAY F&O
+    # positions are auto-squared by the broker at 15:25. Those are two
+    # different times and the code previously had one. Configurable
+    # because this change is proof they get revised.
+    #   fno_squareoff_time  we must be FLAT by here (margin before 15:25)
+    #   fno_close_time      the market is still OPEN until here
+    "fno_open_time": "09:15",
+    "fno_squareoff_time": "15:22",
+    "fno_close_time": "15:40",
     "market_data_feed": "rest",  # "rest" (default, proven) or "websocket"
                                  # (dhan_ws.py — run test_dhan_ws.py against
                                  # a live account first, see its docstring)

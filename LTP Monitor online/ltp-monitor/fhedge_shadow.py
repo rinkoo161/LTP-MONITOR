@@ -79,7 +79,9 @@ DEFAULTS = {
 }
 # EOD unwind, IST. The hedge must be flat before the spread's own
 # square-off, not at the same moment as it.
-EOD_HH, EOD_MM = 15, 20
+# Must unwind BEFORE the intraday square-off, not at a hardcoded time —
+# NSE moved that boundary on 2026-08-03 and a fixed 15:20 would drift.
+EOD_HH, EOD_MM = 15, 18
 
 
 def param(name, cfg=None):

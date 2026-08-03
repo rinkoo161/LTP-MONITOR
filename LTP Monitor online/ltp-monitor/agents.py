@@ -216,15 +216,61 @@ def in_market_session(ts):
     if t.weekday() >= 5:
         return False
     hm = t.hour * 60 + t.minute
-    return 9 * 60 + 15 <= hm <= 15 * 60 + 35
+    # +5 on the close for the auction tail. 2026-08-03: the F&O close
+    # moved 15:30 -> 15:40, so a 15:35 bound was silently DISCARDING
+    # real bars at the candle write gate.
+    return _session_min("fno_open_time", "09:15") <= hm <= \
+        _session_min("fno_close_time", "15:40") + 5
+
+
+def _session_min(key, default):
+    """Config "HH:MM" -> minutes past midnight IST, clamped to a day."""
+    try:
+        hh, mm = str(config.load().get(key) or default).split(":")
+        v = int(hh) * 60 + int(mm)
+    except (ValueError, AttributeError, TypeError):
+        hh, mm = default.split(":")
+        v = int(hh) * 60 + int(mm)
+    return max(0, min(24 * 60 - 1, v))
 
 
 def market_open():
+    """May we TRADE or HOLD an intraday position right now?
+
+    2026-08-03 — NSE split what used to be one boundary into two. Index
+    F&O trades until 15:40, but INTRADAY F&O is auto-squared by the
+    broker at 15:25. This function keeps its original meaning — "may I
+    be in a position" — and therefore now closes at `fno_squareoff_time`
+    (15:22, a 3-minute margin), NOT at the market close.
+
+    That is deliberately the CONSERVATIVE half of the split. Both EOD
+    square-off branches and every entry gate call this, so any call site
+    not individually reviewed defaults to standing down EARLY rather
+    than holding past the broker's square-off — the failure that costs
+    real money. Data-only callers that genuinely want the full session
+    use `fno_session_open()` instead.
+    """
     t = now_ist()
     if t.weekday() >= 5:
         return False
     hm = t.hour * 60 + t.minute
-    return 9 * 60 + 15 <= hm <= 15 * 60 + 30
+    return _session_min("fno_open_time", "09:15") <= hm <= \
+        _session_min("fno_squareoff_time", "15:22")
+
+
+def fno_session_open():
+    """Is the F&O MARKET open — i.e. is data still arriving? 09:15-15:40.
+
+    Distinct from market_open(): between the intraday square-off and the
+    close the market is live and ticking, but we must be flat. Data
+    collection should continue through that window; trading must not.
+    """
+    t = now_ist()
+    if t.weekday() >= 5:
+        return False
+    hm = t.hour * 60 + t.minute
+    return _session_min("fno_open_time", "09:15") <= hm <= \
+        _session_min("fno_close_time", "15:40")
 
 
 class ClaudeAuthError(Exception):
@@ -831,7 +877,7 @@ class MarketDataAgent(Agent):
         # own stale-session fallback, the chart's most-recent-session
         # tiers, etc.) — this doesn't change what gets DISPLAYED, it
         # just stops re-fetching data nobody asked to refresh.
-        if not market_open():
+        if not fno_session_open():
             self.summary = f"market closed — not fetching (last data retained) · cycling {len(syms)} indices"
             return
         try:
@@ -1634,7 +1680,7 @@ class MarketDataAgent(Agent):
         # weekend), and (c) permanently contaminated the candles table.
         # A tick outside market hours is by definition not a trade, so
         # nothing here should run.
-        if not market_open():
+        if not fno_session_open():
             return
         now = time.time()
         minute = int(now // 60) * 60
@@ -1678,14 +1724,14 @@ class RegimeAgent(Agent):
     def cycle(self):
         dc = self.ctx.get("dhan_client")
         d = dc() if dc else None
-        if d is None and market_open():
+        if d is None and fno_session_open():
             self.summary = "no broker client — set Dhan token"
             return
         # d may legitimately be None here when the market is closed —
         # _fetch_candles() falls back to this system's own persisted
         # candles in that case, so the panels still show the last
         # session rather than nothing at all.
-        if not market_open():
+        if not fno_session_open():
             # 2026-07-26 — was a hard early return ("market closed —
             # regime idle"), which left regime/bias/levels blank all
             # evening and weekend even though a full history of candles
@@ -1901,10 +1947,10 @@ class RegimeAgent(Agent):
         try:
             candles = d.intraday(sym, tf)["candles"]
         except Exception:
-            if market_open():
+            if fno_session_open():
                 raise
             candles = []
-        if not candles and not market_open():
+        if not candles and not fno_session_open():
             import history
             candles = history.candles_before(f"{sym}_SPOT_{tf}m",
                                             time.time() + 1, 400)
@@ -1955,7 +2001,7 @@ class RegimeAgent(Agent):
         real read of the last session instead of sitting blank all
         evening and weekend.
 
-        The market_open() condition is the important part and is a
+        The fno_session_open() condition is the important part and is a
         deliberate regression guard. The bug fixed earlier (candles
         from ~3 prior days being read as "today", producing a false
         "no-alignment" confluence for the first ~90 minutes of every
@@ -1978,7 +2024,7 @@ class RegimeAgent(Agent):
             return [], None
         if today in by_day:
             return by_day[today], today
-        if market_open():
+        if fno_session_open():
             # Trading right now but no candles for today yet — real
             # warmup. Do NOT substitute an older session (see above).
             return [], None
@@ -5644,7 +5690,10 @@ class LearningAgent(Agent):
         if done == today:
             self.summary = "today's journal written"
             return
-        if t.hour * 60 + t.minute < 15 * 60 + 35:
+        # 2026-08-03 — was 15:35, which is now BEFORE the 15:40 F&O close;
+        # trades closing in that window would land after the day was
+        # written. Same attribution failure as the double-counted days.
+        if t.hour * 60 + t.minute < _session_min("fno_close_time", "15:40") + 5:
             self.summary = f"tracking {len(trades)} closed trades; journal at 15:35"
             return
         pnl = sum(x["pnl"] for x in trades)

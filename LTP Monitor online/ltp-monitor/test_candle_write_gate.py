@@ -52,7 +52,11 @@ def stored(sec):
 # 2026-07-30 was a Thursday; 2026-08-01 a Saturday.
 IN_SESSION = [ts_at(2026, 7, 30, 9, 20), ts_at(2026, 7, 30, 12, 0),
               ts_at(2026, 7, 30, 15, 29)]
-OUT_SESSION = [ts_at(2026, 7, 30, 15, 45),   # after the close
+# 2026-08-03: the F&O close moved 15:30 -> 15:40, so the gate now runs to
+# 15:45 (close + auction tail) and 15:45 is INSIDE the session. Moved to
+# 15:50 to keep testing what this fixture is for — a bar genuinely after
+# the close — rather than one that is now legitimately kept.
+OUT_SESSION = [ts_at(2026, 7, 30, 15, 50),   # after the close
                ts_at(2026, 7, 30, 19, 36),   # the evening keepalive seen live
                ts_at(2026, 7, 30, 3, 10),    # small hours
                ts_at(2026, 8, 1, 11, 0)]     # a Saturday

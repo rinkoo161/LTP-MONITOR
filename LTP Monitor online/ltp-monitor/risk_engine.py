@@ -475,7 +475,7 @@ def time_risk(now_ist, expiry_date=None):
     minute_of_day = now_ist.hour * 60 + now_ist.minute
     reasons = []
     multiplier = 1.0
-    if minute_of_day >= 15 * 60:   # last 15 min of the 9:15-15:30 session
+    if minute_of_day >= 15 * 60 + 10:   # final stretch before the 15:22 square-off
         multiplier = max(multiplier, 1.5)
         reasons.append("near market close (last 15 minutes)")
     if 12 * 60 <= minute_of_day < 13 * 60 + 15:   # 12:00-13:15 lunch lull
@@ -499,7 +499,10 @@ def theta_risk(theta, premium, minutes_to_close):
     if theta is None or not premium:
         return {"expected_decay_pct": None, "unavailable": True}
     daily_decay = abs(theta)
-    session_minutes = 375   # 9:15-15:30 IST
+    # 2026-08-03: F&O close moved 15:30 -> 15:40, so the session is 385
+    # minutes, not 375. Anything scaling risk by elapsed session fraction
+    # was reading ~3% fast at the close.
+    session_minutes = 385   # 9:15-15:40 IST (F&O)
     fraction_of_day = min(1.0, minutes_to_close / session_minutes) if session_minutes else 0
     expected_loss = daily_decay * fraction_of_day
     expected_decay_pct = round(min(100, expected_loss / premium * 100), 1)

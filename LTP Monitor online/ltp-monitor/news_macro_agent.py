@@ -58,11 +58,23 @@ def now_ist():
 
 
 def market_open(now=None):
-    t = now or now_ist()
-    if t.weekday() >= 5:
-        return False
-    hm = t.hour * 60 + t.minute
-    return 9 * 60 + 15 <= hm <= 15 * 60 + 30
+    """Thin wrapper on agents.market_open() — NOT a second definition.
+
+    2026-08-03: this was a byte-level copy of the old 09:15-15:30 rule.
+    When NSE split the session (F&O trades to 15:40, intraday squares at
+    15:25) the shared definition changed and this copy would have kept
+    the old boundary silently — the same "two copies that drift" failure
+    already fixed for the OI quadrant classifier and the news regexes.
+    """
+    if now is not None:
+        hm = now.hour * 60 + now.minute
+        if now.weekday() >= 5:
+            return False
+        import agents as _a
+        return (_a._session_min("fno_open_time", "09:15") <= hm
+                <= _a._session_min("fno_squareoff_time", "15:22"))
+    import agents as _a
+    return _a.market_open()
 
 
 # ---------------------------------------------------------------- symbols

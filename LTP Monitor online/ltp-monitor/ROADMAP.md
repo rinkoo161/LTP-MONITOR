@@ -3628,6 +3628,68 @@ Prints a diagnostic checklist when the table is empty rather than
 writing a silently useless file.
 
 
+## NSE split the session boundary in two (effective 2026-08-03)
+
+    segment                    trades until     intraday square-off
+    equity (non-F&O)              15:30              15:10
+    F&O stocks                    15:15 + CAS          —
+    INDEX F&O (what we trade)     15:40              15:25
+
+Two independent shifts: the market stays open **10 minutes longer**, and
+intraday must be flat **5 minutes earlier**. The code had ONE boundary at
+15:30, which is now simultaneously too LATE to be flat and too EARLY to
+stop collecting data.
+
+### What it broke
+
+1. **Square-off fired 6 minutes late.** Both EOD branches trigger on
+   `not market_open()`, i.e. 15:31, against a broker auto-square at
+   15:25. The broker would close first, at its price, and our records
+   would diverge from reality. Paper hides this; live would not.
+2. **10 minutes of F&O data lost daily** — the market-data agent stopped
+   at 15:30 while the market traded to 15:40.
+3. **Candles 15:35-15:40 silently DISCARDED** by the write gate, which
+   ended at 15:35.
+4. **The journal wrote mid-session** at 15:35, before the 15:40 close —
+   the same attribution failure as the double-counted days.
+5. **`news_macro_agent` held a byte-copy** of the old rule, the "two
+   copies that drift" pattern, which would have kept 15:30 silently.
+
+### The fix — one boundary became three, config-driven
+
+    fno_open_time       09:15
+    fno_squareoff_time  15:22   we must be FLAT (3-min margin on 15:25)
+    fno_close_time      15:40   the market is still OPEN until here
+
+`market_open()` KEEPS its original meaning — "may I be in a position" —
+and therefore moves EARLIER, to the square-off. `fno_session_open()` is
+new and covers the full session for data.
+
+**The asymmetry is deliberate and is the point.** 31 call sites had to be
+classified. Getting one wrong in the trading direction costs money;
+getting one wrong in the data direction costs a few minutes of ticks. So
+the conservative meaning kept the existing NAME: any site nobody reviewed
+stands down early rather than holding past the broker's square-off. Only
+the 8 sites inside `MarketDataAgent`/`RegimeAgent` — located by CLASS,
+not by line number, after a first attempt silently matched 0 of 8
+because earlier edits had shifted the lines — were promoted to
+`fno_session_open()`.
+
+Also updated: `in_market_session()` to close+5 (auction tail), the
+journal to close+5, `risk_engine.session_minutes` 375 -> 385, the
+late-session risk window to 15:10, `fhedge_shadow` EOD 15:20 -> 15:18 so
+the hedge is flat before the position it hedges, and the
+`news_macro_agent` duplicate collapsed to a wrapper.
+
+### Tests pin ORDERING, not clock values
+
+`test_session_boundaries.py` asserts `open < squareoff < close < gate
+tail`, that square-off leaves margin before 15:25, and that trading stops
+while data continues — because the exchange just proved these numbers get
+revised. Three existing tests failed and all three were correct to: two
+were patching `agents.market_open` for what is now the DATA path, and one
+had a fixture at 15:45 that is now legitimately inside the session.
+
 ## The ATR branch has never worked — third distinct cause (2026-08-03, live session)
 
 Found by running the system rather than reading it. Every option stop

@@ -86,12 +86,14 @@ def build_agent(include_today=True):
 
 
 def run_cycle(ag, market_open_value):
-    real = agents.market_open
-    agents.market_open = lambda: market_open_value
+    # RegimeAgent is a DATA path — since 2026-08-03 it gates on
+    # fno_session_open() (09:15-15:40), not the trading window.
+    real = agents.fno_session_open
+    agents.fno_session_open = lambda: market_open_value
     try:
         ag.cycle()
     finally:
-        agents.market_open = real
+        agents.fno_session_open = real
 
 
 results = []
@@ -175,7 +177,7 @@ def run_gate(regime_payload):
         ok, checks = risk.evaluate({"symbol": SYM, "signal": dict(sig),
                                 "analysis": {"atm": 23800, "spot": 23800.0}})
     finally:
-        agents.market_open = real_mo
+        agents.fno_session_open = real_mo
     return ok, " | ".join(checks)
 
 ok_stale, joined_stale = run_gate(stale_regime)

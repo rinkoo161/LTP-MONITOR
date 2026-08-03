@@ -603,6 +603,9 @@ class SettingsIn(BaseModel):
     kotak_auth_token: str | None = None
     dhan_client_id: str | None = None
     dhan_access_token: str | None = None
+    fno_open_time: str | None = None
+    fno_squareoff_time: str | None = None
+    fno_close_time: str | None = None
     market_data_feed: str | None = None
     anthropic_api_key: str | None = None
     twelve_data_api_key: str | None = None
