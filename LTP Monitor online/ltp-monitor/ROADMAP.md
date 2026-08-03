@@ -4,6 +4,80 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.6 — B2: the gates were right, and the record that said otherwise was biased (2026-08-03)
+
+The rejection record had never been costed. 653 rejected option/price-
+action signals against 27 approved, and the naive read — 147 would-have-
+hit-target against 192 would-have-hit-stop, a 43% "discarded winner"
+rate — is what PENDING WORK carried. That read is wrong, for a reason
+worth keeping.
+
+### Why the live record could not answer the question
+
+`_resolve_shadow_signals` polls the LIVE chain on the agent cadence,
+asks whether the premium is past a level AT THAT MOMENT, and gives up
+after 90 minutes. Two consequences:
+
+  CENSORING, not at random. 314 of 653 (48%) never resolved. A signal
+  resolves only if price reached a level DECISIVELY inside 90 minutes,
+  so the resolved half is selected for MOVERS and the timeouts for
+  drift. Any rate computed on the resolved half describes a different
+  population from the one the gates rejected.
+
+  SAMPLING, not first touch. A premium that spikes through target and
+  retraces before the next poll records nothing — or later records the
+  stop it drifted into. The error runs both ways, so no sign correction
+  fixes it; only replaying the path does.
+
+### shadow_replay.py — first touch against the archive
+
+`chain_snapshots` holds per-strike LTP every 60s for five days, which is
+exactly what the retention work bought. Replaying 178 rejected signals
+inside that window, walking forward and taking whichever level is
+crossed first (spanning snapshot charged as a STOP, unchanged from the
+v59.0 futures grid so the two remain comparable):
+
+    29.3% win   27 target / 65 stop
+    -0.120R per rejected signal, BEFORE costs
+    86 still open at the horizon, median mark -0.18R
+
+**The rejected population loses money.** Costs only widen it. The gates
+are justified, and this is a fourth independent line of evidence for the
+v59.0 no-edge conclusion — the signals this system generates are
+negative-expectancy even before the risk agent touches them.
+
+### The bias had a direction, and it flattered the rejects
+
+    live resolver's RESOLVED subset      43.4% win
+    signals it CENSORED, decided here    27.6% win  (-0.172R each)
+
+Timeouts were systematically WORSE than resolutions. The naive record
+made the rejected signals look better than they were, which is the
+opposite of the reassuring direction. Where the live resolver DID reach
+a verdict it agrees with first touch 63/63 (100%) — it is not wrong when
+it decides, it simply does not decide often enough.
+
+### The test caught a defect in the analysis itself
+
+The first headline was 29 target / 65 stop = 30.9%. Writing
+`test_shadow_replay.py` surfaced that 22 rejected signals on disk have
+`target1 <= entry`, one with the target BELOW its own stop (entry 345.4,
+stop 297.9, target 254.1 — a malformed pre-repair signal). Those satisfy
+`ltp >= target` on the very first snapshot and were labelled "target",
+which the aggregate counts as a WIN. Guarded, and the number moved to
+29.3% / -0.120R.
+
+A small move, but it would have been published, and it was found by
+pinning the rule in a test rather than by re-reading the code.
+
+### NOT claimed
+
+`orb` shows +0.800R on 15 decided signals. Five strategies were compared
+at once on small samples — the same multiple-comparison setup that
+produced the shared-denominator artifact in v59.0. It needs a real
+baseline before it means anything, and is recorded here as a lead, not a
+finding.
+
 ## v59.5 — B1 was wrong, A3 is answered, and the swallow the fix missed (2026-08-03)
 
 ### TWO CORRECTIONS TO MY OWN CLAIMS, BOTH SHIPPED
@@ -4656,7 +4730,11 @@ Journal evidence"), and it means 863 resolved signals cannot be
 attributed to the strategy that produced them. Highest-value item on
 this list: it is small, it is offline work, and it unblocks two others.
 
-**B2. The rejection record is worth reading, and never has been.**
+**B2. ANSWERED 2026-08-03 (v59.6).** First-touch replay of 178 rejected
+signals against the 60s archive: 29.3% win, -0.120R per signal before
+costs — the gates were right. The live record's 43% figure below came
+from a censored sample; the signals it timed out on won only 27.6%.
+`shadow_replay.py` does the replay. Superseded text:
 Already on disk: 795 REJECTED vs 68 APPROVED (7.9% approval), and of
 the rejected signals that resolved, 147 would have hit target1 against
 192 that would have hit stoploss. The gates are therefore rejecting
