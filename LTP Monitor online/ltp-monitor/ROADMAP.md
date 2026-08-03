@@ -4,6 +4,71 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.4 — A1 diagnosed: two hours blind, and an instrument for the rest (2026-08-03)
+
+`ta_calibration` captured 9 rows for the 2026-08-03 session against a
+design of roughly one row per symbol per 5m candle (~300). PENDING WORK
+recorded this as a SUSPECTED second bug rather than thin data. It is —
+partly.
+
+### Three hypotheses, two killed by the data
+
+    candle drought        NO   166,076 candles that day, 467 instruments
+    REST starvation       NO   11 rate-limit lines, vs 98 on 30 July when
+                               the websocket was HEALTHY — pressure was
+                               LOWER on the day it failed, not higher
+    compute_state failing NO   ok on 55 of 55 progressive 5m slices
+
+Restarts were checked too: one during market hours (08:55), the rest
+after 18:20. The agent ran continuously through the session, and the
+three rows it did write landed 2-4 minutes after their candle, so the
+write path is correct.
+
+### CONFIRMED — S9 is blind for the first two hours, every day
+
+`compute_state` requires `bb_period + 3` = 23 FIVE-MINUTE bars, and is
+handed SESSION-ONLY candles. The 23rd bar of 2026-08-03 completed at
+11:05; the first calibration row is stamped 11:34. RegimeAgent's own log
+names the waste directly:
+
+    only 0 5m bars in the current session (need 3)
+    — 150 bars available across all days
+
+ATR and ADX use the multi-day series on purpose. S9's Bollinger does
+not, and so throws away 2 of every 6.25 trading hours.
+
+NOT FIXED HERE, deliberately. Feeding S9 multi-day 5m bars removes the
+blackout but changes what the strategy SEES — Bollinger over multi-day
+is a different indicator from Bollinger over a session. That is a
+decision about strategy behaviour, not a cleanup, and belongs in its own
+reviewed change. `test_ta_skip_observability.py` pins the 23-bar
+requirement so it cannot move silently.
+
+### STILL OPEN — and the reason it stayed open
+
+After 11:05 there were 54 usable candles and 3 produced rows. The
+suspect is the `pack["ts"] > 240` freshness gate against RegimeAgent's
+REAL per-symbol refresh interval: nominally 90s, but a cycle makes 12
+paced REST calls across 4 symbols, so nominal and actual may differ.
+
+That could not be tested, because the skip counters existed ONLY in
+`self.summary` — an in-memory string on the Agents page. Every restart
+erased a session of evidence, and the single question left standing was
+the one nobody could answer afterwards. Same shape as the futures
+archive (v59.2) and the repair layer (v59.3): the failure was not the
+bug, it was that the bug left no trace.
+
+So the deliverable is the instrument. The skip profile is now logged ON
+CHANGE — at a 180s cadence a per-cycle line would add ~125 ignored
+entries a session, while the transitions are the whole signal
+("no_pack=4" persisting for an hour is the finding). It sits at CYCLE
+scope, not inside the `if fired:` branch, because the cycles that
+produce nothing are precisely the ones worth hearing from; the test
+asserts that by indentation.
+
+Tomorrow's session will print `skipping: no_pack=N` or it will not, and
+that settles it either way.
+
 ## v59.3 — a repair layer nobody could see, and a PENDING list that lied (2026-08-03)
 
 Two items from A4 ("verify this session's fixes live"), which had never
@@ -4457,8 +4522,10 @@ look.** This list is ordered on that basis, not on effort.
 
 ### A. BLOCKED ON LIVE DATA — can only be observed, not built
 
-**A1. S9 threshold calibration.** STILL BLOCKED, and possibly for a
-second reason. `ta_calibration` holds **9 rows, all from 2026-08-03**.
+**A1. S9 threshold calibration.** DIAGNOSED 2026-08-03, see v59.4:
+one cause confirmed (the 23-bar minimum on session-only candles blinds
+S9 until ~11:05 daily), one still open pending the new skip log.
+Original note follows. `ta_calibration` holds **9 rows, all from 2026-08-03**.
 The design (v58.32) is one row per symbol per 5m candle with logging
 BEFORE any tradeability gate — which across 4 symbols and a 375-minute
 session should be roughly 300 rows/day, not 9. So this is not simply

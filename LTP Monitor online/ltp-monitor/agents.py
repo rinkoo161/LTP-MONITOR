@@ -7185,6 +7185,29 @@ class TAElliottAgent(Agent):
             live = self.bus.get("ta_confluence_live") or {}
             cc = ", ".join(f"{s}:{c}" for s, c in sorted(live.items())) or "-"
             self.summary = f"phases[{ph}] confluence[{cc}] ({skipped})"
+        # 2026-08-03 — WHY THIS IS LOGGED AND NOT ONLY SUMMARISED.
+        # `ta_calibration` captured 9 rows on 2026-08-03 against a design
+        # of roughly one row per symbol per 5m candle (~300). Diagnosing
+        # that offline established what it was NOT — not a candle drought
+        # (166k candles that day), not REST starvation (11 rate-limit
+        # lines against 98 on a healthy day), not restarts, and not
+        # compute_state, which returns ok on 55 of 55 progressive slices
+        # of that session. The one thing that could not be checked was
+        # the skip profile, because these counters existed ONLY in
+        # `self.summary`: an in-memory string on the Agents page that
+        # every restart erased. A whole session of evidence was
+        # discarded each time the process stopped.
+        #
+        # Logged on CHANGE rather than every cycle: at 180s a per-cycle
+        # line would add ~125 entries a session and be ignored, while the
+        # transitions are the whole signal — "no_pack 4" persisting for
+        # an hour is the finding.
+        _skip_now = tuple(sorted((k, v) for k, v in skipped.items() if v))
+        if _skip_now != getattr(self, "_last_skip_profile", None):
+            self._last_skip_profile = _skip_now
+            if _skip_now:
+                self.bus.log(self.name, "skipping: " + ", ".join(
+                    f"{k}={v}" for k, v in _skip_now))
 
 
 AGENT_CLASSES = [MarketDataAgent, TechnicalAgent, RegimeAgent, NewsAgent,
