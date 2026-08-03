@@ -9,6 +9,7 @@ Run:  python3 test_v53_hygiene.py
 import os
 import sys
 import time
+import datetime as _dt
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import store as _store
@@ -84,8 +85,21 @@ after = conn.execute("SELECT COUNT(*) FROM chain_snapshots WHERE symbol=?", (SYM
 check("cycle() no longer deletes rows merely for being older than 5 days",
       after == 4, f"before={before} after={after} (expect all 4 — tier 1 is "
                   f"untouched for 90 days; a 5-day delete is the item-18 bug)")
+# 2026-08-04 — the AGENT stamps this with its own "today" during cycle(),
+# and the assertion recomputed "today" afterwards. A run straddling
+# midnight compares 08-04 against 08-05 and fails. Found by running the
+# whole suite with the clock shifted to 23:59:30, which reproduced it
+# twice while the same suite is green at 11:00 — the second instance of
+# this class today, after test_oi_composite. Accepting either side keeps
+# what the check is actually for ("was it stamped with the current day",
+# not "which day is it") and still fails on None or an unrelated date.
+_prune_days = {
+    agents.now_ist().strftime("%Y-%m-%d"),
+    (agents.now_ist() - _dt.timedelta(days=1)).strftime("%Y-%m-%d"),
+}
 check("chain_prune_done marked for today (won't re-run this cycle)",
-      bus.get("chain_prune_done") == agents.now_ist().strftime("%Y-%m-%d"))
+      bus.get("chain_prune_done") in _prune_days,
+      str(bus.get("chain_prune_done")))
 
 # second cycle same day must NOT re-run the prune (idempotent daily gate)
 history.upsert_chain_snapshot(SYM, old_ts, [{"strike": 100, "ce": {"ltp": 1}, "pe": {"ltp": 1}}])

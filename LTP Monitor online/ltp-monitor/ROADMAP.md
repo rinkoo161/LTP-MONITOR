@@ -4,6 +4,70 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.12 — hunting the flake class instead of waiting to trip over it (2026-08-04)
+
+`test_oi_composite`'s midnight bug was found BY ACCIDENT, because the
+suite happened to run at 00:0x. The suite is the gate for every change
+shipped today, and a gate that lies 0.07% of the time either trains you
+to wave failures through or blocks a good change at random. So the class
+was hunted rather than waited for.
+
+### Method — shift the clock, not the code
+
+A `sitecustomize.py` on `PYTHONPATH` shifts `time.time()` by a constant
+OFFSET and derives `agents.now_ist()` from the same shifted clock. Two
+choices did the work:
+
+  - an OFFSET, not a freeze, so elapsed-time arithmetic still advances
+    and `run_tests.py`'s own per-test timeouts still fire;
+  - patching BOTH `time.time()` and `now_ist()` from one source, so the
+    two views of "now" agree — a mismatch between them manufactures
+    failures that say nothing about the real suite.
+
+It runs through `run_tests.py` itself, which matters: run_tests shares
+ONE store across the whole suite. A first attempt gave each test its own
+store and "found" a failure in `test_futures_trading` that was really an
+order dependency (`IndexError` on `closed_trades[-1]`, failing
+identically at both clocks). That was a harness bug, not a finding.
+
+### Result 1 — the suite is NOT market-hours dependent
+
+    clock 11:00 IST, market OPEN     116/117, 0 failed
+    clock 09:14, pre-open            116/117, 0 failed
+    real clock (00:30, closed)       116/117, 0 failed
+
+Every result validated overnight holds during a live session. That was
+worth knowing before eleven releases meet their first real open.
+
+### Result 2 — a SECOND midnight race, found on purpose
+
+At 23:59:30, `test_v53_hygiene` fails, reproducibly, twice, while the
+same suite is green at 11:00:
+
+    FAIL  chain_prune_done marked for today (won't re-run this cycle)
+    [2026-08-05 00:00:12] chain_snapshots prune FAILED ...
+
+The agent stamps `chain_prune_done` with ITS "today" during `cycle()`;
+the assertion recomputed "today" afterwards. A run straddling midnight
+compares 08-04 against 08-05. Same shape as `test_oi_composite`, and
+`test_oi_composite` now passes at 23:59:30, which confirms last night's
+fix holds.
+
+Fixed by accepting either side of the boundary — the check is "was it
+stamped with the current day", not "which day is it", and it still fails
+on `None` or an unrelated date.
+
+### What this does and does not establish
+
+It sweeps ONE dimension — the clock — across a handful of instants
+(pre-open, mid-session, post-squareoff, midnight). It does not touch
+order dependence, which is a separate and probably larger class: the
+harness bug above surfaced one instance by accident, and old B2 recorded
+another ("test_manual_deploy starves on margin after any suite that
+leaves positions"). Nothing here says the suite is deterministic; it says
+two specific midnight races are gone and the clock-of-day does not change
+the result.
+
 ## v59.11 — scoping "route spreads through risk": the obvious fix is wrong (2026-08-04)
 
 SCOPING ONLY. Nothing changed. I recommended this fix three times today
