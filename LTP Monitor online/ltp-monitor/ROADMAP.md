@@ -4,6 +4,69 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.9 — B5 applied: the deploy endpoint now refuses a closed market (2026-08-03)
+
+Approved and applied. `POST /api/strategies/deploy` now checks
+`agents.market_open()` before doing any work.
+
+### Why the guard that existed could not catch it
+
+The endpoint already carried a guard whose comment states the right
+principle — a deploy "must never be evaluated against the last session's
+regime… enforced here rather than only by disabling the button, because
+this endpoint is directly callable". It tests `if not regime`. Out of
+hours RegimeAgent REBUILDS a present-looking regime from persisted DB
+bars ("broker returned no candles (market closed) — using 400 persisted
+bars from the local DB instead"), so `regime` is truthy, the guard
+passes, and nothing behind it looks at the clock.
+
+A STALE regime and a CLOSED market are two different failures. The
+existing guard covered one and read as though it covered both.
+
+### The negative control reproduced the incident exactly
+
+Against the pre-fix endpoint the test's key check fails with
+
+    {'error': 'Not eligible right now: not enough chain data'}
+
+— which means the request travelled PAST the regime guard and into
+`slib.evaluate()`, stopping only because the synthetic fixture had no
+strikes. With real chain data, as at 23:13, it would have deployed.
+That is the incident, reproduced.
+
+The test drives the endpoint through TestClient rather than scraping
+source, because "the string is present" is a bar the OLD guard also
+cleared.
+
+### The mistake made while fixing it
+
+The first version of `test_deploy_market_gate.py` sliced the endpoint as
+`ASRC.split(...)[1][:2600]` and failed against CORRECT code, because the
+new guard's own comment block pushed the asserted line past the window.
+
+That is the identical brittleness fixed in `test_futures_oi_archive.py`
+in v59.7 — hours earlier, in this same session, with a comment written
+at the time explaining why fixed windows break. Writing a lesson down
+does not install it. Now slices the function.
+
+### NOT extended beyond what was approved
+
+Three sibling endpoints have no market-hours gate either:
+
+    /api/futures/enter
+    /api/futures/manual_deploy
+    /api/strategies/manual_fire
+
+They are recorded, not changed. The approval was for B5, and quietly
+widening a live gating change past its approval is the thing the
+standing rule exists to prevent — even when the change only tightens.
+See PENDING B6.
+
+The deeper gap is unchanged and still needs its own scoping:
+`_auto_spreads` calls `enter_spread` directly, so spreads never reach
+`RiskAgent.evaluate` at all (agents.py:5166), against CLAUDE.md's "every
+order passes the risk agent".
+
 ## v59.8 — C4 answered, and a deploy that should have been refused (2026-08-03)
 
 ### C4 — S4 and S7 ARE firing on the same bars
@@ -4900,7 +4963,15 @@ data needed, and it speaks directly to the v59.0 finding.
 Top rejection reasons are concentrated: timeframe confluence
 (219 PE + 206 CE) and regime (167 rangebound + 120 choppy).
 
-**B5. The manual deploy endpoint has no market-hours guard.** A spread
+**B6. Three sibling endpoints still have no market-hours gate:**
+`/api/futures/enter`, `/api/futures/manual_deploy`,
+`/api/strategies/manual_fire`. Found while fixing B5 and deliberately
+NOT changed with it — widening an approved gating change past its
+approval is what the standing rule prevents. Same one-line shape as B5,
+and it needs the same explicit yes.
+
+**B5. DONE 2026-08-03 (v59.9) — the manual deploy endpoint now gates on
+market hours.** Superseded text: A spread
 was opened at 23:13 on 2026-08-03 through `POST /api/strategies/deploy`;
 the endpoint's guard tests `if not regime`, and out of hours the regime
 engine rebuilds a present-looking regime from persisted bars, so it

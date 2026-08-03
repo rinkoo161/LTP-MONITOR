@@ -25,7 +25,7 @@ from agents import Orchestrator, compute_momentum
 import agents
 
 BASE = os.path.dirname(os.path.abspath(__file__))
-APP_VERSION = "v59.8"   # maintained per explicit request; last delivered was v49
+APP_VERSION = "v59.9"   # maintained per explicit request; last delivered was v49
 
 app = FastAPI(title="LTP Option Chain Monitor")
 
@@ -2068,6 +2068,31 @@ def api_strategies_deploy(body: SpreadDeployIn):
     import strategies as slib
     if not pilot.running:
         return {"error": "Start the agents first."}
+    # 2026-08-03 — a bull put spread was opened at 23:13 through this
+    # endpoint and force-closed in the same second by the monitor loop
+    # ("market closed — forced square-off (feed stale)"), booking ₹120 of
+    # fees for a position that never had a market to trade in. In LIVE it
+    # would have been a real order at 23:13.
+    #
+    # The regime guard below was ALREADY meant to stop this and cannot.
+    # It tests `if not regime`, but out of hours RegimeAgent rebuilds a
+    # present-looking regime from persisted DB bars ("broker returned no
+    # candles (market closed) — using 400 persisted bars from the local
+    # DB instead"), so `regime` is truthy and the guard passes. It
+    # defends against a STALE regime, not against a CLOSED market — two
+    # different failures, and only one of them was covered.
+    #
+    # `_auto_spreads` has always had this check (`or not market_open()`).
+    # Only the manual door was open: 4 of 173 spread opens ever were out
+    # of hours. Server-side for the same reason the regime guard is —
+    # this endpoint is directly callable and a disabled button is only a
+    # UI hint.
+    if not agents.market_open():
+        return {"error": "Market is closed — deploy blocked. F&O intraday "
+                         "squares off at "
+                         + config.load().get("fno_squareoff_time", "15:22")
+                         + "; a spread opened now would be force-closed on "
+                           "the next monitor cycle, paying fees for nothing."}
     sym = body.symbol.upper()
     analysis = pilot.bus.get(f"analysis:{sym}")
     regime = pilot.bus.get(f"regime:{sym}")
