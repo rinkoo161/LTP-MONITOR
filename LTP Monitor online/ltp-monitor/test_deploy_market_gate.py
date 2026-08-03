@@ -119,6 +119,36 @@ check("and the market check sits BEFORE the work",
       _ep.index("agents.market_open()") < _ep.index("regime_last_session:"),
       "fail fast, before analysis/eligibility is computed")
 
+print("\n5) every OTHER order path inherits a market gate — pin it")
+# 2026-08-03. B6 claimed three sibling endpoints were ungated. They are
+# not: they inherit the check downstream, which grepping the endpoint
+# BODY does not show. The claim was withdrawn (v59.10) — but the reason
+# it was plausible is that nothing asserted the inheritance, so removing
+# the check from either downstream function would silently unguard all
+# three. That is what this section prevents.
+def body_of(src, marker, stop):
+    a = src.split(marker)[1]
+    return a[:a.index(stop)] if stop in a else a
+
+
+_ef = body_of(SRC, "def enter_future", "\n    def ")
+check("enter_future() checks market_open()", "market_open()" in _ef,
+      "/api/futures/enter and /api/futures/manual_deploy both rely on "
+      "this and carry no check of their own")
+_re = body_of(SRC, "def evaluate", "\n    def ")
+check("RiskAgent.evaluate() checks market_open()", "market_open()" in _re,
+      "/api/strategies/manual_fire publishes to the signal bus and "
+      "relies on this")
+check("manual_fire publishes rather than entering directly",
+      'bus.publish("signal"' in ASRC.split("def api_strategies_manual_fire")[1]
+      [:ASRC.split("def api_strategies_manual_fire")[1].index("\n@app.")],
+      "if it ever calls an enter_* directly it stops inheriting the gate")
+# The asymmetry that made the spread endpoint the ONLY exposed door.
+check("spreads still bypass RiskAgent — which is WHY B5 was needed",
+      "_auto_spreads() calls enter_spread() directly" in SRC,
+      "if this ever stops being true, the B5 guard becomes redundant "
+      "and routing spreads through risk is the better fix")
+
 print()
 if FAILED:
     print(f"{len(FAILED)} FAILED: {', '.join(FAILED)}")

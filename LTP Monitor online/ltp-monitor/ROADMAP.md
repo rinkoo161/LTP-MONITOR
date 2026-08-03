@@ -4,6 +4,83 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.10 — B6 WITHDRAWN: the three "ungated" endpoints were gated (2026-08-03)
+
+B6 claimed `/api/futures/enter`, `/api/futures/manual_deploy` and
+`/api/strategies/manual_fire` had no market-hours gate. **That was
+wrong.** No code changed; the claim did.
+
+All three are gated DOWNSTREAM:
+
+    /api/futures/enter          -> enter_future()          -> if not market_open()
+    /api/futures/manual_deploy  -> enter_future()          -> same
+    /api/strategies/manual_fire -> bus.publish("signal")   -> RiskAgent.evaluate
+                                                            -> check(market_open(), ...)
+
+The finding came from grepping the endpoint BODIES for `market_open` and
+reporting absence as absence of a gate. Their docstrings state the
+opposite in as many words — "All gating (paper-only, market open,
+margin, kill-switch cooldown, one position per symbol) is enforced
+inside ExecutionAgent.enter_future, not here, so a direct API call gets
+exactly the same protections as the UI button" — and they were listed as
+ungated anyway. Approval had already been given to add the guards; not
+adding them is the correct outcome, because three redundant checks would
+have implied a protection that was already there and made the next
+reader trust the endpoint body as the place gates live.
+
+### What this explains about B5
+
+Every other order path INHERITS its market gate, from either
+`RiskAgent.evaluate` or `enter_future`. Spreads do not, because
+`_auto_spreads` calls `enter_spread` directly and skips risk entirely
+(agents.py:5166, "spreads never go through risk.evaluate() at all").
+
+So the spread deploy endpoint was not one of four unguarded doors — it
+was the ONLY one, and it was unguarded for a specific reason. The B5
+guard is compensating for the risk-bypass, not duplicating an existing
+check. That reframes the remaining architectural item: routing spreads
+through `RiskAgent.evaluate()` would make the B5 guard redundant, which
+is the sign it is the right fix rather than another patch.
+
+### A one-minute-per-day flake, caught by running at midnight
+
+`test_oi_composite.py` failed once during this work and passed both in
+isolation and on the next full run — the profile that gets waved through
+as noise.
+
+It was real. The test wrote snapshot rows at `_ts` and `_ts + 60` with
+`_ts = int(time.time()) // 60 * 60`, and derived the query day from
+`_ts` alone. Run during the 23:59 MINUTE, the second batch lands on the
+next day, `chain_series(_day)` returns one snapshot instead of two, and
+`len(_ser) >= 2` fails. The suite happened to run at 00:0x.
+
+Verified rather than argued: at a simulated 23:59:30 the second batch's
+date differs from the query day; anchored to midday it does not.
+`_ts` now comes from `datetime.combine(date.today(), time(12, 0))` —
+same date arithmetic, no boundary.
+
+Worth noting how narrow this was. One minute in 1,440, so roughly a
+0.07% chance per run — it could have sat there for years, and when it
+did fire it would have been dismissed as flaky. It only surfaced because
+the suite was run during the crossing.
+
+### The pattern in my own errors today
+
+Three claims, all shipped, all from an incomplete probe generalised into
+a conclusion:
+
+    "the Shadow Journal has no strategy field"   sampled rows[0] — the
+                                                OLDEST record in an
+                                                append-only log
+    "momentum_confluence never opened a position" read one journal, not
+                                                the shadow record
+    "three endpoints have no market gate"        grepped the function
+                                                body, not the call graph
+
+Each was checkable in under a minute and each was stated as fact. The
+common shape is answering "does X exist" by looking in ONE place and
+treating absence there as absence everywhere.
+
 ## v59.9 — B5 applied: the deploy endpoint now refuses a closed market (2026-08-03)
 
 Approved and applied. `POST /api/strategies/deploy` now checks
@@ -4963,7 +5040,10 @@ data needed, and it speaks directly to the v59.0 finding.
 Top rejection reasons are concentrated: timeframe confluence
 (219 PE + 206 CE) and regime (167 rangebound + 120 choppy).
 
-**B6. Three sibling endpoints still have no market-hours gate:**
+**B6. WITHDRAWN 2026-08-03 (v59.10) — the premise was wrong.** All three
+are gated downstream (`enter_future()` and `RiskAgent.evaluate` both
+check `market_open()`); the claim came from grepping endpoint bodies
+rather than the call graph. No change needed. Superseded text:
 `/api/futures/enter`, `/api/futures/manual_deploy`,
 `/api/strategies/manual_fire`. Found while fixing B5 and deliberately
 NOT changed with it — widening an approved gating change past its

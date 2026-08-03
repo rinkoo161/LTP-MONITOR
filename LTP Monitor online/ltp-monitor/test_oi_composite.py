@@ -266,7 +266,16 @@ check("the archive genuinely has no 'state' column", "state" not in _cols,
       "so it MUST be derived on read")
 check("it does have the raw inputs the classifier needs",
       all(k in _cols for k in ("ltp", "oi_chg")))
-_ts = int(_t3.time()) // 60 * 60
+# 2026-08-04 — was `int(_t3.time()) // 60 * 60`, i.e. "now". The rows
+# below are written at _ts and _ts+60 while `_day` is derived from _ts
+# alone, so a run during the 23:59 MINUTE put the second batch on the
+# NEXT day and `chain_series(_day)` returned one snapshot instead of two.
+# A one-minute-per-day flake, observed exactly once, at 00:0x, during the
+# midnight crossing — passing in isolation and on the next full run,
+# which is what makes this kind of failure get waved through as noise.
+# Anchored to midday instead: same date arithmetic, no boundary.
+_ts = int(_dt3.datetime.combine(_dt3.date.today(),
+                                _dt3.time(12, 0)).timestamp())
 _c.execute("DELETE FROM chain_snapshots WHERE symbol='ZZTEST'")
 for _off, _pe, _ce, _oi_pe, _oi_ce in ((0, 120, 120, 0, 0), (60, 110, 130, 50000, -50000)):
     for _k in (24250, 24300, 24350):
