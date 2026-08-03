@@ -4,6 +4,100 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.11 — scoping "route spreads through risk": the obvious fix is wrong (2026-08-04)
+
+SCOPING ONLY. Nothing changed. I recommended this fix three times today
+(v59.5, v59.9, v59.10) on the strength of CLAUDE.md's "every order passes
+the risk agent" and the contradiction at agents.py:5166. Scoping it shows
+the naive version would BREAK SPREADS ENTIRELY.
+
+### Routing spreads through RiskAgent.evaluate() would reject all of them
+
+`evaluate()` is built for LONG DIRECTIONAL OPTION trades and several of
+its checks are meaningless or inverted for a credit spread:
+
+    rr >= 1.95              a credit spread is SHORT premium: max reward
+                            is the credit, max risk is width-credit. For
+                            tonight's real spread (24600/24500, credit
+                            36.65) that is 36.65 / 63.35 = 0.58. It
+                            cannot clear 1.95 unless the credit exceeds
+                            half the width, which no OI-wall spread does.
+                            EVERY spread fails this check, by construction.
+    strike vs ATM policy    `atm_or_itm` rejects OTM strikes. A bull put
+                            spread SELLS an OTM put — being OTM is the
+                            entire trade.
+    signal in (BUY_CE/PE)   spreads have no such field.
+    "avoid directional buys" regime gates a spread is not a directional buy.
+    min_confidence          spreads carry no confidence score.
+
+So the one-line version of this change is not conservative, it is a
+silent kill switch for the whole spread book.
+
+### What spreads ACTUALLY lack — a much smaller list
+
+Verified by call graph, not by grepping the function body (the mistake
+that produced the withdrawn B6):
+
+    ALREADY COVERED
+      market_open              _auto_spreads, and now the deploy endpoint
+      paper_mode               _auto_spreads
+      portfolio drawdown       _check_portfolio_kill_switch sets
+                               portfolio_halt_until on combined UNREALIZED
+                               P&L across positions AND spreads AND
+                               futures; _auto_spreads respects it
+      max_concurrent_spreads   enter_spread
+      spread capital %         _auto_spreads
+      per-pairing cooldown     _auto_spreads
+      per-pairing consec loss  _auto_spreads (v58-era fix)
+      live-enabled per strategy _auto_spreads
+      data freshness           _auto_spreads
+
+    NOT COVERED
+      daily_loss_limit         REALIZED-P&L entry gate. Lives only inside
+                               evaluate(). The kill switch is NOT a
+                               substitute — its own docstring says the
+                               daily limit "gates NEW entries against
+                               REALIZED P&L" while the kill switch watches
+                               UNREALIZED. Different jobs.
+      max_trades_per_day       only in evaluate()
+      news block               only in evaluate()
+      class_budget_blocked     see below
+
+### A separate finding: the per-class budget guards ONE class
+
+`class_budget_blocked()` has exactly one call site — `_futures_signal_
+eval` (agents.py:4294). config.py documents the per-class budgets as a
+core invariant ("sub-budgets must sum to MORE than this global ceiling —
+see class_budget_blocked()"), and `sizing.risk_coherence()` enforces that
+arithmetic. But the mechanism is consulted for FUTURES ONLY: spreads and
+directional options never call it.
+
+So the coherence rule is enforced on a budget that gates one of three
+trade classes. That is not a spread-specific gap and should be scoped
+with this work, not after it.
+
+### The shape the fix should take
+
+Not "spreads call evaluate()". Extract the ACCOUNT-LEVEL checks — the
+ones that are true of any order regardless of instrument — into one
+shared pre-order gate that all three paths call:
+
+    market open · autopilot halted · daily_loss_limit ·
+    max_trades_per_day · news block · class budget · portfolio halt
+
+leaving the INSTRUMENT-LEVEL checks (R:R floor, strike policy, signal
+shape, confidence, directional regime fit) where they are, in the
+directional path that they describe.
+
+That preserves CLAUDE.md's intent — no order reaches a broker without
+account-level risk — while not asserting that a credit spread must look
+like a long call. It also makes the v59.9 B5 guard redundant, which is
+the test of whether it is the right fix.
+
+NOT STARTED. This is a real change to the order path of a live trading
+system and needs explicit approval and its own review, not a quiet
+follow-on to a scoping note.
+
 ## v59.10 — B6 WITHDRAWN: the three "ungated" endpoints were gated (2026-08-03)
 
 B6 claimed `/api/futures/enter`, `/api/futures/manual_deploy` and
@@ -5063,6 +5157,15 @@ LIVE GATING CHANGE and needs explicit approval. The deeper gap —
 `RiskAgent.evaluate` entirely, against CLAUDE.md's "every order passes
 the risk agent" — is a much larger change and should be scoped
 separately.
+
+**B7. Extract a shared account-level pre-order gate.** Scoped 2026-08-04
+(v59.11). Spreads lack `daily_loss_limit`, `max_trades_per_day`, the news
+block and `class_budget_blocked`; the last of these currently guards
+FUTURES ONLY, so the documented per-class budget invariant applies to one
+of three classes. The naive "route spreads through RiskAgent.evaluate()"
+would reject every spread (its 1.95 R:R floor is unreachable for short
+premium — 0.58 on a real spread — and its strike policy rejects the OTM
+strikes that ARE the trade). Needs explicit approval and its own review.
 
 **B3. Deck setup 7 — the correction after Wave 5.** The only unbuilt
 feature item. v58.48 absorbed setups 4, 5 and 6 into S3 on the grounds
