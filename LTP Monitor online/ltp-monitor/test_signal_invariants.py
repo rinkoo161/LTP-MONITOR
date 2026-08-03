@@ -73,6 +73,77 @@ check("policy 'atm_or_otm' snaps an ITM put back to ATM", out5["strike"] == 2420
 
 ASRC = open("analyzer.py").read()
 check("wired into the LLM path", "enforce_signal_invariants(sig, analysis" in ASRC)
+
+# 2026-08-03 — the check above passed for months while the repair layer
+# was COMPLETELY unobservable. `log` defaults to a no-op, the production
+# caller passed only three arguments, and `invariant_repairs` (the other
+# half of the record) is read by nothing. So "wired in" was true and
+# worth nothing: repairs ran on real trades and left no trace. Assert the
+# message reaches a SINK, by driving the real function with a real one.
+_seen = []
+analyzer.enforce_signal_invariants(dict(live), AN, CFG, log=_seen.append)
+check("a repair actually reaches the log sink", len(_seen) == 1,
+      _seen[0][:90] if _seen else "NOTHING LOGGED — this is the v58.44 bug")
+check("and the message names what was repaired",
+      bool(_seen) and "->" in _seen[0],
+      "an operator needs the before/after, not just a count")
+_quiet = []
+analyzer.enforce_signal_invariants(dict(good), AN, CFG, log=_quiet.append)
+check("a clean signal logs nothing", not _quiet, str(_quiet))
+
+# The three checks above pass on the PRE-FIX code too — they hand the
+# function a sink explicitly, and that never broke. What broke is the
+# production path, where nobody handed it one. So drive THAT: patch the
+# LLM transport so ai_signal takes its AI branch, and assert the message
+# comes out the far end. This is the check that actually fails on the bug.
+_llm = []
+
+
+class _AnalysisWithDefaults(dict):
+    """ai_signal builds its prompt from a fixed key tuple (analyzer.py,
+    `compact = {k: analysis[k] ...}`). Rather than hard-code a copy of
+    that tuple here — which would drift silently the moment the producer
+    adds a key — supply the real fields this test cares about and let any
+    other required key default. The point of this check is the LOG SINK,
+    not the prompt contents."""
+    def __missing__(self, k):
+        return 0
+
+
+AN_FULL = _AnalysisWithDefaults(AN)
+AN_FULL["symbol"] = "NIFTY"
+# The per-strike rows are consumed the same way (row["volume"], the
+# leg dicts, ...), so they default too. AN itself is left untouched —
+# the checks above depend on its exact contents.
+AN_FULL["strikes"] = []
+for _r in AN["strikes"]:
+    _row = _AnalysisWithDefaults(_r)
+    for _leg in ("ce", "pe"):
+        _row[_leg] = _AnalysisWithDefaults(_r[_leg])
+    AN_FULL["strikes"].append(_row)
+_orig_cj = analyzer._claude_json
+analyzer._claude_json = lambda *a, **k: (json.dumps(
+    {"signal": "BUY_CE", "strike": 24100, "entry": 190.35, "stoploss": 133.2,
+     "target1": 247.5, "target2": 285.0, "spot_invalidation": 23900,
+     "confidence": 80, "reasons": ["t"], "risk_note": "t"}), None)
+try:
+    analyzer.ai_signal(AN_FULL, context=None, log=_llm.append)
+    _reached = bool(_llm)
+except TypeError as e:
+    _reached = False
+    _llm = [f"TypeError: {e}"]
+finally:
+    analyzer._claude_json = _orig_cj
+check("the PRODUCTION path (ai_signal) surfaces repairs", _reached,
+      (_llm[0][:95] if _llm else "no log emitted")
+      + "  <- pre-fix this is where the message vanished")
+check("the LLM caller passes a real sink, not the default",
+      "log=log or" in ASRC, "analyzer must forward what agents gives it")
+GSRC = open("agents.py").read()
+check("and the agent supplies one from the bus",
+      "ai_signal(analysis, context=context," in GSRC
+      and "self.bus.log(self.name" in GSRC.split("ai_signal(analysis")[1][:300],
+      "no bus sink = the message goes nowhere again")
 check("a repair-layer failure cannot kill signal generation",
       "check failed:" in ASRC, "no signal at all is a silent outage")
 check("signal_min_rr registered", "signal_min_rr" in config.DEFAULTS)

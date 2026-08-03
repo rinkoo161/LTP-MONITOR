@@ -1253,10 +1253,19 @@ def _rule_visual(analysis: dict) -> dict:
 
 
 def ai_signal(analysis: dict, api_key: str | None = None,
-              context: dict | None = None) -> dict:
+              context: dict | None = None, log=None) -> dict:
     """Structured trade decision from Claude: exact entry/SL/target price
     points as JSON, rendered as a signal card in the UI and consumed by
-    the autopilot. Falls back to the rule engine when no key is set."""
+    the autopilot. Falls back to the rule engine when no key is set.
+
+    `log` is an optional sink for the invariant-repair layer below. It
+    exists because that layer was completely unobservable: its message
+    went to `enforce_signal_invariants`'s no-op default (this caller
+    passed only three arguments), and the `invariant_repairs` field it
+    writes instead was read by nothing — not app.py, not the dashboard.
+    So from v58.44 until 2026-08-03 the repairs ran on real trades and
+    left no trace anywhere, which is why "has the generator stopped
+    ignoring its own prompt" could not be answered."""
     import config as _cfg
     api_key = None
     fallback = _rule_signal(analysis)
@@ -1341,7 +1350,8 @@ def ai_signal(analysis: dict, api_key: str | None = None,
         # catching a generator that had ignored its own instructions.
         try:
             import config as _cfg
-            sig, _rep = enforce_signal_invariants(sig, analysis, _cfg.load())
+            sig, _rep = enforce_signal_invariants(
+                sig, analysis, _cfg.load(), log=log or (lambda m: None))
         except Exception as _e:
             # Never let the repair layer break signal generation — a
             # slightly wrong signal still faces the risk gate, but no

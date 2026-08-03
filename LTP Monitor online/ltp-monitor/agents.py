@@ -2923,7 +2923,14 @@ class StrategyAgent(Agent):
             _reg = self.bus.get(f"regime:{sym}") or {}
             if _reg.get("atr_pct"):
                 analysis = dict(analysis, atr_pct=_reg["atr_pct"])
-            sig = ai_signal(analysis, context=context)
+            # 2026-08-03 — the repair layer's log had nowhere to go: this
+            # call omitted `log`, so enforce_signal_invariants wrote to
+            # its no-op default. Verified live: 34 journal trades carry
+            # the ai_signal schema, so the layer HAS been running on real
+            # trades since v58.44 and left no trace of a single repair.
+            sig = ai_signal(analysis, context=context,
+                            log=lambda m, _s=sym: self.bus.log(self.name,
+                                                               f"{_s}: {m}"))
             self.bus.set(f"signal:{sym}", sig)
             if sig["signal"] != "WAIT" and \
                (best is None or sig["confidence"] > best[1]["confidence"]):

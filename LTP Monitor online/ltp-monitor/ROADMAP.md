@@ -4,6 +4,97 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.3 — a repair layer nobody could see, and a PENDING list that lied (2026-08-03)
+
+Two items from A4 ("verify this session's fixes live"), which had never
+actually been verified. Checking them was the whole point; one turned
+out to be a defect and one turned out to be fine, and the difference
+only showed up by looking.
+
+### `LLM signal repaired` — zero occurrences, and a real defect
+
+`enforce_signal_invariants(sig, analysis, cfg=None, log=lambda m: None)`
+was called from production as
+
+    enforce_signal_invariants(sig, analysis, _cfg.load())
+
+— three arguments. `log` took its no-op default, so the message went
+nowhere. The other half of the record, `sig["invariant_repairs"]`, is
+written twice and **read by nothing**: not app.py, not the dashboard,
+not any endpoint.
+
+This was not dormant code. 34 trades in the journal carry the
+`ai_signal` schema exactly (`spot_invalidation`, `t1_hit`, `strike`,
+`leg`), so the repair layer has been running on REAL TRADES since
+v58.44 and left no trace of a single repair. The comment above it says
+"26 of 63 daily rejections were the risk gate catching a generator that
+had ignored its own instructions" — whether that is still true has been
+unmeasurable the entire time.
+
+Fixed by threading a sink: `ai_signal(..., log=None)` forwards to the
+repair layer, and `StrategyAgent` supplies `bus.log` scoped to the
+symbol.
+
+### `MACD histogram turned` — zero occurrences, and correct
+
+The exit fires only for a position carrying `dynamic_exit ==
+"macd_hist_turn"`, which is set for `momentum_confluence` alone. The
+journal's 229 closed trades are 85 bear_call, 70 bull_put, 40 futures
+and 34 single-leg options, with **0 carrying `dynamic_exit`** —
+momentum_confluence has never opened a position, so its exit has never
+been reachable. Zero is exactly what the data predicts, and
+`test_dynamic_exit.py` already proves the condition fires. Nothing to
+fix. The strategy not trading is the finding, and it belongs with the
+v59.0 no-edge result.
+
+### The test that passed while the bug was live
+
+`test_signal_invariants.py` asserted `"enforce_signal_invariants(sig,
+analysis" in ASRC` — "wired into the LLM path". True, and worth
+nothing: it proved the call existed, not that its output reached
+anyone.
+
+The replacement drives `ai_signal` itself with the LLM transport
+patched, so the assertion runs through the real production path. THREE
+weaker checks were written first and discarded after a negative control
+showed they passed against the pre-fix code too — they handed the
+function a sink explicitly, which was never the broken part. Only the
+end-to-end check discriminates (pre-fix: `TypeError: ai_signal() got an
+unexpected keyword argument 'log'`).
+
+Its fixture defaults missing keys rather than hard-coding a copy of the
+producer's required-key tuple, which would drift silently the moment
+`analyzer` adds a field.
+
+### PENDING WORK rewritten
+
+The section was headed "current as of v58.47" while the code was at
+v59.2, and it had gone stale in a way that actively misled: all seven
+of its "can be picked now" items had shipped in v58.48-v58.51, and
+three further claims were wrong —
+
+  - C5 cited "spreads 10 vs positions 1, a 10:1 structural bias". The
+    live config is 20 and 10, a 2:1 ratio.
+  - A3 asked for "a session of S8 detector counts". Not answerable: the
+    Shadow Journal has no strategy field, so none of its 863 records
+    can be attributed to a strategy at all. This also blocks C4, which
+    is worded "deferred pending Shadow Journal evidence".
+  - A1 was described as needing more sessions. `ta_calibration` holds 9
+    rows against a design of ~300/day, so the block is a suspected
+    second bug, not thin data.
+
+Every status is now checked against code, the archive or the journals,
+with the evidence named, and the list is ordered by whether an item
+improves MEASUREMENT or merely adds strategy surface — because v59.0
+established there is no edge to add surface to.
+
+Newly recorded as pickable: strategy attribution in the Shadow Journal
+(unblocks two other items), and the rejection record itself — 795
+REJECTED vs 68 APPROVED, with 147 of the rejected signals that resolved
+having reached target1 against 192 that hit stoploss. That ~43%
+discarded-winner rate has never been costed against what the approved
+68 earned, and needs no live data to analyse.
+
 ## v59.2 — the REST fallback depended on the websocket (2026-08-03)
 
 `future_oi_snapshots` held exactly ONE day (31 July) while
@@ -4334,116 +4425,150 @@ main diagnostic value at a fraction of the cost, and its result should
 decide whether the port is worth a dedicated session. See the deferred
 entry under "Explicitly deferred (not built...)".
 
-## PENDING WORK — current as of v58.47
+## PENDING WORK — current as of v59.2 (verified 2026-08-03)
 
-Rewritten 2026-07-29 after nine releases closed most of the previous
-list. Split by whether an item can be STARTED now or is waiting on
-something.
+Rewritten because the previous list was headed "current as of v58.47"
+and had gone stale in a way that actively misled: ALL SEVEN of its
+"can be picked now" items had already shipped in v58.48-v58.51, and
+three of its remaining claims were factually wrong (see the corrections
+below). A source of truth that lists finished work as pending is worse
+than no list — it sends the next session to build things twice.
+
+Every status below was checked against code, the SQLite archive or the
+journals tonight, not copied forward. Where something is asserted, the
+evidence is named.
 
 ---
 
-### A. BLOCKED ON REAL MARKET DATA — cannot be built, only observed
+### THE FRAME THIS LIST SITS IN
 
-**A1. S9 threshold calibration.** v58.41 fixed GMMA (computable 20.9%
--> 100%), lowered `bb_slope_eps`, and added raw-input logging. The next
-export will show `abs_bb_slope` percentiles, `gmma_computable_pct` and
-`obs_with_2plus_pivot_lows_pct` — set `ta_zigzag_deviation_pct` from
-those, and leave `ta_min_confluence` until last.
-ACTION: run a session, `python3 export_calibration.py --days 2`.
+v59.0 concluded, by four independent methods, that no strategy here has
+an edge that survives costs: the promotion gate passes 0 of 11, the
+median trade reaches 1.1% of its target, the best first-touch grid cell
+is +0.03R, and entries are statistically indistinguishable from random
+at the shipped geometry. Stop scaling, target geometry, entry filters
+and the entry signal were each tested; none is the binding constraint.
 
-**A2. Futures entry quality.** v58.39 halved the required win rate
-(56.4% -> 35.3%) but at the observed 27.5% the engine is still
--0.221R. `futures_min_adx` is unvalidated. v58.44's futures shadow
-journal now records what the gates refuse.
-ACTION: a session, then check how often `sizing` blocks.
+**So items that ADD strategy surface are near-worthless until that is
+addressed, and items that improve MEASUREMENT are worth more than they
+look.** This list is ordered on that basis, not on effort.
 
-**A3. S8 first observation.** Only evaluated at all since v58.37.
-ACTION: a session of detector counts.
+---
 
-**A4. Verify this session's fixes live** — websocket drop should be
-gone (v58.42), `LLM signal repaired` lines should appear (v58.44),
-`profit floor:` and `MACD histogram turned` exits (v58.35/v58.47).
+### A. BLOCKED ON LIVE DATA — can only be observed, not built
+
+**A1. S9 threshold calibration.** STILL BLOCKED, and possibly for a
+second reason. `ta_calibration` holds **9 rows, all from 2026-08-03**.
+The design (v58.32) is one row per symbol per 5m candle with logging
+BEFORE any tradeability gate — which across 4 symbols and a 375-minute
+session should be roughly 300 rows/day, not 9. So this is not simply
+"needs more sessions": either the agent is not cycling as designed or
+the log call is being skipped. Diagnose the row rate FIRST; percentiles
+off 9 rows would be noise dressed as calibration.
+ACTION: check why the rate is ~3% of design, then `export_calibration.py`.
+
+**A2. Futures entry quality.** Unblocked as of v59.2 but with no data
+yet: `future_oi_snapshots` held exactly one day (31 July) because the
+REST fallback depended on the websocket (see v59.2). The fix landed
+tonight and has never run through a live session.
+ACTION: confirm 2026-08-04 gains rows, THEN assess.
+
+**A3. S8 first observation.** NOT ANSWERABLE FROM THE CURRENT JOURNAL —
+see B1. The Shadow Journal has no strategy field, so "has S8 ever
+fired" cannot be asked of the 863 records on disk.
+
+**A4. Verify shipped fixes live.** RESOLVED 2026-08-03, see v59.3.
+`profit floor:` works (28 occurrences). `LLM signal repaired` was a
+LOGGING DEFECT — the sink was never passed, fixed in v59.3.
+`MACD histogram turned` is correctly silent — momentum_confluence has
+never opened a position, so the exit has never been reachable.
+The lesson worth keeping: zero occurrences meant three different things
+across three markers, and only inspection told them apart.
+
+**A5. The two changes shipped 2026-08-03.** The split session boundary
+(trade to 15:22, data to 15:40) and the futures archive fix have both
+been tested but neither has met a live session.
+ACTION: on 2026-08-04 confirm positions close at 15:22, candles keep
+arriving to 15:40, and `future_oi_snapshots` gains rows.
 
 ---
 
 ### B. CAN BE PICKED NOW
 
-**B1. Futures chart markers.** v58.44 gave futures a shadow journal;
-options and S7 also have chart markers and futures still do not. Must
-go through `lwRedrawMarkers()`, sorted ascending, anchored to
-per-symbol last-candle timestamps.
+**B1. The Shadow Journal cannot attribute a signal to a strategy.**
+863 records, and the schema is `id, ts, symbol, signal, strike, entry,
+stoploss, target1/2, confidence, verdict, checks, failed_checks,
+resolution` — no strategy/name field anywhere. This single omission
+blocks A3 and C4 outright (C4 is literally "deferred pending Shadow
+Journal evidence"), and it means 863 resolved signals cannot be
+attributed to the strategy that produced them. Highest-value item on
+this list: it is small, it is offline work, and it unblocks two others.
 
-**B2. Test hygiene.** `test_manual_deploy` does not snapshot-restore
-`open_state.json`, so it starves on margin after any suite that leaves
-positions. `test_chart_indicators` fails 15m/overlays (pre-existing,
-data-dependent). Cheap; improves the reliability of every future
-regression run.
+**B2. The rejection record is worth reading, and never has been.**
+Already on disk: 795 REJECTED vs 68 APPROVED (7.9% approval), and of
+the rejected signals that resolved, 147 would have hit target1 against
+192 that would have hit stoploss. The gates are therefore rejecting
+roughly 43% eventual winners — that number has never been costed
+against what the approved 68 actually earned. Pure analysis, no live
+data needed, and it speaks directly to the v59.0 finding.
+Top rejection reasons are concentrated: timeframe confluence
+(219 PE + 206 CE) and regime (167 rangebound + 120 choppy).
 
-**B3. S8/S9 dashboard UI.** Settings subcards for the `s8_*`/`ta_*`
-groups (currently `POST /api/settings` only); Strategies-page rows;
-chart markers (`s8_markers_enabled` is registered but unconsumed); a
-calibration panel over `/api/ta_elliott/calibration`.
-CAUTION UNCHANGED: neither strategy has fired. Building UI for them
-makes a non-functioning thing look operational. The calibration panel
-is the exception — it displays diagnostics, not a working strategy.
+**B3. Deck setup 7 — the correction after Wave 5.** The only unbuilt
+feature item. v58.48 absorbed setups 4, 5 and 6 into S3 on the grounds
+that they are one trade in three costumes; 7 was held back because it
+is COUNTER-trend and genuinely different. Given the frame above, this
+should stay unbuilt until an edge exists to add it to.
 
-**B4. Pine parity oracle for S8/S9.** S7's precedent. Pine's
-`ta.pivothigh/pivotlow` needs the same right-hand bar count as our
-confirmation or parity is meaningless.
-
-**B5. S3 upgrade — deck setups 4-7.** Wave 3, Wave 5, end of Wave C,
-correction after Wave 5 are all pullback entries that overlap S3
-(Anchor Pullback). They belong there, not in a new strategy.
-
-**B6. Shared Dhan rate limiter.** `prev_close` and futures back off
-independently. May be moot now the websocket burst is fixed — worth
-checking a live log before building.
-
-**B7. News impact-window validation.** The heuristic has never been
-checked against real candle outcomes; ~9 RSS feeds have never been
-reviewed for relevance.
+**B4. Retire or re-verify the `_foi_archive_ok` announce pattern.**
+"futures OI archive active" fires only on the FIRST success after a
+restart, so its absence looks identical to its success across every
+later restart — that is precisely why a dead archive went unnoticed for
+a session. Any once-per-process success announce has this failure mode;
+this codebase has several.
 
 ---
 
 ### C. OPEN DESIGN QUESTIONS — decisions, not tickets
 
-**C1. Timeframe.** S8 on 1m, S9 on 5m with a 65-minute Tide. The deck's
-examples are daily/weekly. Signal or noise on an index?
+**C1. Timeframe.** S8 on 1m, S9 on 5m with a 65-minute Tide; the source
+deck's examples are daily/weekly. Signal or noise on an index?
 
 **C2. Multi-day candles.** Both strategies see today's session only,
-which is why the Tide horizon had to be shortened. A genuine
-higher-degree Tide needs multi-day 15m in `pa_candles`.
+which is why the Tide horizon was shortened. A genuine higher-degree
+Tide needs multi-day 15m in `pa_candles`.
 
 **C3. Index volume.** The deck leans on volume; index spot has none.
-Futures volume (already fetched) or chain volume are the substitutes.
+Futures volume or chain volume are the substitutes.
 
-**C4. S4 vs S7 collapse.** Deferred pending Shadow Journal evidence on
-whether they fire on near-identical bars.
+**C4. S4 vs S7 collapse.** BLOCKED ON B1, not on time — the evidence it
+waits for cannot be produced by a journal with no strategy field.
 
-**C5. Strategy-class objectives.** v58.39 separated budgets and exits
-for spreads / options / futures. Whether they should also have separate
-CONCURRENCY limits and capital pools is undecided — currently
-`max_concurrent_spreads` 10 vs `max_concurrent_positions` 1, a 10:1
-structural bias toward spreads.
+**C5. Strategy-class objectives.** CORRECTED: the previous entry said
+"`max_concurrent_spreads` 10 vs `max_concurrent_positions` 1, a 10:1
+structural bias toward spreads". The live config is **20 and 10** — a
+2:1 ratio. The question of whether classes should have separate
+concurrency limits and capital pools stands; the 10:1 figure that made
+it urgent does not.
 
-**C6. Strike selection disagreement.** v58.42 made the policy explicit
-and v58.44 stopped the generator violating it — but which policy is
-RIGHT (ATM/ITM for delta, or OTM for leverage) is your call. The log
-now names the policy on every rejection.
+**C6. Strike selection.** v58.42 made the policy explicit and v58.44
+stopped the generator violating it, but which policy is RIGHT (ATM/ITM
+for delta, or OTM for leverage) is a judgment call. The log now names
+the policy on every rejection.
 
 ---
 
-### CLOSED THIS SESSION (v58.35-v58.47)
+### CLOSED SINCE THE PREVIOUS LIST (v58.48-v59.2)
 
-rupee profit floor · event-driven AI advisory cadence · S8 evaluation
-gate · S8/S9 eligibility rows · continuous backtest chart + markers ·
-futures ATR geometry · per-trade rupee cap · SENSEX futures dropped ·
-separate risk budgets · per-class exits · Quality labelling · config
-button · GMMA timeframe · raw calibration logging · fee guard +
-close-time warning · websocket chunking · strike policy · staleness
-message · momentum_confluence docs · mtf status announce · signal
-invariant enforcement · futures shadow journal · momentum_confluence
-MACD-histogram early exit
+B1 futures chart markers · B2 test hygiene · B3 S8/S9 settings +
+calibration panel · B4 Pine parity oracles · B5 deck setups 4-6 ·
+B6 shared rate limiter · B7 news impact validation · S3 absorption ·
+Pine bar-0 crash · retail mood · migration/provenance · backoff
+recovery · out-of-hours regressions · v59.0 futures research (Phases
+0/A/D, items 9-44) · promotion gate · chain retention · macro provider
+chain · session-expiry UX · stop geometry consolidation · atr_pct
+wiring · NSE session boundary split · futures REST fallback
+
 
 ## v58.32 — S9 calibration logging (2026-07-28)
 
