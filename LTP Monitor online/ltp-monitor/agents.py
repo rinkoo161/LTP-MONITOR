@@ -7116,13 +7116,31 @@ class TAElliottAgent(Agent):
                  max_trades_per_day=cfg.get("ta_max_trades_per_day", 2))
 
         positions = self.bus.get("positions", {}) or {}
-        fired, phases, observed, skipped = [], {}, [], {"no_pack": 0, "no_analysis": 0,
-                                         "state_not_ok": 0, "no_setup": 0,
-                                         "position_open": 0, "on_cooldown": 0}
+        # 2026-08-04 — `no_pack` used to mean BOTH "RegimeAgent never
+        # published a pack" and "it published one over 240s ago". Those
+        # have different causes and different fixes: absent means the
+        # producer bailed (stale session date, or fewer than 3 5m bars),
+        # stale means it is publishing too SLOWLY for this agent's
+        # freshness window. Live on 2026-08-04, S9 wrote exactly ONE 5m
+        # candle all session and then reported no_pack=4 for the rest of
+        # it, and the counter could not say which of the two it was —
+        # the third instance this week of a signal that collapses two
+        # states into one. The worst observed age is carried into the log
+        # so "stale" comes with the number that would fix it.
+        fired, phases, observed = [], {}, []
+        skipped = {"pack_absent": 0, "pack_stale": 0, "no_analysis": 0,
+                   "state_not_ok": 0, "no_setup": 0,
+                   "position_open": 0, "on_cooldown": 0}
+        worst_age = 0.0
         for sym in self.bus.get("symbols", []):
             pack = self.bus.get(f"pa_candles:{sym}")
-            if not pack or time.time() - pack["ts"] > 240:
-                skipped["no_pack"] += 1
+            if not pack:
+                skipped["pack_absent"] += 1
+                continue
+            _age = time.time() - pack["ts"]
+            if _age > 240:
+                skipped["pack_stale"] += 1
+                worst_age = max(worst_age, _age)
                 continue
             # State is computed and PUBLISHED even when this symbol
             # can't be traded right now (position open, cooldown) —
@@ -7263,8 +7281,12 @@ class TAElliottAgent(Agent):
         if _skip_now != _prev:
             self._last_skip_profile = _skip_now
             if _skip_now:
-                self.bus.log(self.name, "skipping: " + ", ".join(
-                    f"{k}={v}" for k, v in _skip_now))
+                _msg = "skipping: " + ", ".join(f"{k}={v}" for k, v in _skip_now)
+                if skipped.get("pack_stale"):
+                    # The number that would fix it: how far past the 240s
+                    # window the worst pack was.
+                    _msg += f" (oldest pack {worst_age:.0f}s, window 240s)"
+                self.bus.log(self.name, _msg)
             elif _prev:
                 # 2026-08-04 — the first version logged only the skipping
                 # state, so SILENCE meant both "still stuck on the same

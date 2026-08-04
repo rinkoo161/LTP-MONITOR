@@ -4,6 +4,74 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.16 — A1 fully diagnosed: TWO causes, and I dismissed one too early (2026-08-04)
+
+The live session finished the diagnosis the archive could only half
+answer, and overturned the correction I made this morning.
+
+### The full picture
+
+    09:15 - 11:16   state_not_ok   the 23-bar length gate on session-only
+                                   candles, exactly as diagnosed offline
+                                   in v59.4
+    11:16           gate clears, writes ONE 5m candle (4 rows)
+    11:16 - 12:06+  no_pack=4      pa_candles gone for ALL FOUR symbols
+
+Both causes are real, for different halves of the session. This morning,
+on 40 minutes of data, I declared the `pack["ts"] > 240` freshness
+window dead and the length gate the sole cause. Wrong: the length gate
+owns the morning, `no_pack` owns everything after 11:16 — which is the
+larger half, and which explains 08-03's "3 rows across 54 post-gate
+candles" by the same mechanism.
+
+The lesson is the one this project keeps re-teaching in new costumes: a
+hypothesis rejected on a partial window is not rejected. I had the
+instrument reporting correctly and still called it early.
+
+### The inputs were fine, which sharpens the question
+
+At 12:07, with `no_pack=4` live: chain_snapshots 0.8 min old, candles
+1.2 min old. Market data was flowing normally. So `pa_candles` was
+missing while everything it is built from was fresh.
+
+### THIRD instance of the same ambiguity — now fixed
+
+    pack = self.bus.get(f"pa_candles:{sym}")
+    if not pack or time.time() - pack["ts"] > 240:
+        skipped["no_pack"] += 1
+
+`no_pack` meant BOTH "RegimeAgent never published" (it bails on a stale
+session date, or fewer than 3 5m bars) AND "it published, too slowly for
+this agent's window". Different producers, different fixes, one number —
+so the instrument that finally caught the afternoon sparsity still could
+not say which of two causes it was.
+
+Split into `pack_absent` and `pack_stale`, and a stale skip now carries
+the worst observed age against the 240s window: the number that would
+fix it, rather than the fact that something is wrong.
+
+That is the third time this week — futures archive announce, skip
+recovery, and now this — that a signal collapsing two states into one
+has cost a diagnosis. Twice the collapse was mine.
+
+### Deploys after the close
+
+This and the B8 clamp both need a restart. The market is open and a
+restart would interrupt the session being measured, so both wait for
+15:40. It also means today's log has a REAL blind spot: the recovery at
+11:16 went unlogged because v59.13's recovery line is not in the running
+process, which is why the 10:48 -> 12:06 gap looks like silence.
+
+### Four false test failures in a row, all mine
+
+Writing the split, the test broke three times against CORRECT code — a
+literal I had just refactored, an anchor that landed in RegimeAgent (the
+PRODUCER) instead of the agent under test, and `"_age = "` matching the
+`worst_age = 0.0` initialiser above the loop. Add v59.14's `[:2600]`
+slice and that is four in a day. Every one is a source-scraping
+assertion breaking on TEXT rather than on behaviour, which is an
+argument for fewer of them, not better ones.
+
 ## v59.15 — the repair layer, measured; and a correction (2026-08-04)
 
 ### First measurement of a layer that ran blind for months

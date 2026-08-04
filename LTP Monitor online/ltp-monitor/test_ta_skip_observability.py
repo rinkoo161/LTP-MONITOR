@@ -81,7 +81,8 @@ print("1) the source actually contains this logic at cycle scope")
 SRC = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
                         "agents.py")).read()
 check("the skip profile is logged, not only summarised",
-      "_last_skip_profile" in SRC and 'self.bus.log(self.name, "skipping: "' in SRC,
+      "_last_skip_profile" in SRC and '"skipping: "' in SRC
+      and "self.bus.log(self.name, _msg)" in SRC,
       "self.summary alone dies with the process")
 # It must sit OUTSIDE the `if fired:` branch — a profile that is only
 # reported on cycles that produced a signal reports nothing on the
@@ -128,6 +129,37 @@ check("and it says the agent is evaluating again",
 emit(a, {})
 check("staying clean does not repeat it", len(a.bus.logs) == 4,
       "one line per transition, not per cycle")
+
+print("\n4b) 'no pack' is SPLIT — absent and stale are different faults")
+# 2026-08-04, live: S9 wrote exactly ONE 5m candle all session and then
+# reported no_pack=4 for the rest of it. The counter could not say
+# whether RegimeAgent had published NOTHING (it bails on a stale session
+# date or <3 5m bars) or had published too SLOWLY for the 240s window.
+# Different causes, different fixes, one number.
+check("the absent case has its own counter", '"pack_absent"' in SRC,
+      "RegimeAgent never published for this symbol")
+check("the stale case has its own counter", '"pack_stale"' in SRC,
+      "published, but older than the freshness window")
+check("the old conflated key is gone",
+      '"no_pack": 0' not in SRC and 'skipped["no_pack"]' not in SRC)
+check("a stale skip carries the AGE, not just a count",
+      "oldest pack" in SRC and "window 240s" in SRC,
+      "the number that would fix it — how far past 240s the worst pack was")
+# The two branches must be separate statements: `if not pack` first, then
+# the age test. Testing age on a missing pack would raise, which is how
+# they came to be one condition in the first place.
+# Anchor on the counter itself: `pa_candles:{sym}` also appears in
+# RegimeAgent (the PRODUCER), so splitting on it lands in the wrong
+# function — which is how the first version of this check failed.
+_i = SRC.index('skipped["pack_absent"]')
+_seg = SRC[max(0, _i - 300):_i + 300]
+# "_age = " is NOT specific enough — it also matches the `worst_age =
+# 0.0` initialiser that sits ABOVE the loop, which made this check
+# compare the wrong two positions and fail against correct code.
+check("absent is tested BEFORE age",
+      _seg.index("if not pack") < _seg.index("_age = time.time()"),
+      "pack['ts'] on a None pack would raise — which is why the two "
+      "were one condition to begin with")
 
 print("\n5) the blackout this investigation confirmed is NOT silently fixed")
 import ta_elliott
