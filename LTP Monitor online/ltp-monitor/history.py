@@ -1530,6 +1530,7 @@ def sync_futures_candles(dhan, symbol, day, log=print, n=3):
     rate-limited endpoint, and the 429 history here is documented.
     """
     import broker_adapter as _ba
+    from datetime import datetime as _dt2, timedelta as _td2
     try:
         import dhan_scrip_master as _sm
         res = _sm.get_current_futures_for_symbols([symbol], n=n)
@@ -1537,6 +1538,19 @@ def sync_futures_candles(dhan, symbol, day, log=print, n=3):
         log(f"  {symbol}: futures lookup failed — {str(e)[:120]}")
         return 0
     contracts, detail = res.get(symbol, ([], {}))
+    if not contracts:
+        # 2026-08-04 — get_current_futures_for_symbols carries an
+        # INDEX-ONLY exchange map and answers "no exchange mapping for
+        # symbol 'ADANIENSOL'". Fall back to the registry, which reads
+        # the same CSV without that map. Order matters: the original
+        # resolver is proven for the four indices and stays the primary,
+        # so this cannot change their behaviour — it only covers names
+        # the old map cannot express.
+        import instrument_registry as _ireg
+        contracts = _ireg.futures(symbol, n=n)
+        if contracts:
+            log(f"  {symbol}: resolved {len(contracts)} future(s) via the "
+                f"instrument registry")
     if not contracts:
         log(f"  {symbol}: no futures contract resolved — {str(detail)[:110]}")
         return 0
@@ -1548,10 +1562,23 @@ def sync_futures_candles(dhan, symbol, day, log=print, n=3):
         exp = fut.get("expiry")
         upsert_instrument(sid, symbol, "fut", None, None,
                           exp.strftime("%Y-%m-%d") if exp else None)
+        # 2026-08-04 — TWO fixes found by archiving a STOCK future.
+        #
+        # 1. toDate must be the NEXT day, not the same day. (day, day)
+        #    happens to return bars for an index future and returns
+        #    NOTHING for a stock one; (day, day+1) returns 385 for both.
+        #    The same-day form looked correct because NIFTY worked.
+        # 2. instrument is FUTIDX for an index and FUTSTK for a stock.
+        #    Derived from the known-index table rather than the CSV, so
+        #    the index path keeps working even if the scrip master is
+        #    unavailable — same split as broker_adapter._scrip_and_seg.
+        import broker_adapter as _ba2
+        inst = "FUTIDX" if symbol.upper() in _ba2.UNDERLYINGS else "FUTSTK"
+        _to = (_dt2.strptime(day, "%Y-%m-%d") + _td2(days=1)).strftime("%Y-%m-%d")
         try:
             time.sleep(1.2)
             data = _dhan_call_with_retry(dhan._intraday_range_sid, sid, "1",
-                                         day, day, seg, "FUTIDX")
+                                         day, _to, seg, inst)
         except Exception as e:
             log(f"  {symbol} {role} future: fetch failed — {str(e)[:90]}")
             continue

@@ -1,0 +1,2 @@
+[console_scripts]
+ms = marketsense.cli.main:app

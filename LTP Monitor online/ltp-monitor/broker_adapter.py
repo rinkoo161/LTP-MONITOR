@@ -94,9 +94,10 @@ class DhanClient:
         cached = self._expiry.get(symbol)
         if cached and time.time() - cached[0] < 1800:
             return cached[1]
+        scrip, seg = self._scrip_and_seg(symbol)
         data = self._post("/optionchain/expirylist", {
-            "UnderlyingScrip": UNDERLYINGS[symbol],
-            "UnderlyingSeg": "IDX_I",
+            "UnderlyingScrip": scrip,
+            "UnderlyingSeg": seg,
         })
         if not data:
             raise RuntimeError(f"No active expiries for {symbol}")
@@ -297,10 +298,34 @@ class DhanClient:
             "interval": str(interval),
             "fromDate": from_date, "toDate": to_date})
 
+    def _scrip_and_seg(self, symbol):
+        """(UnderlyingScrip, UnderlyingSeg) for the option-chain calls.
+
+        2026-08-04, Phase 1 of the stock-options work. The four indices
+        keep their EXISTING hardcoded path — same ids, same IDX_I, no
+        dependency on the 34 MB scrip master — so a live trading path
+        cannot regress because a CSV fetch failed. Only symbols the old
+        table does not know are resolved through instrument_registry.
+
+        The two segments genuinely differ: an index chain is quoted
+        against IDX_I, a stock's against its exchange F&O segment.
+        Verified live — NIFTY/IDX_I returns 18 expiries, ADANIENSOL
+        (10217)/NSE_FNO returns 3.
+        """
+        sym = symbol.upper()
+        if sym in UNDERLYINGS:
+            return UNDERLYINGS[sym], "IDX_I"
+        import instrument_registry as _ir
+        d = _ir.resolve(sym)
+        if not d or not d.get("underlying_id"):
+            raise RuntimeError(
+                f"Unknown symbol {symbol} — not a known index and no "
+                f"option-bearing underlying of that name in the scrip master")
+        return int(d["underlying_id"]), d["underlying_seg"]
+
     def option_chain(self, symbol: str) -> dict:
         symbol = symbol.upper()
-        if symbol not in UNDERLYINGS:
-            raise RuntimeError(f"Unknown symbol {symbol}")
+        scrip, seg = self._scrip_and_seg(symbol)
 
         cached = self._cache.get(symbol)
         if cached and time.time() - cached[0] < CACHE_TTL:
@@ -308,8 +333,8 @@ class DhanClient:
 
         expiry = self._nearest_expiry(symbol)
         data = self._post("/optionchain", {
-            "UnderlyingScrip": UNDERLYINGS[symbol],
-            "UnderlyingSeg": "IDX_I",
+            "UnderlyingScrip": scrip,
+            "UnderlyingSeg": seg,
             "Expiry": expiry,
         })
 

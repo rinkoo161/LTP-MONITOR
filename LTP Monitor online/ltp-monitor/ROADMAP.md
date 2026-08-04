@@ -4,6 +4,86 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.22 — Phase 1 working end to end on ADANIENSOL (2026-08-05)
+
+ADANIENSOL is archiving. Chains and futures candles both fetch through
+the production path, and the liquidity question Phase 1 exists to answer
+now has a real number.
+
+### The number
+
+1m FUTURES bars, full session 2026-08-04, measured from archived bars —
+not the after-hours quotes v59.21 correctly refused to trust:
+
+    symbol        bars  flat  flat%   maxmove
+    NIFTY          385     0   0.0%     21.7
+    BANKNIFTY      385     4   1.0%     69.8
+    ADANIENSOL     385   185  48.1%      6.1
+    SENSEX         385   154  40.0%     74.1
+    FINNIFTY       383   319  83.3%     71.1
+
+**ADANIENSOL has no trade in 48% of minutes.** Thinner than NIFTY by a
+wide margin, better than FINNIFTY. For a strategy that must enter or
+exit at a chosen minute, half the session offers no price discovery —
+which is an execution risk that does not appear in any backtest computed
+on last-price bars.
+
+That is Phase 1 doing its job: the instrument is now a measured quantity
+rather than an assumption, before anything trades it.
+
+### What was wired
+
+  - `watch_symbols` config — archived, NEVER traded. Deliberately a
+    SEPARATE key from the bus "symbols" list, which drives strategy,
+    risk and execution; a name there would be traded. Only the daily
+    archiver reads this one, and invalid names are rejected per-symbol
+    with a reason rather than failing the loop.
+  - `broker_adapter._scrip_and_seg()` — the chain call's scrip+segment.
+    The four indices keep their EXISTING hardcoded path with no scrip-
+    master dependency, so a live trading path cannot regress because a
+    34 MB CSV fetch failed. Only unknown names go through the registry.
+  - `instrument_registry.futures()` — the existing resolver carries an
+    index-only exchange map and answers "no exchange mapping for symbol
+    'ADANIENSOL'". Used as a FALLBACK, so index behaviour is untouched.
+    It returns identical contracts to the proven resolver for NIFTY
+    (58072/68407/48704), which is the cross-check that the shape is right.
+
+### Two bugs a STOCK archive exposed that an index archive could not
+
+**1. `toDate` must be the next day.** `sync_futures_candles` passed
+`(day, day)`. That returns 385 bars for an INDEX future and ZERO for a
+stock one. It looked correct because NIFTY worked — the same-day form
+was validated on the only instrument where it happens not to matter.
+
+**2. Instrument type.** Index futures are FUTIDX, stock futures FUTSTK.
+Hardcoding FUTIDX returned nothing for ADANIENSOL. Derived from the
+known-index table rather than the CSV, so the index path survives a
+scrip-master outage.
+
+Neither was findable without archiving a stock. Both are the same shape
+as the CAS finding: a code path validated on one instrument class and
+assumed to generalise.
+
+### An anchor mistake worth recording
+
+The first attempt to edit `broker_adapter.option_chain` aborted on an
+assertion: the signature `def option_chain(self, symbol: str) -> dict:`
+appears THREE times (Dhan, Kotak, Zerodha adapters). The assertion
+caught it and nothing was written. Anchoring on the DhanClient body,
+which is unique, fixed it. Third time this session a line- or
+text-addressed edit has needed a uniqueness check first.
+
+### Still to build
+
+  - Settings picker on `instrument_registry.search()` (the resolver and
+    validation are done; this is UI)
+  - option-chain archiving for watch symbols in the daily loop — wired,
+    but has not yet run through a full daily cycle
+  - the liquidity panel: bid-ask and OI depth INTRADAY, which is the
+    measurement that actually decides Phase 2
+
+Nothing trades. `watch_symbols` is read only by the archiver.
+
 ## v59.21 — Phase 1 foundation: any F&O underlying, resolved and validated (2026-08-04)
 
 Requested: add user-selectable stocks beyond the four indices, starting

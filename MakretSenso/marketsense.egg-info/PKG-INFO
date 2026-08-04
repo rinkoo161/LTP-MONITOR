@@ -1,0 +1,27 @@
+Metadata-Version: 2.4
+Name: marketsense
+Version: 0.1.0
+Summary: NSE market intelligence & equity advisory platform — decision support, not execution
+Requires-Python: >=3.11
+Requires-Dist: curl_cffi>=0.7
+Requires-Dist: httpx>=0.27
+Requires-Dist: feedparser>=6.0
+Requires-Dist: defusedxml>=0.7
+Requires-Dist: SQLAlchemy>=2.0
+Requires-Dist: psycopg[binary,pool]>=3.2
+Requires-Dist: alembic>=1.13
+Requires-Dist: fastapi>=0.110
+Requires-Dist: uvicorn[standard]>=0.29
+Requires-Dist: pydantic>=2.7
+Requires-Dist: pydantic-settings>=2.2
+Requires-Dist: typer>=0.12
+Requires-Dist: structlog>=24.1
+Requires-Dist: prometheus-client>=0.20
+Requires-Dist: python-dateutil>=2.9
+Provides-Extra: dev
+Requires-Dist: pytest>=8.0; extra == "dev"
+Requires-Dist: pytest-asyncio>=0.23; extra == "dev"
+Requires-Dist: ruff>=0.4; extra == "dev"
+Provides-Extra: docintel
+Requires-Dist: pdfplumber>=0.11; extra == "docintel"
+Requires-Dist: pytesseract>=0.3; extra == "docintel"

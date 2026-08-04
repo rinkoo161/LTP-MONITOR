@@ -54,6 +54,20 @@ DEFAULTS = {
     # ATR or a ZigZag pivot computed across that step reads a 150-point
     # breakout that never traded.
     "cas_freeze_time": "15:15",
+    # 2026-08-04, Phase 1 of the stock-options work. Underlyings whose
+    # chains and futures candles are ARCHIVED so their liquidity can be
+    # measured — and which are NEVER traded. Deliberately a SEPARATE key
+    # from the bus "symbols" list: that list drives strategy, risk and
+    # execution, so adding a name there would trade it. This one is read
+    # only by the daily archiver.
+    #
+    # Validated against Dhan's scrip master on save (see
+    # instrument_registry.validate) — a name with no options, or a typo,
+    # is rejected with a reason rather than silently archiving nothing.
+    # Promotion from here to the traded list is a separate, explicit
+    # decision that should require evidence the instrument is tradable
+    # for this system, not just that data exists.
+    "watch_symbols": [],
     "market_data_feed": "rest",  # "rest" (default, proven) or "websocket"
                                  # (dhan_ws.py — run test_dhan_ws.py against
                                  # a live account first, see its docstring)

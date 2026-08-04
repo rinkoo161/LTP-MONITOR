@@ -134,6 +134,52 @@ check("and it runs in the same loop as sync_day_chain",
       "one driver, so futures cannot silently stop being archived while "
       "options continue")
 
+print("\n6b) STOCK futures — the two bugs a stock archive exposed")
+# Both were invisible while only indices were archived.
+_h = open(os.path.join(HERE, "history.py")).read()
+_fb = _h.split("def sync_futures_candles")[1]
+_fb = _fb[:_fb.index("\ndef ")] if "\ndef " in _fb else _fb
+check("toDate is the NEXT day, not the same day",
+      "_td2(days=1)" in _fb,
+      "(day, day) returns bars for an INDEX future and NOTHING for a "
+      "stock one; (day, day+1) returns 385 for both")
+check("instrument type is chosen, not hardcoded FUTIDX",
+      'FUTSTK' in _fb and 'UNDERLYINGS' in _fb,
+      "index futures are FUTIDX, stock futures FUTSTK")
+check("the index path does not depend on the scrip master for this",
+      "_ba2.UNDERLYINGS" in _fb,
+      "same split as broker_adapter._scrip_and_seg — a CSV outage must "
+      "not break the four indices")
+check("a symbol the old resolver cannot map falls back to the registry",
+      "instrument_registry" in _fb and "_ireg.futures" in _fb,
+      "get_current_futures_for_symbols answers 'no exchange mapping for "
+      "symbol ADANIENSOL'")
+
+print("\n6c) the registry's futures resolver agrees with the proven one")
+import instrument_registry as _ir2
+# Local stub rows — STUB in test_instrument_registry.py is a different
+# file's fixture and was not in scope here.
+def _r(inst, sid, name, exp):
+    return {"EXCH_ID": "NSE", "INSTRUMENT": inst, "SECURITY_ID": sid,
+            "UNDERLYING_SYMBOL": "ADANIENSOL", "SYMBOL_NAME": name,
+            "LOT_SIZE": "675.0", "SM_EXPIRY_DATE": exp}
+_ir2._CACHE["rows"] = [
+    _r("FUTSTK", "68416", "ADANIENSOL-Sep2026-FUT", "2036-09-29"),
+    _r("FUTSTK", "58087", "ADANIENSOL-Aug2026-FUT", "2036-08-25"),
+    _r("FUTSTK", "11111", "ADANIENSOL-EXPIRED-FUT", "2020-01-01"),
+    _r("OPTSTK", "900", "ADANIENSOL-OPT", "2036-08-25"),
+]
+_f = _ir2.futures("ADANIENSOL")
+check("it returns contracts", len(_f) == 2, str(len(_f)))
+check("EXPIRED contracts are dropped",
+      all(x["security_id"] != "11111" for x in _f),
+      "the CSV keeps them; archiving one writes empty days")
+check("sorted by expiry", [x["expiry"] for x in _f] == sorted(
+      [x["expiry"] for x in _f]))
+check("shape matches the original resolver",
+      all({"security_id", "symbol_name", "expiry"} <= set(x) for x in _f),
+      "callers must not branch on which resolver answered")
+
 print("\n7) a failing lookup degrades quietly, it does not raise")
 try:
     import dhan_scrip_master as _sm2

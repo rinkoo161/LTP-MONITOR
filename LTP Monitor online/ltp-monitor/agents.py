@@ -6304,6 +6304,36 @@ class BacktestAgent(Agent):
                         log=lambda m: self.bus.log(self.name, m))
                 except Exception as e:
                     self.bus.log(self.name, f"sync {sym}: {str(e)[:200]}")
+            # ---- Phase 1 watchlist: ARCHIVE ONLY, never traded.
+            # 2026-08-04. These names are not in the bus "symbols" list —
+            # that list drives strategy, risk and execution, so a name
+            # there would be traded. This loop exists so a candidate
+            # instrument accumulates real chain and futures history, and
+            # its liquidity can be measured, BEFORE anyone decides
+            # whether it is worth trading. The order is deliberate: the
+            # promotion gate already refuses a strategy with no `own_sd`,
+            # and an instrument deserves the same treatment.
+            #
+            # Chains are fetched straight from the broker rather than
+            # through ctx["get_chain"], which carries index-shaped bus
+            # caching this path has no business touching.
+            for wsym in (cfg.get("watch_symbols") or []):
+                try:
+                    import instrument_registry as _ireg
+                    ok, why, _d = _ireg.validate(wsym)
+                    if not ok:
+                        self.bus.log(self.name, f"⚠ watch symbol {wsym}: {why}")
+                        continue
+                    history.sync_day_chain(lambda s: dhan.option_chain(s),
+                                           dhan, wsym,
+                                           log=lambda m: self.bus.log(self.name, m),
+                                           progress=lambda m, _s=wsym: None)
+                    history.sync_futures_candles(
+                        dhan, wsym, now_ist().strftime("%Y-%m-%d"),
+                        log=lambda m: self.bus.log(self.name, m))
+                except Exception as e:
+                    self.bus.log(self.name,
+                                 f"watch-symbol archive {wsym}: {str(e)[:180]}")
         self.bus.set("bt_coverage", history.coverage())
         results = {}
         for sym in syms:

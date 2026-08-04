@@ -191,3 +191,49 @@ def search(prefix, limit=25):
            for (u, e), n in seen.items()]
     out.sort(key=lambda x: (-x["option_rows"], x["symbol"]))
     return out[:limit]
+
+
+def futures(symbol, exchange="NSE", n=3):
+    """Nearest-expiry futures contracts for any underlying.
+
+    Same SHAPE as dhan_scrip_master.get_current_futures_for_symbols()
+    returns per symbol — [{security_id, symbol_name, expiry}] sorted by
+    expiry — so callers can use either without branching on the data.
+
+    This exists because that resolver carries an index-only exchange
+    map and answers "no exchange mapping for symbol 'ADANIENSOL'". It is
+    NOT a second resolver competing with it: callers keep using the
+    original for the four indices, whose behaviour is proven, and reach
+    for this only for names it cannot express. Same split as
+    broker_adapter._scrip_and_seg, and for the same reason — a live path
+    should not change to support a data-only feature.
+
+    Expired contracts are dropped: the CSV keeps them, and archiving a
+    contract that no longer trades would quietly write empty days.
+    """
+    from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+    ist = _tz(_td(hours=5, minutes=30))
+    today = _dt.now(ist).date()
+    sym, exch = _norm(symbol), _norm(exchange) or "NSE"
+    out = []
+    for r in _rows():
+        if _norm(r.get("UNDERLYING_SYMBOL")) != sym:
+            continue
+        if _norm(r.get("EXCH_ID")) != exch:
+            continue
+        if (r.get("INSTRUMENT") or "").upper() not in ("FUTSTK", "FUTIDX"):
+            continue
+        raw = (r.get("SM_EXPIRY_DATE") or "").strip()
+        if not raw:
+            continue
+        try:
+            exp = _dt.strptime(raw[:10], "%Y-%m-%d").replace(tzinfo=ist)
+        except ValueError:
+            continue
+        if exp.date() < today:
+            continue
+        out.append({"security_id": (r.get("SECURITY_ID") or "").strip(),
+                    "symbol_name": r.get("SYMBOL_NAME"),
+                    "expiry": exp})
+    out.sort(key=lambda x: x["expiry"])
+    return out[:n]
