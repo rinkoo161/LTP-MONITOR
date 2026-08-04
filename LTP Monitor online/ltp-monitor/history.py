@@ -1504,6 +1504,66 @@ def _dhan_call_with_retry(fn, *args, attempts=3, base_delay=3, **kwargs):
     raise last_err
 
 
+def sync_futures_candles(dhan, symbol, day, log=print, n=3):
+    """Archive futures 1m candles for `symbol` on `day`. Roadmap B9.
+
+    WHY THIS EXISTS. From 2026-08-03 the index stops being discovered at
+    15:15 — every NIFTY/BANKNIFTY/FINNIFTY constituent is an F&O stock,
+    so they all enter the closing call auction and the index simply
+    repeats its last value until the official close lands as a step
+    (v59.17). Futures keep trading to 15:40. Measured on 2026-08-04, the
+    index appeared to jump 151 points across a window in which the front
+    future moved about 16 — so futures are the ONLY instrument with real
+    prices in that window.
+
+    We already archived futures OI (`future_oi_snapshots`) and nothing
+    else, which is why "are futures actually unfrozen?" could only be
+    answered from OI-snapshot LTPs at whatever cadence the agent happened
+    to run. There was no futures price SERIES to compute on or replay.
+
+    Deliberately reuses `get_current_futures_for_symbols()` — the same
+    resolver MarketDataAgent uses — rather than resolving contracts a
+    second way. Two resolvers drifting is a failure this project has
+    already had (session check, news regexes, OI quadrants).
+
+    Paced at 1.2s per contract like the option-leg archive: the same
+    rate-limited endpoint, and the 429 history here is documented.
+    """
+    import broker_adapter as _ba
+    try:
+        import dhan_scrip_master as _sm
+        res = _sm.get_current_futures_for_symbols([symbol], n=n)
+    except Exception as e:
+        log(f"  {symbol}: futures lookup failed — {str(e)[:120]}")
+        return 0
+    contracts, detail = res.get(symbol, ([], {}))
+    if not contracts:
+        log(f"  {symbol}: no futures contract resolved — {str(detail)[:110]}")
+        return 0
+    seg = _ba.FNO_SEGMENT.get(symbol.upper(), "NSE_FNO")
+    written = 0
+    for i, fut in enumerate(contracts):
+        sid = str(fut["security_id"])
+        role = "front" if i == 0 else f"month{i + 1}"
+        exp = fut.get("expiry")
+        upsert_instrument(sid, symbol, "fut", None, None,
+                          exp.strftime("%Y-%m-%d") if exp else None)
+        try:
+            time.sleep(1.2)
+            data = _dhan_call_with_retry(dhan._intraday_range_sid, sid, "1",
+                                         day, day, seg, "FUTIDX")
+        except Exception as e:
+            log(f"  {symbol} {role} future: fetch failed — {str(e)[:90]}")
+            continue
+        if not data:
+            log(f"  {symbol} {role} future: no candles for {day}")
+            continue
+        got = upsert_candles(sid, data)
+        written += got
+        log(f"  {symbol} {role} future ({sid}): {got} candles for {day}")
+    return written
+
+
 def sync_day_chain(get_chain, dhan, symbol, log=print, progress=lambda m: None):
     """Archive today's chain: register instruments from the live chain and
     store 1m candles for each strike (paced)."""

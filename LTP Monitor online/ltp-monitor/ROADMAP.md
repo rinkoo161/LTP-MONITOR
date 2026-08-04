@@ -4,6 +4,62 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.19 — B9: futures candles archived, and the freeze proven (2026-08-04)
+
+### The measurement B9 existed to make possible
+
+Same window, same day, two instruments — now that both have a price
+series:
+
+    INDEX    15:14-15:40   25 bars, 23 FLAT, largest 1-bar move 151.5
+    FUTURES  15:14-15:40   26 bars,  0 FLAT, largest 1-bar move  11.9
+
+    futures, minute by minute through the freeze:
+      15:24  O 24554.0  H 24560.0  L 24554.0  C 24560.0
+      15:25  O 24559.0  H 24568.0  L 24556.0  C 24562.1
+      15:26  O 24567.9  H 24568.6  L 24556.0  C 24567.0
+      15:27  O 24567.1  H 24567.1  L 24560.0  C 24560.0
+      15:28  O 24560.1  H 24566.7  L 24560.0  C 24564.8
+
+Real two-sided trading, every minute, while the index sat still. The
+"151-point move" corresponds to a market that never moved more than 11.9
+points in any minute.
+
+That closes the question v59.17 had to leave open and v59.18 could only
+answer from four sparse OI samples. The C premise is proven with a
+proper series: futures are NOT frozen, and they are the correct
+instrument for 15:15-15:40.
+
+### What was actually missing
+
+The system archived futures OI (`future_oi_snapshots`) and no futures
+PRICE SERIES at all. So there was nothing to compute on, nothing to
+replay, and no way to answer "are futures unfrozen" except by reading
+LTPs out of OI snapshots at whatever cadence the agent happened to run —
+which on 2026-08-04 was four samples, because the machine slept.
+
+`history.sync_futures_candles()` fetches 1m bars by security_id
+(`instrument="FUTIDX"`, segment from `FNO_SEGMENT` so SENSEX goes to
+BSE), registers each contract as `kind="fut"` with its expiry, and runs
+in the SAME daily loop as the option-leg archive — one driver, so
+futures cannot silently stop being archived while options continue.
+
+It reuses `get_current_futures_for_symbols()`, the resolver
+MarketDataAgent already uses. A second contract resolver is exactly the
+drift this project has had three times (session check, news regexes, OI
+quadrants), and the v59.2 futures outage was itself a resolver that only
+one code path could reach.
+
+First live run: 385 candles for each of NIFTY front/month2/month3.
+
+### What this does NOT do
+
+It archives; it changes no strategy. Nothing yet READS futures candles —
+the CAS filter still simply removes the frozen index bars from indicator
+input, and no strategy trades 15:15-15:40. Building one that does is a
+separate decision, and it now has data to be built on rather than an
+assumption.
+
 ## v59.18 — options C and D, and the door v59.17 left open (2026-08-04)
 
 ### D — NOT built, and it should not be
@@ -5622,7 +5678,9 @@ not the fraction, so a cheap option with the same stop passes. One line
 (clamp `sl` through the same `STOP_BOUNDS` every other stop path uses).
 RISK-LAYER CHANGE — needs explicit approval.
 
-**B9. Archive futures CANDLES, not just futures OI.** Exposed 2026-08-04
+**B9. DONE 2026-08-04 (v59.19)** — futures 1m candles archived daily
+beside the option legs; the freeze is now proven (index 23/25 flat vs
+futures 0/26 in the same window). Superseded text: Exposed 2026-08-04
 (v59.17): the index freezes at 15:15 under the new CAS rules, futures
 trade on to 15:40, so futures are the only instrument with real prices in
 that window — and we store no candles for them (0 bars for 58072). Also

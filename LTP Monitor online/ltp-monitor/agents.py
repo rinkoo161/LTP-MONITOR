@@ -6293,6 +6293,15 @@ class BacktestAgent(Agent):
                     history.sync_day_chain(self.ctx["get_chain"], dhan, sym,
                                            log=lambda m: self.bus.log(self.name, m),
                                            progress=prog)
+                    # B9 (2026-08-04). The index freezes at 15:15 under
+                    # the new CAS rules and futures trade on to 15:40, so
+                    # futures are the only instrument with real prices in
+                    # that window — and we archived their OI but never
+                    # their CANDLES. Same day, same driver, same pacing as
+                    # the option legs above.
+                    history.sync_futures_candles(
+                        dhan, sym, now_ist().strftime("%Y-%m-%d"),
+                        log=lambda m: self.bus.log(self.name, m))
                 except Exception as e:
                     self.bus.log(self.name, f"sync {sym}: {str(e)[:200]}")
         self.bus.set("bt_coverage", history.coverage())
