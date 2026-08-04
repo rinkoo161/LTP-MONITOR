@@ -4,6 +4,62 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.20 — backfill, and what the cross-symbol check changed (2026-08-04)
+
+Backfilled BANKNIFTY/FINNIFTY/SENSEX futures candles for 2026-08-04:
+2,649 rows. With all four symbols archived the freeze can be checked
+across the board, and the result QUALIFIES option C rather than
+confirming it.
+
+### The freeze is universal; the futures substitute is NOT
+
+    15:14-15:40, 2026-08-04       INDEX                FUTURES
+    NIFTY                  25 / 23 flat / 151.5   26 /  0 flat / 11.9
+    BANKNIFTY              25 / 23 flat / 414.4   26 /  0 flat / 25.0
+    FINNIFTY               25 / 23 flat / 183.0   26 / 21 flat / 26.5
+    SENSEX                    (see below)         26 /  5 flat / 58.6
+
+Every index freezes — BANKNIFTY's phantom step is 414 POINTS, nearly
+three times NIFTY's. But FINNIFTY FUTURES are 21 of 26 flat themselves,
+and its month2/month3 contracts returned no candles at all. That is
+illiquidity, not auction mechanics, and it means "use futures in the CAS
+window" is instrument-specific:
+
+    NIFTY       0 flat   usable
+    BANKNIFTY   0 flat   usable
+    SENSEX      5 flat   mostly usable
+    FINNIFTY   21 flat   NOT usable — the substitute is as frozen as the
+                         thing it substitutes for
+
+v59.18 confirmed C's premise on NIFTY alone and I generalised it. On one
+of four symbols it does not hold. Anything built on C must check the
+instrument rather than assume futures trade.
+
+### A gap found while cross-checking, and an alarm I overstated
+
+SENSEX had 0 rows in the NUMERIC index series ('51') for 2026-08-04
+while NIFTY/BANKNIFTY/FINNIFTY had 384-385, against 195,202 SENSEX rows
+historically. My first reading was that SENSEX had gone blind.
+
+It had not. There are TWO index series and the strategies read the other
+one:
+
+    SENSEX_SPOT_1m   384 bars today — same as every other symbol
+    '51'               0 bars today — the daily-archive series
+
+`{sym}_SPOT_1m` is written continuously by RegimeAgent and is what live
+decisions use; '51' is written by the daily archive probe and is what
+`day_index_candles` — i.e. BACKTEST and REPLAY — reads. So the real
+consequence was that SENSEX had no replayable index data for today, not
+that it traded blind. Backfilled: 384 bars (the 385th was a 17:00 bar,
+correctly dropped as out-of-session).
+
+Root cause not yet established. The daily probe logged "SENSEX: no
+candles today (market closed) — skipping" at 00:15, BEFORE the open,
+which is correct at that hour — but the other three symbols acquired
+their rows anyway and SENSEX did not. Needs tomorrow's archive cycle to
+observe rather than a guess tonight.
+
 ## v59.19 — B9: futures candles archived, and the freeze proven (2026-08-04)
 
 ### The measurement B9 existed to make possible
@@ -5686,6 +5742,12 @@ trade on to 15:40, so futures are the only instrument with real prices in
 that window — and we store no candles for them (0 bars for 58072). Also
 blocks confirming that futures are genuinely unfrozen, which the v59.17
 filter's scoping assumes.
+
+**B10. Why did SENSEX miss the numeric index series on 2026-08-04?**
+'51' had 0 rows while the other three had 384-385 and the broker held
+385. Affects BACKTEST/REPLAY coverage only — SENSEX_SPOT_1m, which live
+decisions use, was complete. Backfilled by hand; the daily archive path
+needs watching on the next cycle.
 
 **B3. Deck setup 7 — the correction after Wave 5.** The only unbuilt
 feature item. v58.48 absorbed setups 4, 5 and 6 into S3 on the grounds
