@@ -4,6 +4,64 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.14 — B8 applied, and a test that dialled a live broker socket (2026-08-04)
+
+### B8 — stop WIDTH is now bounded on the LLM path
+
+Approved and applied.
+
+    NIFTY BUY_CE 24600   entry 132.8   stop 9.3   target 379.8
+
+A 93% stop, scoring EXACTLY 2.00 on the RR floor, because
+`rr = (target - entry) / (entry - stop)` — the generator satisfied
+"min 1:2" by WIDENING THE DENOMINATOR instead of moving the target, and
+nothing had an opinion about it. `0 < sl < entry` is a validity check,
+not a width one.
+
+Clamped through `STOP_BOUNDS` — the same bounds every other stop path
+uses, not a second set of numbers — and BEFORE the RR floor, since the
+RR repair divides by `(entry - sl)` and must see the corrected stop. On
+the real signal: stop 93% -> 60%, rr 2.00 -> 3.10, risk ₹8,028 -> ₹5,181
+(still over the ₹2,000 per-trade cap, so still blocked; the clamp is not
+meant to rescue a bad trade).
+
+ROUNDING GOES THE SAFE WAY, not to-nearest. `round(132.8 * 0.40, 1)` is
+53.1, which is 60.015% of premium — a hair OVER the bound the clamp
+exists to enforce. A risk bound breached by rounding is not a bound.
+Too-wide now rounds the stop UP (tighter), too-tight rounds it DOWN
+(wider); all three observed cases land strictly inside 5-60%. Found by
+the test, not by inspection.
+
+### A test that opened a real websocket to Dhan, in the default suite
+
+`test_dhan_ws` timed out during the live session. It is a LIVE NETWORK
+test, and its only gate was "are credentials present in config".
+
+Under `run_tests.py` every test shares ONE temp store, and
+`test_client_cache_reset` — which sorts BEFORE it — writes
+`dhan_client_id="1234567890"` / `dhan_access_token="token-AAA"` into it.
+So the env-gated skip was defeated by a sibling's fixture, and the test
+dialled Dhan with a bogus token: fast to fail out of hours, but during a
+live session it hung and hit the 90s timeout.
+
+The credentials are dummies, so no real token reached the socket. The
+defect is that presence of credentials was treated as consent to make a
+network call. Now requires `LTP_LIVE_WS_TEST=1`, the same shape
+`test_kotak` uses.
+
+### This CORRECTS v59.12's claim
+
+v59.12 concluded "the suite is NOT market-hours dependent" from a clock
+sweep. Too broad. The sweep moved the CLOCK; it could not move the
+NETWORK, and this test depends on the market actually being open — no
+fake clock simulates a live socket. The correct claim is narrower: no
+test's *logic* branches on the clock-of-day. Network-dependent behaviour
+was outside what that experiment could see, and this is an instance.
+
+It is also the first confirmed case of the ORDER-DEPENDENCE class that
+v59.12 flagged as unexplored: a test whose outcome depends on what an
+alphabetically-earlier test left in the shared store.
+
 ## v59.13 — first live session: five fixes confirmed, one new gap found (2026-08-04)
 
 Eleven releases shipped overnight met a real open. All five open
@@ -5307,7 +5365,7 @@ would reject every spread (its 1.95 R:R floor is unreachable for short
 premium — 0.58 on a real spread — and its strike policy rejects the OTM
 strikes that ARE the trade). Needs explicit approval and its own review.
 
-**B8. Clamp LLM-proposed stops to STOP_BOUNDS.** Found live 2026-08-04
+**B8. DONE 2026-08-04 (v59.14).** Superseded text: Found live 2026-08-04
 (v59.13). `enforce_signal_invariants` validates `0 < sl < entry` and the
 RR floor but never the stop WIDTH, so a generator can clear RR >= 2 by
 widening the stop rather than moving the target — observed at 93% of

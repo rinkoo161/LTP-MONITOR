@@ -1490,6 +1490,48 @@ def enforce_signal_invariants(sig, analysis, cfg=None, log=lambda m: None):
                     new_ltp, atr_pct=analysis.get("atr_pct"),
                     spot=analysis.get("spot"))[0]
 
+    # --- stop WIDTH (2026-08-04, B8) ---
+    # Found on the FIRST live day the repair layer had somewhere to log:
+    #
+    #     NIFTY BUY_CE 24600   entry 132.8   stop 9.3   target 379.8
+    #
+    # A 93% stop — the option must lose 93% of its value before stopping
+    # out — and it scored EXACTLY 2.00 on the RR floor below. That is the
+    # hole: rr = (target-entry)/(entry-stop), so a generator can satisfy
+    # "min 1:2" by WIDENING THE STOP instead of moving the target, and
+    # nothing here had an opinion about the denominator. The check above
+    # only asks `0 < sl < entry`, which is validity, not width.
+    #
+    # The rupee caps do not close this. They bound the AMOUNT, not the
+    # FRACTION: at entry 132.8 a 93% stop risks ₹8,028 and is blocked,
+    # but at entry 30 the identical stop risks ₹1,814 and passes both the
+    # ₹2,000 per-trade cap and the ₹7,000 daily limit — and cheap OTM
+    # options are exactly what this system buys.
+    #
+    # Clamped through STOP_BOUNDS, the same bounds every other stop path
+    # already uses, rather than a second set of numbers here. Done BEFORE
+    # the RR floor on purpose: the RR repair divides by (entry - sl), so
+    # it must see the corrected stop or it would size a target off a stop
+    # that is about to change.
+    if entry > 0 and 0 < sl < entry:
+        _lo, _hi = STOP_BOUNDS
+        _frac = (entry - sl) / entry
+        if not (_lo <= _frac <= _hi):
+            # Round in the SAFE direction, not to-nearest. round(132.8 *
+            # 0.40, 1) is 53.1, which is 60.015% of premium — a hair OVER
+            # the 60% bound the clamp exists to enforce. A risk bound
+            # breached by rounding is not a bound. Too-wide clamps DOWN so
+            # the stop rounds UP (tighter); too-tight clamps UP so it
+            # rounds DOWN (wider). Either way the fraction lands inside.
+            import math as _math
+            _raw = entry * (1 - min(max(_frac, _lo), _hi))
+            _new_sl = (_math.ceil(_raw * 10) / 10 if _frac > _hi
+                       else _math.floor(_raw * 10) / 10)
+            repairs.append(f"stoploss {sl} -> {_new_sl} "
+                           f"(stop {100*_frac:.0f}% of premium, outside "
+                           f"{100*_lo:.0f}-{100*_hi:.0f}%)")
+            sl = sig["stoploss"] = _new_sl
+
     # --- risk-reward floor (the prompt says min 1:2) ---
     min_rr = cfg.get("signal_min_rr", 2.0)
     if entry > 0 and 0 < sl < entry:

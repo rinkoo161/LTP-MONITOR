@@ -27,6 +27,7 @@ subscription mechanics work but the specific security_id may be wrong,
 or the market is closed. Not a protocol failure — paste this output
 back so we can pin down which.
 """
+import os
 import sys
 import time
 
@@ -43,6 +44,22 @@ def log(msg):
 
 
 def main():
+    # 2026-08-04 — this OPENS A REAL WEBSOCKET to Dhan, and its only gate
+    # was "are credentials present in config". Under run_tests.py every
+    # test shares ONE temp store, and test_client_cache_reset (which sorts
+    # before this file) writes dhan_client_id="1234567890" /
+    # dhan_access_token="token-AAA" into it. So the skip was defeated by a
+    # sibling's fixture and this dialled Dhan with a bogus token — fast to
+    # fail out of hours, but during a LIVE SESSION it hung and hit the 90s
+    # timeout, which is how it was found.
+    #
+    # Presence of credentials is not consent to make a network call from
+    # the default suite. Opt in explicitly, the same shape test_kotak uses.
+    if not os.environ.get("LTP_LIVE_WS_TEST"):
+        log("[SKIP] live websocket test — set LTP_LIVE_WS_TEST=1 to run it. "
+            "It opens a real connection to Dhan and is not part of the "
+            "default suite.")
+        sys.exit(77)   # env-gated skip, not a failure
     cfg = config.load()
     client_id = cfg.get("dhan_client_id")
     access_token = cfg.get("dhan_access_token")

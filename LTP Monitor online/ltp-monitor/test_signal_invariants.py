@@ -60,6 +60,52 @@ check("reset to the rule-engine's own 30%/60%",
 rr3 = (out3["target1"] - out3["entry"]) / (out3["entry"] - out3["stoploss"])
 check("and that fallback itself satisfies the gate", rr3 >= 1.95, f"rr={rr3:.2f}")
 
+print("\n3b) Stop WIDTH is bounded (B8, found live 2026-08-04)")
+# The real signal from that morning's first repair. It scored EXACTLY
+# 2.00 on the RR floor because rr = (target-entry)/(entry-stop): the
+# generator cleared "min 1:2" by WIDENING THE STOP rather than moving the
+# target, and nothing validated the denominator. `0 < sl < entry` is a
+# validity check, not a width one.
+live_wide = {"signal": "BUY_CE", "strike": 24200, "entry": 132.8,
+             "stoploss": 9.3, "target1": 379.8, "target2": 420.0}
+outw, repw = analyzer.enforce_signal_invariants(dict(live_wide), AN, CFG)
+_frac = (outw["entry"] - outw["stoploss"]) / outw["entry"]
+# Strike == ATM on purpose: the strike-repair branch above already
+# re-derives the stop through option_stop_geometry, so a non-ATM fixture
+# would mask the clamp entirely and the test would pass without it.
+check("a 93%-of-premium stop is clamped", _frac <= analyzer.STOP_BOUNDS[1] + 1e-9,
+      f"stop is now {100*_frac:.0f}% (bound {100*analyzer.STOP_BOUNDS[1]:.0f}%)")
+check("and the repair says so", any("stoploss" in r for r in repw), str(repw))
+check("clamping runs BEFORE the RR floor",
+      (outw["target1"] - outw["entry"]) / (outw["entry"] - outw["stoploss"]) >= 1.95,
+      "the RR repair divides by (entry - sl); on the OLD stop it would "
+      "size a target off a value about to change")
+# The case the rupee caps could not catch: same absurd fraction, cheap
+# premium, so the resulting rupee risk clears both caps.
+cheap = {"signal": "BUY_CE", "strike": 24200, "entry": 30.0,
+         "stoploss": 2.1, "target1": 86.0}
+outc, _ = analyzer.enforce_signal_invariants(dict(cheap), AN, CFG)
+_fc = (outc["entry"] - outc["stoploss"]) / outc["entry"]
+check("a CHEAP option with the same 93% stop is clamped too",
+      _fc <= analyzer.STOP_BOUNDS[1] + 1e-9,
+      f"{100*_fc:.0f}% — at entry 30 the unclamped stop risked only "
+      f"₹1,814 and passed every rupee cap")
+# Both bounds, and the no-op case.
+tight = {"signal": "BUY_CE", "strike": 24200, "entry": 150.0,
+         "stoploss": 149.0, "target1": 400.0}
+outt, _ = analyzer.enforce_signal_invariants(dict(tight), AN, CFG)
+_ft = (outt["entry"] - outt["stoploss"]) / outt["entry"]
+check("an absurdly TIGHT stop is widened to the floor",
+      _ft >= analyzer.STOP_BOUNDS[0] - 1e-9,
+      f"{100*_ft:.1f}% (floor {100*analyzer.STOP_BOUNDS[0]:.0f}%) — a 0.7% "
+      f"stop is noise, not risk control")
+ok_stop = {"signal": "BUY_CE", "strike": 24200, "entry": 150.0,
+           "stoploss": 105.0, "target1": 240.0, "target2": 300.0}
+outo, repo = analyzer.enforce_signal_invariants(dict(ok_stop), AN, CFG)
+check("a stop already inside the bounds is untouched",
+      outo["stoploss"] == 105.0 and not any("stoploss" in r for r in repo),
+      str(repo))
+
 print("\n4) Policy is respected, not hard-coded")
 out4, rep4 = analyzer.enforce_signal_invariants(
     dict(live), AN, dict(CFG, option_strike_policy="any"))
