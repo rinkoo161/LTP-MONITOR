@@ -67,11 +67,14 @@ def agent():
 # that would need a broker, a bus and a market session.
 def emit(a, skipped):
     _skip_now = tuple(sorted((k, v) for k, v in skipped.items() if v))
-    if _skip_now != getattr(a, "_last_skip_profile", None):
+    _prev = getattr(a, "_last_skip_profile", None)
+    if _skip_now != _prev:
         a._last_skip_profile = _skip_now
         if _skip_now:
             a.bus.log(a.name, "skipping: " + ", ".join(
                 f"{k}={v}" for k, v in _skip_now))
+        elif _prev:
+            a.bus.log(a.name, "evaluating normally again (no symbols skipped)")
 
 
 print("1) the source actually contains this logic at cycle scope")
@@ -107,15 +110,24 @@ check("a new reason emits again", len(a.bus.logs) == 3,
 check("both reasons appear", "no_pack=2" in a.bus.logs[-1]
       and "on_cooldown=1" in a.bus.logs[-1], a.bus.logs[-1])
 
-print("\n4) a clean cycle is silent")
+print("\n4) a clean cycle is silent, but RECOVERY is announced")
 b = agent()
 for _ in range(3):
     emit(b, {"no_pack": 0, "state_not_ok": 0})
-check("nothing skipped logs nothing", b.bus.logs == [], str(b.bus.logs))
-# and returning to clean does not emit a line either
+check("a run that never skipped logs nothing", b.bus.logs == [], str(b.bus.logs))
+# 2026-08-04 — this previously asserted that recovery was SILENT, which
+# made absence mean both "still stuck on the same profile" and "cleared".
+# Observed live: 09:15 no_pack=4 -> 09:27 state_not_ok=4. The log stayed
+# informative only because the profile CHANGED rather than cleared; had
+# it cleared, nothing would have distinguished that from being stuck.
 emit(a, {})
-check("recovering to clean is silent too", len(a.bus.logs) == 3,
-      "the absence of a skip line IS the recovery signal")
+check("recovery emits exactly one line", len(a.bus.logs) == 4,
+      str(a.bus.logs[-1]) if len(a.bus.logs) > 3 else "SILENT — ambiguous")
+check("and it says the agent is evaluating again",
+      "evaluating normally again" in a.bus.logs[-1], a.bus.logs[-1])
+emit(a, {})
+check("staying clean does not repeat it", len(a.bus.logs) == 4,
+      "one line per transition, not per cycle")
 
 print("\n5) the blackout this investigation confirmed is NOT silently fixed")
 import ta_elliott

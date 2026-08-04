@@ -7259,11 +7259,24 @@ class TAElliottAgent(Agent):
         # transitions are the whole signal — "no_pack 4" persisting for
         # an hour is the finding.
         _skip_now = tuple(sorted((k, v) for k, v in skipped.items() if v))
-        if _skip_now != getattr(self, "_last_skip_profile", None):
+        _prev = getattr(self, "_last_skip_profile", None)
+        if _skip_now != _prev:
             self._last_skip_profile = _skip_now
             if _skip_now:
                 self.bus.log(self.name, "skipping: " + ", ".join(
                     f"{k}={v}" for k, v in _skip_now))
+            elif _prev:
+                # 2026-08-04 — the first version logged only the skipping
+                # state, so SILENCE meant both "still stuck on the same
+                # profile" and "recovered". That is the exact ambiguity
+                # this session spent a day removing from the futures
+                # archive announce, reintroduced by me in the instrument
+                # built to diagnose it. Caught live: at 09:15 the profile
+                # was no_pack=4 and at 09:27 state_not_ok=4, and only
+                # because it CHANGED rather than cleared did the log stay
+                # informative. Recovery now says so, once.
+                self.bus.log(self.name, "evaluating normally again "
+                                        "(no symbols skipped)")
 
 
 AGENT_CLASSES = [MarketDataAgent, TechnicalAgent, RegimeAgent, NewsAgent,

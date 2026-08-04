@@ -4,6 +4,82 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.13 — first live session: five fixes confirmed, one new gap found (2026-08-04)
+
+Eleven releases shipped overnight met a real open. All five open
+questions answered inside the first 40 minutes.
+
+### Confirmed live
+
+    v59.2  futures archive     5,783 rows today — first new day since
+                               31 July, and the 12 "future resolved"
+                               lines printed BEFORE the "subscribed"
+                               ones, which is the decoupling itself
+    v59.7  daily announce      fired 09:15:16; its absence now means
+                               "did not write today" rather than nothing
+    v59.4  skip instrument     caught four profile transitions
+    v59.3  LLM repair log      FIRED FOR THE FIRST TIME EVER
+    v59.1  square-off 15:22    still pending at time of writing
+
+The websocket also started cleanly at 09:15:06. Yesterday it failed the
+whole session on a missing `dhanhq`, which is what killed the futures
+archive in the first place.
+
+### A1's morning half settled — and my prime suspect was wrong
+
+`no_pack` lasted 12 MINUTES (regime warm-up) and cleared on its own. The
+persistent blocker is `state_not_ok`, i.e. the 23-bar length gate
+confirmed offline in v59.4, and `ta_calibration` held 0 rows through
+09:50 exactly as that predicts. The `pack["ts"] > 240` freshness window I
+named as the leading hypothesis shows up only as an intermittent
+`no_pack=1` on ONE symbol. The offline diagnosis was right and the
+guess appended to it was not.
+
+### The cost I predicted did not materialise
+
+v59.2's note warned that REST-mode futures polling would add ~0.25 req/s
+to a 429-prone endpoint. Today: 5 rate-limit lines, against 136 / 71 / 66
+on 28-30 July. Pre-existing, and today is unusually quiet.
+
+### NEW GAP — stop WIDTH is unvalidated on the LLM path
+
+The very first repaired signal exposed it:
+
+    NIFTY BUY_CE 24600   entry 132.8   stop 9.3   target 379.8
+
+A 93% stop: the option must lose 93% of its value before stopping out.
+`STOP_BOUNDS = (0.05, 0.60)` and `option_stop_geometry(132.8)` would have
+set 92.96 — a 30% stop. But `enforce_signal_invariants` checks only
+`0 < sl < entry` (validity, not width) and the RR floor, and this scores
+EXACTLY 2.00. The generator satisfied the floor by WIDENING THE STOP
+instead of moving the target, which the repair layer has no opinion
+about.
+
+It was blocked — twice, on the ₹2,000 per-trade cap and the ₹7,000 daily
+limit — but only because the premium was large:
+
+    entry 132.8  ->  risk 8,028   BLOCKED
+    entry  30.0  ->  risk 1,814   PASSES BOTH CAPS
+    entry  15.0  ->  risk   904   PASSES BOTH CAPS
+
+The rupee caps bound the AMOUNT, not the FRACTION. A cheap option with
+the same 93% stop passes — and cheap OTM options are what this system
+buys. See PENDING B8.
+
+Worth noting how this was found: the gap has existed since v58.44 and
+was invisible until v59.3 gave the repair layer somewhere to log. It
+surfaced on the FIRST DAY of visibility, from the FIRST repaired signal.
+
+### Also fixed here — the instrument's own blind spot
+
+v59.4's skip log announced skipping but not RECOVERY, so silence meant
+both "still stuck on the same profile" and "cleared" — the exact
+ambiguity this session spent a day removing from the archive announce,
+reintroduced by me inside the instrument built to diagnose it. It only
+stayed informative today by luck, because the profile CHANGED
+(no_pack=4 -> state_not_ok=4) rather than clearing. Recovery now logs
+once.
+
 ## v59.12 — hunting the flake class instead of waiting to trip over it (2026-08-04)
 
 `test_oi_composite`'s midnight bug was found BY ACCIDENT, because the
@@ -5230,6 +5306,15 @@ of three classes. The naive "route spreads through RiskAgent.evaluate()"
 would reject every spread (its 1.95 R:R floor is unreachable for short
 premium — 0.58 on a real spread — and its strike policy rejects the OTM
 strikes that ARE the trade). Needs explicit approval and its own review.
+
+**B8. Clamp LLM-proposed stops to STOP_BOUNDS.** Found live 2026-08-04
+(v59.13). `enforce_signal_invariants` validates `0 < sl < entry` and the
+RR floor but never the stop WIDTH, so a generator can clear RR >= 2 by
+widening the stop rather than moving the target — observed at 93% of
+premium against a 60% documented bound. The rupee caps bound the amount,
+not the fraction, so a cheap option with the same stop passes. One line
+(clamp `sl` through the same `STOP_BOUNDS` every other stop path uses).
+RISK-LAYER CHANGE — needs explicit approval.
 
 **B3. Deck setup 7 — the correction after Wave 5.** The only unbuilt
 feature item. v58.48 absorbed setups 4, 5 and 6 into S3 on the grounds
