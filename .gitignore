@@ -19,6 +19,21 @@ config.json
 *.key
 credentials*.json
 
+# 2026-08-05 — the patterns above are shaped like CONFIG files, and the
+# thing that nearly leaked was a NOTES file. `references - raw.rtf` held a
+# live Anthropic key and a GitHub PAT in plaintext; a root-level
+# `git add -A` staged it, and only GitHub push protection stopped it
+# (GH013, secret-scanning). It never reached the remote — the file entered
+# history in exactly one unpushed commit — but nothing here would have
+# caught it, and the local secret scan missed it too because the key sits
+# inside RTF markup rather than next to an `=` or a quote.
+#
+# Pasted-notes documents are a credential vector in their own right, so
+# they are ignored by extension rather than by name. A genuinely wanted
+# .rtf can still be added with `git add -f`.
+references - raw.rtf
+*.rtf
+
 # Runtime/persistent state. Normally ~/.ltp-monitor, outside the repo —
 # but store.py honours LTP_MONITOR_HOME, so it CAN be pointed inside one.
 # Ignored by name so it does not matter where it lands.
