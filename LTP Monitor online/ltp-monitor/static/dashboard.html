@@ -469,7 +469,7 @@
   <div class="dashgrid">
     <div class="dc8">
       <div class="panel" style="margin-bottom:8px">
-        <h2>&#128200; Live Chart (TradingView Lightweight Charts) <span class="badge" style="font-weight:400">v59.22</span> <span class="sub" id="lwChartStatus">connecting...</span>
+        <h2>&#128200; Live Chart (TradingView Lightweight Charts) <span class="badge" style="font-weight:400">v59.23</span> <span class="sub" id="lwChartStatus">connecting...</span>
           <select id="lwChartSymbol" style="margin-left:auto" onchange="switchLwChart(this.value)"></select></h2>
         <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;flex-wrap:wrap">
           <button class="lwIntervalBtn active" data-interval="1" onclick="switchLwInterval('1')">1m</button>
@@ -1143,6 +1143,20 @@
     <div class="frow"><label>Anthropic API Key (optional, for online engine) <span id="s_ant_state" style="color:var(--dim)"></span></label><input type="password" id="s_ant" placeholder="sk-ant-..."></div>
     </div>
     <div class="settings-card full">
+      <div class="settings-card-title">Watchlist &mdash; data only, never traded</div>
+      <div class="reasons" style="margin:8px 0 12px">
+        Underlyings archived so their liquidity can be measured before anyone decides whether they are worth trading.
+        These are <b>not</b> in the traded symbol list &mdash; no strategy, risk or order path reads them.
+        Only names Dhan actually serves options for can be added, validated against the scrip master.
+      </div>
+      <div class="frow"><label>Search F&amp;O underlyings</label>
+        <input type="text" id="wl_q" placeholder="e.g. ADANI, RELIANCE, TATA" oninput="wlSearch()"></div>
+      <div id="wl_results" class="reasons" style="margin:2px 0 10px"></div>
+      <div id="wl_current"></div>
+      <div class="actrow"><button class="act" onclick="wlSave()">Save watchlist</button>
+        <span id="wl_status" class="reasons" style="margin-left:10px"></span></div>
+    </div>
+    <div class="settings-card full">
       <div class="settings-card-title">Trading</div>
       <div class="settings-subgrid">
 
@@ -1559,7 +1573,104 @@ async function toggleTheme(){
 }
 
 /* ---------------- settings ---------------- */
+// ---- Watchlist picker (Phase 1: data only, never traded) ----
+// Kept deliberately separate from the traded symbol list. Adding a name
+// here archives its chain and futures candles so its liquidity can be
+// measured; it does not enable any strategy or order path.
+var WL = [];
+
+async function wlLoad(){
+  try{
+    const r = await fetch('/api/instruments/watchlist');
+    const j = await r.json();
+    WL = (j.watch_symbols || []).map(x => x.symbol);
+    wlRender(j.watch_symbols || []);
+  }catch(e){ document.getElementById('wl_current').innerHTML =
+    '<div class="reasons">could not load watchlist: ' + e + '</div>'; }
+}
+
+function wlRender(rows){
+  const el = document.getElementById('wl_current');
+  if(!el) return;
+  if(!rows.length){ el.innerHTML = '<div class="reasons">No watch symbols. '
+    + 'Search above to add one.</div>'; return; }
+  // Show COVERAGE, not just membership: a name that was accepted but is
+  // archiving nothing looks identical to a working one otherwise.
+  el.innerHTML = rows.map(r =>
+    '<div class="frow" style="align-items:center">'
+    + '<label>' + r.symbol + (r.ok ? '' : ' <span style="color:var(--bad)">&#9888;</span>')
+    + ' <span class="reasons">' + (r.ok
+        ? ('lot ' + (r.lot_size||'?') + ' &middot; ' + (r.kind||'?')
+           + ' &middot; ' + (r.chain_days||0) + ' chain day(s), '
+           + (r.future_bars||0) + ' future bar(s)')
+        : (r.reason||'')) + '</span></label>'
+    + '<button class="act" onclick="wlRemove(\'' + r.symbol + '\')">Remove</button>'
+    + '</div>').join('');
+}
+
+var _wlTimer = null;
+function wlSearch(){
+  clearTimeout(_wlTimer);
+  _wlTimer = setTimeout(async () => {
+    const q = (document.getElementById('wl_q').value || '').trim();
+    const box = document.getElementById('wl_results');
+    if(q.length < 2){ box.innerHTML = ''; return; }
+    try{
+      const r = await fetch('/api/instruments/search?q=' + encodeURIComponent(q));
+      const j = await r.json();
+      if(j.error){ box.innerHTML = '<span style="color:var(--bad)">' + j.error + '</span>'; return; }
+      const res = j.results || [];
+      if(!res.length){ box.innerHTML = 'No F&amp;O underlying matches "' + q
+        + '" — only names with listed options can be added.'; return; }
+      box.innerHTML = res.map(x =>
+        '<button class="act" style="margin:2px 4px 2px 0" onclick="wlAdd(\''
+        + x.symbol + '\')">' + x.symbol + ' <span class="reasons">'
+        + x.exchange + ' &middot; ' + x.option_rows + ' opt</span></button>').join('');
+    }catch(e){ box.innerHTML = 'search failed: ' + e; }
+  }, 250);
+}
+
+async function wlAdd(sym){
+  if(WL.indexOf(sym) >= 0){ return; }
+  // Validate before adding, so the failure is explained at the moment of
+  // the click rather than silently at the next archive run.
+  try{
+    const r = await fetch('/api/instruments/validate?symbol=' + encodeURIComponent(sym));
+    const j = await r.json();
+    if(!j.ok){ document.getElementById('wl_status').innerHTML =
+      '<span style="color:var(--bad)">' + (j.reason||'rejected') + '</span>'; return; }
+    WL.push(sym);
+    document.getElementById('wl_status').textContent =
+      sym + ' added — press Save to persist.';
+    wlRender(WL.map(s2 => ({symbol:s2, ok:true, reason:'', lot_size:'', kind:'', chain_days:0, future_bars:0})));
+  }catch(e){ document.getElementById('wl_status').textContent = 'validate failed: ' + e; }
+}
+
+function wlRemove(sym){
+  WL = WL.filter(x => x !== sym);
+  document.getElementById('wl_status').textContent =
+    sym + ' removed — press Save to persist.';
+  wlRender(WL.map(s2 => ({symbol:s2, ok:true, reason:'', lot_size:'', kind:'', chain_days:0, future_bars:0})));
+}
+
+async function wlSave(){
+  const st = document.getElementById('wl_status');
+  st.textContent = 'saving...';
+  try{
+    const r = await fetch('/api/settings', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({watch_symbols: WL})});
+    const j = await r.json();
+    if(j.error){ st.innerHTML = '<span style="color:var(--bad)">' + j.error + '</span>'; return; }
+    st.textContent = 'saved — archiving begins on the next daily cycle.';
+    wlLoad();
+  }catch(e){ st.textContent = 'save failed: ' + e; }
+}
+
 async function loadSettings(){
+  // Phase 1 watchlist — populated whenever Settings is opened, so the
+  // archive-coverage numbers are current rather than from page load.
+  try{ wlLoad(); }catch(e){}
   settings=await (await fetch("/api/settings")).json();
   applyTheme(settings.theme||"dark");
   const badge=document.getElementById("modeBadge");

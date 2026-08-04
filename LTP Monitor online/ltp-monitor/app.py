@@ -25,7 +25,7 @@ from agents import Orchestrator, compute_momentum
 import agents
 
 BASE = os.path.dirname(os.path.abspath(__file__))
-APP_VERSION = "v59.22"   # maintained per explicit request; last delivered was v49
+APP_VERSION = "v59.23"   # maintained per explicit request; last delivered was v49
 
 app = FastAPI(title="LTP Option Chain Monitor")
 
@@ -897,6 +897,73 @@ class SettingsIn(BaseModel):
     pa_enabled: list[str] | None = None
     ai_decision_engine_enabled: bool | None = None
     learning_feedback_enabled: bool | None = None
+
+
+@app.get("/api/instruments/search")
+def api_instruments_search(q: str = "", limit: int = 25):
+    """Underlyings matching `q` that actually HAVE options.
+
+    Phase 1 of the stock-options work. Filtering to option-bearing names
+    is the point: offering a name the system cannot analyse produces a
+    support question, not a trade. Read-only, and it enables nothing —
+    adding a name to `watch_symbols` archives it and never trades it.
+    """
+    try:
+        import instrument_registry as ir
+        return {"results": ir.search(q, limit=limit)}
+    except Exception as e:
+        # The scrip master is a 34 MB download. Say so rather than
+        # returning an empty list, which reads as "no such symbol".
+        return {"results": [], "error": f"scrip master unavailable: {e}"}
+
+
+@app.get("/api/instruments/validate")
+def api_instruments_validate(symbol: str = "", exchange: str = "NSE"):
+    """(ok, reason, descriptor) for one symbol — the reason is shown to
+    the user, so it says WHY rather than just no."""
+    try:
+        import instrument_registry as ir
+        ok, why, d = ir.validate(symbol, exchange)
+        return {"ok": ok, "reason": why, "instrument": d}
+    except Exception as e:
+        return {"ok": False, "reason": f"scrip master unavailable: {e}",
+                "instrument": None}
+
+
+@app.get("/api/instruments/watchlist")
+def api_instruments_watchlist():
+    """Current watch symbols, each re-validated and with its archive
+    coverage — so the page shows whether a chosen name is ACTUALLY
+    accumulating data, not merely that it was accepted."""
+    import instrument_registry as ir
+    import history as _h
+    out = []
+    for sym in (config.load().get("watch_symbols") or []):
+        try:
+            ok, why, d = ir.validate(sym)
+        except Exception as e:
+            ok, why, d = False, f"scrip master unavailable: {e}", None
+        row = {"symbol": sym, "ok": ok, "reason": why,
+               "lot_size": (d or {}).get("lot_size"),
+               "kind": (d or {}).get("kind"),
+               "chain_days": 0, "future_bars": 0}
+        try:
+            conn = _h._conn()
+            row["chain_days"] = conn.execute(
+                "SELECT COUNT(DISTINCT date(ts,'unixepoch','+5 hours',"
+                "'+30 minutes')) FROM chain_snapshots WHERE symbol=?",
+                (sym,)).fetchone()[0]
+            row["future_bars"] = conn.execute(
+                "SELECT COUNT(*) FROM candles c JOIN instruments i "
+                "ON i.security_id=c.security_id WHERE i.symbol=? AND "
+                "i.kind='fut'", (sym,)).fetchone()[0]
+            conn.close()
+        except Exception:
+            pass
+        out.append(row)
+    return {"watch_symbols": out, "traded_symbols": pilot.bus.get("symbols", []),
+            "note": ("watch symbols are ARCHIVED ONLY — they are never "
+                     "traded, and are not in the traded symbol list")}
 
 
 @app.get("/api/settings")

@@ -4,6 +4,59 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.23 — the Settings picker (2026-08-05)
+
+Any F&O underlying Dhan serves can now be picked from Settings,
+validated against the scrip master, and archived. It is not traded.
+
+### Endpoints
+
+    GET /api/instruments/search?q=      option-bearing names only
+    GET /api/instruments/validate?...   (ok, reason, descriptor)
+    GET /api/instruments/watchlist      current picks + ARCHIVE COVERAGE
+
+The third one matters more than it looks. A name that was accepted but
+is archiving NOTHING looks identical to a working one unless the page
+shows chain-days and future-bars per symbol — the exact failure this
+project has hit repeatedly (the futures archive, the repair layer, the
+S9 skip counters). So the panel reports coverage, not membership.
+
+`search()` returns only underlyings that actually HAVE options. Offering
+a name the system cannot analyse produces a support question rather than
+a trade, and "no results" is a clearer answer than an empty chain later.
+
+### The property the test defends
+
+`watch_symbols` is a DIFFERENT config key from the bus "symbols" list.
+That list drives strategy, risk and execution — a name there would be
+traded. Nothing in the markup makes that obvious to a later reader, so
+the test asserts there is EXACTLY ONE reader of `watch_symbols` in
+agents.py, which is the archiver. If a strategy path ever reads it, that
+test fails and somebody has to justify it.
+
+### Verified, not assumed
+
+  - the page serves (362 KB) with every element and handler present
+  - all three `<script>` blocks parse under `node --check`, including
+    the 257 KB one this code lives in
+  - search/validate driven through TestClient against a stubbed scrip
+    master, so the test is offline and deterministic
+
+### An indentation mistake worth recording
+
+The first attempt to insert the card asserted out: I had read the
+surrounding indentation off `sed` output that carried my own two-space
+display prefix, so the anchor was 6/8 spaces where the file has 4/6. The
+assertion caught it and nothing was written. Second time this session
+that reading structure off formatted OUTPUT rather than the file itself
+has produced a wrong edit.
+
+### Phase 1 remaining
+
+Only the intraday liquidity panel — bid-ask and OI depth DURING the
+session, which is the measurement that would actually decide Phase 2.
+The after-hours numbers in v59.21 are still not usable for that.
+
 ## v59.22 — Phase 1 working end to end on ADANIENSOL (2026-08-05)
 
 ADANIENSOL is archiving. Chains and futures candles both fetch through
