@@ -4,6 +4,81 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.21 — Phase 1 foundation: any F&O underlying, resolved and validated (2026-08-04)
+
+Requested: add user-selectable stocks beyond the four indices, starting
+with ADANIENSOL, DATA ONLY, selectable from what Dhan actually serves.
+
+### The feasibility question, settled
+
+Dhan's option-chain endpoint DOES serve stock underlyings. Verified live:
+
+    NIFTY       scrip 13     seg IDX_I     -> 200, 18 expiries
+    ADANIENSOL  scrip 10217  seg NSE_FNO   -> 200,  3 expiries, 63 strikes
+
+Stock options are MONTHLY ONLY (2026-08-25 / 09-29 / 10-27). Indices
+carry weeklies. Any strategy with a theta or expiry-week assumption is
+therefore NOT transferable unchanged, which is a strategy question and
+not a data one.
+
+### What was actually built
+
+`instrument_registry.py` — one descriptor per underlying, resolved from
+the scrip master that is ALREADY the source of truth for futures
+contracts:
+
+    {symbol, exchange, underlying_id, underlying_seg, fno_segment,
+     lot_size, n_option_rows, n_future_rows, kind}
+
+The index assumptions were spread across at least six places
+(`broker_adapter.UNDERLYINGS`, a hardcoded `"UnderlyingSeg": "IDX_I"`,
+`FNO_SEGMENT`, `history.SEG`, the `{"IDX_I": [...]}` quote-batch shape,
+`config.lot_sizes`). Adding a fifth symbol to five dicts is the
+near-duplicate drift this project has been bitten by three times, so
+this resolves once instead.
+
+LOT SIZE IS READ FROM THE CSV, never hardcoded. It cross-checks: the
+registry derives 65 for NIFTY and 20 for SENSEX, matching the
+hand-maintained `config.lot_sizes`. Stock lots are revised far more often
+than index lots, so a hardcoded table for stocks is wrong by
+construction.
+
+### Two traps found while building it
+
+**Index vs stock segments differ.** The option-chain call's
+`UnderlyingSeg` is IDX_I for an index and the F&O segment for a stock.
+The first version returned NSE_FNO for everything — it compiled, and
+would simply have failed at the API. Caught by running the registry
+against NIFTY, which is why indices resolve through it too rather than
+being left on the old hardcoded path.
+
+**Dual-listed names.** ADANIPORTS exists on both exchanges and its BSE
+futures rows carry `SYMBOL_NAME = 'MPSLFUT'` — nothing to do with the
+underlying. Matching on SYMBOL_NAME resolves the wrong contract
+silently, so everything matches on UNDERLYING_SYMBOL + EXCH_ID. The test
+carries that row verbatim.
+
+### A measurement NOT to trust yet
+
+An after-hours spread comparison gave NIFTY 5.82% median and ADANIENSOL
+7.80%. That is unusable: the market was closed, NIFTY's true intraday
+ATM spread is a fraction of that, and market makers widen or withdraw
+after the bell. Both numbers are inflated and the 1.3x ratio is an
+artifact of WHEN it was sampled. Measuring this intraday is the point of
+Phase 1, not a side note.
+
+### Still to build for Phase 1
+
+  - a validated `symbols` config list + Settings picker on `search()`
+  - chain/candle archiving for the selected symbol (both helpers are
+    already security_id-driven and need no change)
+  - the liquidity panel: median bid-ask %, OI depth away from ATM, flat
+    bars per session — the evidence Phase 2 would decide on
+
+Nothing is wired to a strategy or an order path. `test_instrument_
+registry.py` asserts the module contains no reference to `enter_`,
+`place_order`, `manual_trade`, `auto_deploy` or `_enabled`.
+
 ## v59.20 — backfill, and what the cross-symbol check changed (2026-08-04)
 
 Backfilled BANKNIFTY/FINNIFTY/SENSEX futures candles for 2026-08-04:
