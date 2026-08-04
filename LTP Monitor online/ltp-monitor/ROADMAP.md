@@ -4,6 +4,42 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.15 — the repair layer, measured; and a correction (2026-08-04)
+
+### First measurement of a layer that ran blind for months
+
+v59.3 gave the repair layer somewhere to log. Half a session later it
+can be quantified for the first time since v58.44:
+
+    33 signals evaluated today
+    17 from the AI generator
+     3 repaired (~18% of AI signals)
+     0 AI signals reaching the risk agent with rr < 2
+
+All three repairs moved target1 to exactly 2.00 (from rr 0.80, 1.21 and
+1.00). v58.44 recorded "18 rejections/day at risk-reward 0.8 (need
+>=2.0)" as the problem it was built to solve; those are now repaired
+upstream rather than rejected downstream, and the zero confirms it
+end-to-end.
+
+### CORRECTION to v59.13/v59.14
+
+Both said the 93%-stop signal was "the first repaired signal". It was
+NOT repaired. The three repair lines adjusted target1 to 170.0, 198.35
+and 190.0 — none is that signal's 379.8. It passed through the repair
+layer with no complaint, because its rr was ALREADY exactly 2.00. It was
+found by inspecting the rejected-signal record for the ₹8,028 risk
+figure, which is a different source.
+
+The distinction matters and strengthens B8. A signal the repair layer
+FLAGS is one the system already handles. This one it approved of: 93%
+stop, rr exactly at the floor, every check passed, stopped only by a
+rupee cap that happened to bite at that premium. Had the premium been
+₹30 it would have gone through clean.
+
+I conflated "the log drew my attention to the layer" with "the log
+reported this signal". They were different signals in the same minute.
+
 ## v59.14 — B8 applied, and a test that dialled a live broker socket (2026-08-04)
 
 ### B8 — stop WIDTH is now bounded on the LLM path
@@ -101,7 +137,15 @@ on 28-30 July. Pre-existing, and today is unusually quiet.
 
 ### NEW GAP — stop WIDTH is unvalidated on the LLM path
 
-The very first repaired signal exposed it:
+CORRECTED 2026-08-04 (see v59.15): this signal was NOT repaired. The
+day's three repair-log lines adjusted target1 to 170.0, 198.35 and
+190.0; none is the 379.8 below. It passed the repair layer UNTOUCHED
+because its rr was already exactly 2.00, and was found by inspecting the
+REJECTED-signal record for the ₹8,028 risk figure. That makes the gap
+worse, not better — the dangerous signal is the one the repair layer had
+no complaint about.
+
+The signal:
 
     NIFTY BUY_CE 24600   entry 132.8   stop 9.3   target 379.8
 
