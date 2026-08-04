@@ -150,6 +150,30 @@ check("the page shows a chain, an OI profile and filings",
 check("removal is possible, not just adding",
       "wlRemove(" in HTML, "a list you cannot un-pick is a trap")
 
+print("\n4b) the rail button matches its siblings — CSS classes must EXIST")
+# 2026-08-05, reported: the Watch icon showed raw "watch" text. Cause: I
+# wrote class="rail-label", a class with NO CSS rule, instead of the
+# "lbl" every other rail button uses (absolutely positioned, opacity 0,
+# revealed on hover). Every check that shipped it — marker strings,
+# node --check, a 200 from the page — is blind to a class that does not
+# exist. This one is not.
+import re as _re
+_rail = _re.findall(r'<button id="rail-([a-z]+)"[^>]*>(.*?)</button>', HTML, _re.S)
+check("rail buttons were found", len(_rail) >= 5, f"{len(_rail)} buttons")
+_classes = set()
+for _id, _blk in _rail:
+    m = _re.search(r'<span class="([a-z-]+)">[^<]*</span>\s*$', _blk.strip())
+    if m:
+        _classes.add(m.group(1))
+check("every rail button uses the SAME label class", len(_classes) == 1,
+      f"{sorted(_classes)} — a one-off class renders unstyled, which is "
+      f"how raw text leaked into the icon rail")
+check("and that class has a CSS rule",
+      all(f".rail button .{c}" in HTML or f".{c}{{" in HTML for c in _classes),
+      f"{sorted(_classes)} must be styled, not invented")
+check("the watch button is among them",
+      any(i == "watch" for i, _ in _rail))
+
 print("\n5) it shows COVERAGE, not just membership")
 check("the endpoint reports archived days and bars",
       '"chain_days"' in APP and '"future_bars"' in APP,

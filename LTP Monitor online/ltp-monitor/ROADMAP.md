@@ -4,6 +4,64 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.25 — the rail label bug, and what "tested" did not mean (2026-08-05)
+
+Reported: the Watch icon showed raw "watch" text in the rail.
+
+    every other button   <span class="lbl">Agent System</span>
+    mine                 <span class="rail-label">Watch</span>
+
+`.rail button .lbl` is absolutely positioned at opacity 0 and revealed on
+hover — a tooltip. `.rail-label` has NO CSS rule anywhere, so the span
+rendered inline as visible text. I invented a class name instead of
+copying the one beside it.
+
+### What "verified" had actually meant, and why it missed this
+
+v59.24 claimed verification. What it checked:
+
+    marker strings present in the HTML     blind to CSS
+    node --check parses the JS             blind to CSS
+    page returns 200 at 362 KB             blind to CSS
+
+And the 200 was itself misleading: it came from TestClient against a
+store with auth DISABLED. Loading the real app in a browser redirects to
+/login, so that check had never seen the page a user sees.
+
+None of the three can see a class that does not exist. The bug was
+inside the one dimension every check ignored.
+
+### Verified properly this time
+
+Rendered in Chromium via playwright (already installed) and measured
+against the sibling buttons:
+
+    rail-watch    lbl opacity 0  position absolute  width 40
+    rail-agents   lbl opacity 0  position absolute  width 40
+    rail-macro    lbl opacity 0  position absolute  width 40
+
+Identical, and the screenshot shows an icon-only rail with no leaking
+text. Auth blocks a browser from reaching the dashboard, so the file was
+loaded directly — enough here, because the rail is pure markup and CSS.
+
+### The check that would have caught it
+
+`test_watchlist_picker.py` now parses every rail button, asserts they all
+use the SAME label class, and asserts that class has a CSS rule.
+Negative control: reintroducing `rail-label` yields
+`['lbl', 'rail-label']` and the check fails.
+
+A one-off class name is not a typo the language can catch — HTML accepts
+any class, CSS silently ignores unknown ones, and every string-level test
+passes. The invariant that catches it is CONSISTENCY WITH SIBLINGS, not
+correctness of one element.
+
+### Honest scope of UI testing here
+
+This adds a structural check, not visual regression. The suite still
+cannot see layout, overflow or colour. Anything I claim about how the
+Watchlist page LOOKS rests on the one screenshot I took, not on a test.
+
 ## v59.24 — the Watchlist page: chain, OI profile, filings stream (2026-08-05)
 
 Requested: move the picker out of Settings onto its own page, show the
