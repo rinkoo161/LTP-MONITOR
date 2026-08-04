@@ -99,8 +99,13 @@ finally:
 print("\n4) STORAGE is untouched — this is a filter, not a delete")
 HERE = os.path.dirname(os.path.abspath(__file__))
 HIST = open(os.path.join(HERE, "history.py")).read()
-check("the candle write path has no CAS filter",
-      "strip_cas_frozen" not in HIST and "cas_freeze" not in HIST,
+# Scope this to the WRITE function, not the whole file. history.py also
+# holds the REPLAY read helper, which legitimately filters — a first
+# version scanned the file and failed the moment that was added.
+_w = HIST.split("def upsert_candles")[1]
+_w = _w[:_w.index("\ndef ")] if "\ndef " in _w else _w
+check("the candle WRITE path has no CAS filter",
+      "strip_cas_frozen" not in _w and "cas_freeze" not in _w,
       "the bars are real broker data; the chart and archive keep them")
 AG = open(os.path.join(HERE, "agents.py")).read()
 check("_build_candle does not filter either",
@@ -112,6 +117,42 @@ _seg = AG.split("c5_today, session_date = self._session_only")[1][:600]
 for tf in ("c5_today", "c1_today", "c15_today"):
     check(f"{tf} is filtered", f"{tf} = strip_cas_frozen({tf})" in _seg,
           "pa_candles feeds PriceAction, S7, S8, S9 and MTF")
+
+print("\n5b) REPLAY matches LIVE — the backtester's door is filtered too")
+# v59.17 filtered the live indicator path only. The backtester's three
+# replay call sites, the backtest UI endpoints and news_validation all
+# read through history.day_index_candles() and never touch RegimeAgent,
+# so a strategy that could not see the frozen bars live was still being
+# replayed against them — including the ~150-point step that v59.17's own
+# note warned a backtest would "discover".
+import history as _hist
+_src = open(os.path.join(HERE, "history.py")).read()
+_body = _src.split("def day_index_candles")[1]
+_body = _body[:_body.index("\ndef ")] if "\ndef " in _body else _body
+check("the replay helper can apply the filter",
+      "strip_cas_frozen" in _body and "for_compute" in _body,
+      "backtests must not compute on bars the live path cannot see")
+_BT = open(os.path.join(HERE, "backtester.py")).read()
+check("and the backtester ASKS for it at every replay site",
+      _BT.count("day_index_candles(symbol, day, for_compute=True)") == 3
+      and "day_index_candles(symbol, day)" not in _BT,
+      "an unfiltered call site would silently replay the frozen bars")
+check("but it defaults OFF so the backtest CHART still shows everything",
+      "for_compute=False" in _body,
+      "test_backtest_chart_data caught a first version that filtered "
+      "unconditionally and lost seeded bars from the endpoint")
+check("the CHART helpers do NOT filter",
+      "strip_cas_frozen" not in _src.split("def candles_before")[1][:800]
+      and "strip_cas_frozen" not in _src.split("def candles_since")[1][:800],
+      "the chart shows what actually happened; only computation is filtered")
+_real = _hist.day_index_candles("NIFTY", "2026-08-04", for_compute=True)
+if len(_real) > 30:
+    _mx = max(abs(_real[i]["close"] - _real[i - 1]["close"])
+              for i in range(1, len(_real)))
+    check("the real 2026-08-04 replay series has no 150pt step",
+          _mx < 100, f"largest 1-bar move {_mx:.1f} (was 151.5 unfiltered)")
+else:
+    print(f"  SKIP  no archived 2026-08-04 index series here ({len(_real)} bars)")
 
 print("\n6) degenerate input is safe")
 check("empty list", agents.strip_cas_frozen([]) == [])

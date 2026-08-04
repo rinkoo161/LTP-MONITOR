@@ -455,7 +455,7 @@ def replay_pa(symbol, name, params=None, days=None, log=lambda m: None):
     fee = cfg.get("fee_per_lot", 40) * 2
     trades = []
     for day in (days or _completed_days(history.index_days(symbol))):
-        c1 = history.day_index_candles(symbol, day)
+        c1 = history.day_index_candles(symbol, day, for_compute=True)
         if len(c1) < 60:
             continue
         # Precompute once per day (O(n)) instead of letting evaluate()
@@ -531,7 +531,7 @@ def replay_ew_reversal(symbol, params=None, days=None, log=lambda m: None):
     dev = cfg.get("s8_zigzag_deviation_pct", 0.5)
     trades = []
     for day in (days or _completed_days(history.index_days(symbol))):
-        c1 = history.day_index_candles(symbol, day)
+        c1 = history.day_index_candles(symbol, day, for_compute=True)
         if len(c1) < 60:
             continue
         pos, taken = None, 0
@@ -590,7 +590,7 @@ def replay_ta_elliott(symbol, params=None, days=None, log=lambda m: None):
     dev = p.get("zigzag_deviation_pct", 0.5)
     trades = []
     for day in (days or _completed_days(history.index_days(symbol))):
-        c1 = history.day_index_candles(symbol, day)
+        c1 = history.day_index_candles(symbol, day, for_compute=True)
         if len(c1) < 120:
             continue
         pos, taken = None, 0

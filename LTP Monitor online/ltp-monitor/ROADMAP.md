@@ -4,6 +4,66 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.18 — options C and D, and the door v59.17 left open (2026-08-04)
+
+### D — NOT built, and it should not be
+
+D was "store a flag so each consumer decides". It is unnecessary: the
+window is derivable from `cas_freeze_time` at read time, so a stored
+column would be a second source of truth for something already known,
+and a schema change to boot.
+
+But the PROBLEM D pointed at was real and v59.17 missed it. Filtering
+only in RegimeAgent covered the LIVE indicator path and left the REPLAY
+path untouched — the backtester's three call sites, the backtest UI
+endpoints and news_validation all read through
+`history.day_index_candles()` and never touch RegimeAgent. So a strategy
+that CANNOT see the frozen bars live was still being backtested against
+them, including the ~150-point step that v59.17's own note warned a
+backtest would "discover". Replay did not match live.
+
+Closed with `for_compute=` on that helper rather than a stored flag:
+the backtester asks for filtered bars, the CHART does not. A first cut
+filtered unconditionally and `test_backtest_chart_data` caught it by
+losing seeded bars from the endpoint response — the same helper serves
+computation and display, and collapsing them was the error.
+
+    chart   (default)        385 bars
+    compute (for_compute=1)  360 bars, largest 1-bar move 17.8 not 151.5
+
+### C — premise CONFIRMED, still blocked on B9
+
+C was "use futures for the 15:15-15:40 window". v59.17 recorded that its
+premise — futures keep trading while the index freezes — was UNTESTED,
+because we archive futures OI and not futures candles.
+
+It is now tested, using the OI snapshots we DO have, which carry ltp:
+
+    index    15:15-15:27   24463.45 frozen, then +151 step to 24614.90
+    futures  15:12         24545.0
+             15:28         24561.1     18 distinct LTPs, range 24541-24569
+
+The tradeable instrument moved about 16 points across the window where
+the index appears to jump 151. That confirms both halves: the step is
+auction mechanics rather than a market move, and futures are the right
+instrument in that window.
+
+CAVEAT ON THAT EVIDENCE: sampling is sparse because the machine was
+asleep, so this shows futures prices CHANGED, not that they traded
+continuously. Good enough to justify B9; not good enough to build a
+strategy on.
+
+C itself stays blocked on B9 (archive futures candles). Nothing should
+trade 15:15-15:40 on index data, and there is no futures candle series
+to trade on instead.
+
+### Two test failures worth keeping
+
+`test_backtest_chart_data` caught the unconditional filter — a display
+path silently losing bars. `test_s9_ta_elliott` caught the signature
+change through its monkeypatched stub. Both were false-alarm-shaped and
+both were correct.
+
 ## v59.17 — the index freezes at 15:15, and indicators were reading the step (2026-08-04)
 
 Reported from the chart: a price jump around 15:28 on 3 and 4 August that

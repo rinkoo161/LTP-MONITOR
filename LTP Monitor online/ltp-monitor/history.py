@@ -1420,7 +1420,24 @@ def index_days(symbol, limit=250):
     return [r[0] for r in rows][::-1]
 
 
-def day_index_candles(symbol, day):
+def day_index_candles(symbol, day, for_compute=False):
+    """One day of index 1m candles.
+
+    `for_compute=True` drops the closing call-auction freeze (see
+    agents.strip_cas_frozen). REPLAY MUST MATCH LIVE: v59.17 filtered
+    those bars out of the live indicator path (RegimeAgent ->
+    pa_candles), and this helper is the other door — the backtester
+    replays through here and never touches RegimeAgent, so a strategy
+    that CANNOT see the frozen bars live was still being backtested
+    against them, including the ~150-point step.
+
+    It defaults to FALSE because this same helper also serves the
+    backtest CHART endpoint, and a chart must show what happened. That
+    split is the whole point of option A over option B: filter what a
+    strategy computes on, store and display everything. A first version
+    filtered unconditionally and test_backtest_chart_data caught it by
+    losing seeded bars from the endpoint's response.
+    """
     from datetime import datetime as _dt
     c = _conn()
     sec = c.execute("SELECT security_id FROM instruments WHERE symbol=? AND kind='idx'",
@@ -1431,8 +1448,12 @@ def day_index_candles(symbol, day):
     rows = c.execute("SELECT ts,o,h,l,c FROM candles WHERE security_id=? "
                      "AND ts>=? AND ts<? ORDER BY ts", (sec[0], t0, t1)).fetchall()
     c.close()
-    return [{"ts": r[0], "open": r[1], "high": r[2], "low": r[3], "close": r[4]}
-            for r in rows]
+    out = [{"ts": r[0], "open": r[1], "high": r[2], "low": r[3], "close": r[4]}
+           for r in rows]
+    if for_compute:
+        import agents
+        out = agents.strip_cas_frozen(out)
+    return out
 
 
 # ------------------------------------------------------------ sync

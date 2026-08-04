@@ -274,7 +274,10 @@ def _syn_day():
 _day = _syn_day()
 _od, _oc, _ocd = _h.index_days, _h.day_index_candles, _b._completed_days
 _h.index_days = lambda s: ["D"]
-_h.day_index_candles = lambda s, d: _day
+# 2026-08-04 — day_index_candles gained for_compute= (the CAS freeze
+# filter for replay). The backtester passes it, so the stub must
+# accept it or the replay raises instead of returning the fixture.
+_h.day_index_candles = lambda s, d, for_compute=False: _day
 _b._completed_days = lambda d: ["D"]
 
 check("replay_ew_reversal exists", callable(_b.replay_ew_reversal))
