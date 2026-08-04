@@ -4,6 +4,82 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.24 — the Watchlist page: chain, OI profile, filings stream (2026-08-05)
+
+Requested: move the picker out of Settings onto its own page, show the
+selected symbol's chain and candles, add visualisation, and a live
+filings stream with materiality colour-coding.
+
+### Filings — feasibility settled first
+
+NSE's corporate-announcements endpoint is reachable through the session
+handling `nse_client` already carries: 200, and 875 announcements for
+ADANIENSOL alone, with category, text, timestamp and PDF link.
+
+### Materiality is a TIER, deliberately not a direction
+
+This project already has a news sentiment pipeline, and v58.51
+established its classifier had never been checked against real candle
+outcomes. Guessing direction from a headline is that same unvalidated
+move. A tier makes a weaker, checkable claim — "this KIND of filing can
+move a price" — and says nothing about which way.
+
+The tiers were derived from the 73 categories actually filed, not
+invented. Then measured and CORRECTED:
+
+    before tightening   34.1% high   46.6% medium   19.3% low
+    after               29.1% high   46.5% medium   24.3% low
+
+Two patterns were over-firing, found by counting which ones matched:
+bare `takeover` hit 57 routine SEBI SAST shareholding disclosures rather
+than actual takeovers, and bare `loss of` hit "loss of share
+certificate", a routine filing the LOW list already named — HIGH is
+tested first, so it won. A materiality tier where a third of everything
+is HIGH is not a filter. Real takeover events still reach HIGH via
+`open offer`.
+
+An UNRECOGNISED category is MEDIUM, never LOW. Silently demoting an
+unknown filing to noise is how a material one disappears from the page.
+
+### The page
+
+    rail "Watch" -> view-watch
+      search + validated picker, with per-symbol ARCHIVE COVERAGE
+      selected symbol: live chain (nearest 14 strikes, ATM bolded)
+      OI profile: inline SVG, CE vs PE per strike — no library, no
+        dependency on the chart stack the index pages use
+      filings: newest first, colour-coded by tier, each carrying the
+        rule that fired and a link to the PDF
+
+`/api/chain?symbol=` is new. The existing chain paths are wired to the
+four traded indices through bus keys, warming fallbacks and analysis
+caching, none of which a watch symbol has — it is archived, not traded.
+It goes straight to the broker through the SAME `option_chain()` the
+index path uses, which since v59.22 resolves scrip+segment per symbol.
+
+Verified live: ADANIENSOL returns spot 1646, 63 strikes, expiry
+2026-08-25, with real OI (1600 CE 345,600 / PE 465,075).
+
+### Three ambiguous-substring slips, all mine, all caught
+
+  - `"_age = "` matched the `worst_age = 0.0` initialiser (v59.16)
+  - `def option_chain(self, symbol: str) -> dict:` appears 3x, one per
+    broker adapter (v59.22)
+  - `"function loadWatchPage"` also matches `loadWatchPage_chain` and
+    `_filings` (here)
+
+Each aborted on an assertion rather than corrupting a file. Separately,
+I read HTML indentation off `sed` output carrying my own display prefix
+TWICE — 6/8 where the file has 4/6, then 4/6 where it has 2. Reading
+structure from formatted output rather than from the file is now the
+single most common way I have wasted a step in this session.
+
+### Still not built
+
+The intraday liquidity panel — bid-ask and OI depth DURING the session.
+That remains the measurement that would actually decide Phase 2, and
+after-hours numbers cannot substitute for it.
+
 ## v59.23 — the Settings picker (2026-08-05)
 
 Any F&O underlying Dhan serves can now be picked from Settings,

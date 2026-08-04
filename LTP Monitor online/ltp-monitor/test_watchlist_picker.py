@@ -90,15 +90,63 @@ _readers = AG.count('cfg.get("watch_symbols"')
 check("exactly one reader of watch_symbols in agents.py", _readers == 1,
       f"{_readers} — it must stay archive-only")
 
+print("\n3b) FILINGS — materiality is a tier, never a direction")
+import filings as _fl
+for desc, txt, want in (
+    ("Financial Result Updates", "", "high"),
+    ("Outcome of Board Meeting", "", "high"),
+    ("Credit Rating- New", "", "high"),
+    ("Trading Window", "", "low"),
+    ("Copy of Newspaper Publication", "", "low"),
+    ("Disclosure under SEBI Takeover Regulations", "takeover regulation", "low"),
+    ("Some Category Nobody Has Seen", "", "medium"),
+):
+    got, why = _fl.materiality(desc, txt)
+    check(f"{desc[:38]:40} -> {want}", got == want, f"got {got} ({why[:34]})")
+check("an unknown category is MEDIUM, never LOW",
+      _fl.materiality("Brand New Category", "")[0] == "medium",
+      "demoting an unrecognised filing to noise is how a material one "
+      "disappears from the page")
+check("the tier carries WHY it fired",
+      "matched" in _fl.materiality("Financial Result Updates", "")[1],
+      "a wrong tier must be traceable to a pattern, not argued about")
+# The measured correction: bare 'takeover' matched 57 routine SAST
+# disclosures and bare 'loss of' matched 'loss of share certificate'.
+check("routine SAST disclosure is not HIGH",
+      _fl.materiality("Disclosure under SEBI Takeover Regulations", "")[0] != "high")
+check("loss of a share certificate is not HIGH",
+      _fl.materiality("Loss of share certificate", "")[0] == "low")
+check("but a real fire/accident still is",
+      _fl.materiality("General Updates", "fire at the plant")[0] == "high")
+
+print("\n3c) the filings panel fails loudly, not blankly")
+FSRC = open(os.path.join(HERE, "filings.py")).read()
+check("a fetch failure returns an error string",
+      '"error": f"NSE announcements unavailable' in FSRC,
+      "an empty list would read as 'the company filed nothing'")
+check("failures are NOT cached",
+      "Do NOT cache a failure" in FSRC,
+      "otherwise one outage blanks the panel for the whole TTL")
+
 print("\n4) the UI is wired, not just present")
 for marker in ("wl_q", "wl_results", "wl_current", "wl_status"):
     check(f"element {marker} exists", f'id="{marker}"' in HTML)
-for fn in ("wlLoad", "wlSearch", "wlAdd", "wlRemove", "wlSave", "wlRender"):
-    check(f"{fn}() is defined once", HTML.count(f"function {fn}") == 1,
-          str(HTML.count(f"function {fn}")))
-check("the panel is populated when Settings opens",
-      "wlLoad()" in HTML.split("async function loadSettings(){")[1][:400],
+for fn in ("loadWatchPage", "wlSearch", "wlAdd", "wlRemove", "wlSave", "wlRender", "wlSelect", "wlSpark"):
+    # The trailing "(" matters: "function loadWatchPage" also matches
+    # loadWatchPage_chain and _filings. Third ambiguous-substring slip of
+    # this session — the others were "_age = " and a non-unique anchor.
+    check(f"{fn}() is defined once", HTML.count(f"function {fn}(") == 1,
+          str(HTML.count(f"function {fn}(")))
+check("the picker is on its OWN page, not in Settings",
+      'id="view-watch"' in HTML and 'settings-card-title">Watchlist' not in HTML,
+      "requested explicitly — Settings is for configuration, not analysis")
+check("the rail exposes it", 'id="rail-watch"' in HTML
+      and "showView('watch')" in HTML)
+check("opening the view loads it",
+      'if(v==="watch")loadWatchPage();' in HTML,
       "otherwise the coverage numbers are stale from page load")
+check("the page shows a chain, an OI profile and filings",
+      all(x in HTML for x in ('wl_chain', 'wl_spark', 'wl_filings')))
 check("removal is possible, not just adding",
       "wlRemove(" in HTML, "a list you cannot un-pick is a trap")
 

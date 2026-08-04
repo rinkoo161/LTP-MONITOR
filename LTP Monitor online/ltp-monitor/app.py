@@ -25,7 +25,7 @@ from agents import Orchestrator, compute_momentum
 import agents
 
 BASE = os.path.dirname(os.path.abspath(__file__))
-APP_VERSION = "v59.23"   # maintained per explicit request; last delivered was v49
+APP_VERSION = "v59.24"   # maintained per explicit request; last delivered was v49
 
 app = FastAPI(title="LTP Option Chain Monitor")
 
@@ -897,6 +897,52 @@ class SettingsIn(BaseModel):
     pa_enabled: list[str] | None = None
     ai_decision_engine_enabled: bool | None = None
     learning_feedback_enabled: bool | None = None
+
+
+@app.get("/api/chain")
+def api_chain(symbol: str = ""):
+    """Live option chain for ANY underlying the broker serves.
+
+    Added for the Watchlist page: the existing chain paths are wired to
+    the four traded indices (bus keys, warming fallbacks, analysis
+    caching), and a watch symbol has none of that — it is archived, not
+    traded. This goes straight to the broker through the SAME
+    `option_chain()` the index path uses, which since v59.22 resolves
+    scrip+segment per symbol.
+
+    READ-ONLY. It fetches and returns; it publishes nothing to the bus
+    and enables nothing.
+    """
+    sym = (symbol or "").strip().upper()
+    if not sym:
+        return {"error": "no symbol"}
+    try:
+        d = dhan_client()          # the module-level factory every other
+        if d is None:               # endpoint uses; honours broker choice
+            return {"symbol": sym, "rows": [],
+                    "error": "no broker client — check credentials in Settings"}
+        ch = d.option_chain(sym)
+        return {"symbol": sym, "spot": ch.get("spot"),
+                "expiry": ch.get("expiry"), "rows": ch.get("rows") or []}
+    except Exception as e:
+        return {"symbol": sym, "rows": [], "error": str(e)[:200]}
+
+
+@app.get("/api/filings")
+def api_filings(symbol: str = "", limit: int = 40):
+    """NSE corporate announcements for one symbol, materiality-tiered.
+
+    READ-ONLY. Nothing here feeds a strategy, a risk gate or an order —
+    it is a display panel for a watchlist symbol. Failures return an
+    `error` string rather than an empty list, so the page can say WHY it
+    is blank instead of implying the company filed nothing.
+    """
+    try:
+        import filings as _f
+        return _f.fetch(symbol, limit=limit)
+    except Exception as e:
+        return {"symbol": symbol, "filings": [],
+                "error": f"filings unavailable: {str(e)[:140]}"}
 
 
 @app.get("/api/instruments/search")

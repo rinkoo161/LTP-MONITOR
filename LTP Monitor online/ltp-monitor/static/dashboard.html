@@ -405,6 +405,9 @@
   <button id="rail-fstrat" onclick="showView('fstrat')" title="Futures Research">
     <span class="rail-icon"><svg viewBox="0 0 24 24"><path d="M4 19h16"/><path d="M4 19V5"/><path d="M8 16l4-6 3 3 5-7"/><circle cx="8" cy="16" r="1"/></svg></span><span class="lbl">Futures Research</span>
   </button>
+  <button id="rail-watch" onclick="showView('watch')" title="Watchlist">
+    <span class="rail-icon"><svg viewBox="0 0 24 24"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg></span><span class="rail-label">Watch</span>
+  </button>
   <button id="rail-agents" onclick="showView('agents')" title="Agents">
     <span class="rail-icon"><svg viewBox="0 0 24 24"><rect x="4" y="8" width="16" height="12" rx="2"/><path d="M12 8V4"/><circle cx="12" cy="3" r="1"/><circle cx="9" cy="14" r="1"/><circle cx="15" cy="14" r="1"/><path d="M2 13h2M20 13h2"/></svg></span><span class="lbl">Agent System</span>
   </button>
@@ -469,7 +472,7 @@
   <div class="dashgrid">
     <div class="dc8">
       <div class="panel" style="margin-bottom:8px">
-        <h2>&#128200; Live Chart (TradingView Lightweight Charts) <span class="badge" style="font-weight:400">v59.23</span> <span class="sub" id="lwChartStatus">connecting...</span>
+        <h2>&#128200; Live Chart (TradingView Lightweight Charts) <span class="badge" style="font-weight:400">v59.24</span> <span class="sub" id="lwChartStatus">connecting...</span>
           <select id="lwChartSymbol" style="margin-left:auto" onchange="switchLwChart(this.value)"></select></h2>
         <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;flex-wrap:wrap">
           <button class="lwIntervalBtn active" data-interval="1" onclick="switchLwInterval('1')">1m</button>
@@ -1002,6 +1005,39 @@
 </div>
 
 <!-- ============================================================ TRADE QUALITY VIEW -->
+<div id="view-watch" class="view" style="display:none">
+  <div class="panel full">
+    <h2>&#128065; Watchlist <span class="sub">data only &mdash; archived and measured, never traded</span>
+      <button class="ivbtn" style="margin-left:auto" onclick="loadWatchPage()">refresh</button></h2>
+    <div class="frow" style="gap:10px;align-items:center;flex-wrap:wrap">
+      <input type="text" id="wl_q" placeholder="search F&amp;O underlyings, e.g. ADANI" oninput="wlSearch()" style="max-width:340px">
+      <button class="act" onclick="wlSave()">Save watchlist</button>
+      <span id="wl_status" class="sub"></span>
+    </div>
+    <div id="wl_results" class="sub" style="margin:6px 0 4px"></div>
+    <div id="wl_current" style="margin-top:6px"></div>
+  </div>
+
+  <div class="panel full">
+    <h2>Selected &mdash; <span id="wl_sel">none</span> <span class="sub" id="wl_selmeta"></span></h2>
+    <div id="wl_spark" style="margin:4px 0 10px"></div>
+    <div class="tablewrap tablewrap-scroll" style="max-height:340px">
+      <table id="wl_chain"><thead><tr>
+        <th>CE OI</th><th>CE LTP</th><th>Strike</th><th>PE LTP</th><th>PE OI</th>
+      </tr></thead><tbody></tbody></table>
+    </div>
+  </div>
+
+  <div class="panel full">
+    <h2>&#128196; Filings <span class="sub">NSE announcements &mdash; colour is MATERIALITY, not direction</span>
+      <span id="wl_fcounts" class="sub" style="margin-left:auto"></span></h2>
+    <div class="sub" style="padding:2px 0 8px">
+      A tier says "this kind of filing can move a price", never which way. Unrecognised categories show as MEDIUM, never hidden.
+    </div>
+    <div id="wl_filings"></div>
+  </div>
+</div>
+
 <div id="view-fstrat" class="view" style="display:none">
   <div class="panel full">
     <h2>&#128300; Futures Research <span class="sub">evidence record — this page reads state and changes nothing</span>
@@ -1141,20 +1177,6 @@
     <div id="kotakLoginStatus" class="reasons" style="margin-top:6px"></div>
     </div>
     <div class="frow"><label>Anthropic API Key (optional, for online engine) <span id="s_ant_state" style="color:var(--dim)"></span></label><input type="password" id="s_ant" placeholder="sk-ant-..."></div>
-    </div>
-    <div class="settings-card full">
-      <div class="settings-card-title">Watchlist &mdash; data only, never traded</div>
-      <div class="reasons" style="margin:8px 0 12px">
-        Underlyings archived so their liquidity can be measured before anyone decides whether they are worth trading.
-        These are <b>not</b> in the traded symbol list &mdash; no strategy, risk or order path reads them.
-        Only names Dhan actually serves options for can be added, validated against the scrip master.
-      </div>
-      <div class="frow"><label>Search F&amp;O underlyings</label>
-        <input type="text" id="wl_q" placeholder="e.g. ADANI, RELIANCE, TATA" oninput="wlSearch()"></div>
-      <div id="wl_results" class="reasons" style="margin:2px 0 10px"></div>
-      <div id="wl_current"></div>
-      <div class="actrow"><button class="act" onclick="wlSave()">Save watchlist</button>
-        <span id="wl_status" class="reasons" style="margin-left:10px"></span></div>
     </div>
     <div class="settings-card full">
       <div class="settings-card-title">Trading</div>
@@ -1429,12 +1451,13 @@ setInterval(function(){document.getElementById("clock").textContent=
 /* ---------------- view switching ---------------- */
 function showView(v){
   currentView=v;
-  ["dash","futures","pnl","strat","inst","bt","journal","agents","macro","quality","fstrat"].forEach(function(k){
+  ["dash","futures","pnl","strat","inst","bt","journal","agents","macro","quality","fstrat","watch"].forEach(function(k){
     const view=document.getElementById("view-"+k);
     if(view) view.style.display=k===v?"block":"none";
     const btn=document.getElementById("rail-"+k);
     if(btn) btn.classList.toggle("on",k===v);
   });
+  if(v==="watch")loadWatchPage();
   if(v==="futures")loadFuturesPage();
   if(v==="pnl")loadPnl();
   if(v==="strat")loadStrategies();
@@ -1573,39 +1596,42 @@ async function toggleTheme(){
 }
 
 /* ---------------- settings ---------------- */
-// ---- Watchlist picker (Phase 1: data only, never traded) ----
-// Kept deliberately separate from the traded symbol list. Adding a name
-// here archives its chain and futures candles so its liquidity can be
-// measured; it does not enable any strategy or order path.
-var WL = [];
+// ---- Watchlist page (Phase 1: data only, never traded) ----
+// Deliberately separate from the traded symbol list. Adding a name here
+// archives its chain and futures candles so its liquidity and filings can
+// be measured; it enables no strategy and no order path.
+var WL = [], WL_SEL = null;
 
-async function wlLoad(){
+async function loadWatchPage(){
   try{
-    const r = await fetch('/api/instruments/watchlist');
-    const j = await r.json();
+    const j = await (await fetch('/api/instruments/watchlist')).json();
     WL = (j.watch_symbols || []).map(x => x.symbol);
     wlRender(j.watch_symbols || []);
-  }catch(e){ document.getElementById('wl_current').innerHTML =
-    '<div class="reasons">could not load watchlist: ' + e + '</div>'; }
+    if(!WL_SEL && WL.length) wlSelect(WL[0]);
+  }catch(e){
+    document.getElementById('wl_current').innerHTML =
+      '<div class="sub">could not load watchlist: ' + e + '</div>';
+  }
 }
 
 function wlRender(rows){
   const el = document.getElementById('wl_current');
   if(!el) return;
-  if(!rows.length){ el.innerHTML = '<div class="reasons">No watch symbols. '
-    + 'Search above to add one.</div>'; return; }
+  if(!rows.length){ el.innerHTML = '<div class="sub">No watch symbols yet — search above.</div>'; return; }
   // Show COVERAGE, not just membership: a name that was accepted but is
   // archiving nothing looks identical to a working one otherwise.
-  el.innerHTML = rows.map(r =>
-    '<div class="frow" style="align-items:center">'
-    + '<label>' + r.symbol + (r.ok ? '' : ' <span style="color:var(--bad)">&#9888;</span>')
-    + ' <span class="reasons">' + (r.ok
-        ? ('lot ' + (r.lot_size||'?') + ' &middot; ' + (r.kind||'?')
-           + ' &middot; ' + (r.chain_days||0) + ' chain day(s), '
-           + (r.future_bars||0) + ' future bar(s)')
-        : (r.reason||'')) + '</span></label>'
-    + '<button class="act" onclick="wlRemove(\'' + r.symbol + '\')">Remove</button>'
-    + '</div>').join('');
+  el.innerHTML = rows.map(r => {
+    const on = (r.symbol === WL_SEL) ? ';border-color:var(--acc)' : '';
+    const cov = r.ok ? ((r.chain_days||0) + ' chain day(s), ' + (r.future_bars||0) + ' fut bar(s)')
+                     : (r.reason || 'invalid');
+    return '<div class="frow" style="align-items:center;gap:8px">'
+      + '<button class="act" style="min-width:150px' + on + '" onclick="wlSelect(\'' + r.symbol + '\')">'
+      + r.symbol + '</button>'
+      + '<span class="sub">' + (r.ok ? ('lot ' + (r.lot_size||'?') + ' · ' + (r.kind||'?') + ' · ') : '')
+      + cov + '</span>'
+      + '<button class="act" style="margin-left:auto" onclick="wlRemove(\'' + r.symbol + '\')">Remove</button>'
+      + '</div>';
+  }).join('');
 }
 
 var _wlTimer = null;
@@ -1616,61 +1642,129 @@ function wlSearch(){
     const box = document.getElementById('wl_results');
     if(q.length < 2){ box.innerHTML = ''; return; }
     try{
-      const r = await fetch('/api/instruments/search?q=' + encodeURIComponent(q));
-      const j = await r.json();
+      const j = await (await fetch('/api/instruments/search?q=' + encodeURIComponent(q))).json();
       if(j.error){ box.innerHTML = '<span style="color:var(--bad)">' + j.error + '</span>'; return; }
       const res = j.results || [];
-      if(!res.length){ box.innerHTML = 'No F&amp;O underlying matches "' + q
-        + '" — only names with listed options can be added.'; return; }
+      if(!res.length){ box.innerHTML = 'No F&amp;O underlying matches "' + q + '" — only names with listed options can be added.'; return; }
       box.innerHTML = res.map(x =>
-        '<button class="act" style="margin:2px 4px 2px 0" onclick="wlAdd(\''
-        + x.symbol + '\')">' + x.symbol + ' <span class="reasons">'
-        + x.exchange + ' &middot; ' + x.option_rows + ' opt</span></button>').join('');
+        '<button class="act" style="margin:2px 4px 2px 0" onclick="wlAdd(\'' + x.symbol + '\')">'
+        + x.symbol + ' <span class="sub">' + x.exchange + ' · ' + x.option_rows + ' opt</span></button>').join('');
     }catch(e){ box.innerHTML = 'search failed: ' + e; }
   }, 250);
 }
 
 async function wlAdd(sym){
-  if(WL.indexOf(sym) >= 0){ return; }
-  // Validate before adding, so the failure is explained at the moment of
-  // the click rather than silently at the next archive run.
+  if(WL.indexOf(sym) >= 0) return;
   try{
-    const r = await fetch('/api/instruments/validate?symbol=' + encodeURIComponent(sym));
-    const j = await r.json();
+    const j = await (await fetch('/api/instruments/validate?symbol=' + encodeURIComponent(sym))).json();
     if(!j.ok){ document.getElementById('wl_status').innerHTML =
       '<span style="color:var(--bad)">' + (j.reason||'rejected') + '</span>'; return; }
     WL.push(sym);
-    document.getElementById('wl_status').textContent =
-      sym + ' added — press Save to persist.';
-    wlRender(WL.map(s2 => ({symbol:s2, ok:true, reason:'', lot_size:'', kind:'', chain_days:0, future_bars:0})));
+    document.getElementById('wl_status').textContent = sym + ' added — press Save to persist.';
+    wlRender(WL.map(x => ({symbol:x, ok:true, chain_days:0, future_bars:0})));
   }catch(e){ document.getElementById('wl_status').textContent = 'validate failed: ' + e; }
 }
 
 function wlRemove(sym){
   WL = WL.filter(x => x !== sym);
-  document.getElementById('wl_status').textContent =
-    sym + ' removed — press Save to persist.';
-  wlRender(WL.map(s2 => ({symbol:s2, ok:true, reason:'', lot_size:'', kind:'', chain_days:0, future_bars:0})));
+  if(WL_SEL === sym) WL_SEL = null;
+  document.getElementById('wl_status').textContent = sym + ' removed — press Save to persist.';
+  wlRender(WL.map(x => ({symbol:x, ok:true, chain_days:0, future_bars:0})));
 }
 
 async function wlSave(){
   const st = document.getElementById('wl_status');
   st.textContent = 'saving...';
   try{
-    const r = await fetch('/api/settings', {method:'POST',
+    const j = await (await fetch('/api/settings', {method:'POST',
       headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({watch_symbols: WL})});
-    const j = await r.json();
+      body: JSON.stringify({watch_symbols: WL})})).json();
     if(j.error){ st.innerHTML = '<span style="color:var(--bad)">' + j.error + '</span>'; return; }
     st.textContent = 'saved — archiving begins on the next daily cycle.';
-    wlLoad();
+    loadWatchPage();
   }catch(e){ st.textContent = 'save failed: ' + e; }
 }
 
+async function wlSelect(sym){
+  WL_SEL = sym;
+  document.getElementById('wl_sel').textContent = sym;
+  wlRender(WL.map(x => ({symbol:x, ok:true, chain_days:0, future_bars:0})));
+  loadWatchPage_chain(sym);
+  loadWatchPage_filings(sym);
+}
+
+async function loadWatchPage_chain(sym){
+  const tb = document.querySelector('#wl_chain tbody');
+  const meta = document.getElementById('wl_selmeta');
+  tb.innerHTML = '<tr><td colspan="5" class="sub">loading chain…</td></tr>';
+  try{
+    const j = await (await fetch('/api/chain?symbol=' + encodeURIComponent(sym))).json();
+    const rows = j.rows || j.strikes || [];
+    if(!rows.length){ tb.innerHTML = '<tr><td colspan="5" class="sub">no chain returned' + (j.error ? ' — ' + j.error : '') + '</td></tr>'; return; }
+    meta.textContent = 'spot ' + (j.spot != null ? j.spot : '?') + ' · expiry ' + (j.expiry || '?') + ' · ' + rows.length + ' strikes';
+    const spot = j.spot || 0;
+    // Nearest 14 strikes: the whole chain is mostly untraded wings.
+    const near = rows.slice().sort((a,b) => Math.abs(a.strike-spot) - Math.abs(b.strike-spot)).slice(0,14)
+                     .sort((a,b) => a.strike - b.strike);
+    tb.innerHTML = near.map(r => {
+      const ce = r.ce || {}, pe = r.pe || {};
+      const atm = Math.abs(r.strike - spot) < (near[1] ? Math.abs(near[1].strike-near[0].strike)/2 : 1);
+      return '<tr' + (atm ? ' style="font-weight:600"' : '') + '>'
+        + '<td>' + (ce.oi != null ? ce.oi : '-') + '</td>'
+        + '<td>' + (ce.ltp != null ? ce.ltp : '-') + '</td>'
+        + '<td>' + r.strike + '</td>'
+        + '<td>' + (pe.ltp != null ? pe.ltp : '-') + '</td>'
+        + '<td>' + (pe.oi != null ? pe.oi : '-') + '</td></tr>';
+    }).join('');
+    wlSpark(near, spot);
+  }catch(e){ tb.innerHTML = '<tr><td colspan="5" class="sub">chain failed: ' + e + '</td></tr>'; }
+}
+
+function wlSpark(rows, spot){
+  // A minimal OI profile: where the open interest actually sits, which is
+  // what the wall-based strategies read. Pure inline SVG — no library, and
+  // no dependency on the chart stack the index pages use.
+  const el = document.getElementById('wl_spark');
+  if(!rows.length){ el.innerHTML = ''; return; }
+  const max = Math.max(1, ...rows.map(r => Math.max((r.ce||{}).oi||0, (r.pe||{}).oi||0)));
+  const w = 26, h = 54;
+  const bars = rows.map((r,i) => {
+    const c = ((r.ce||{}).oi||0)/max*h, p = ((r.pe||{}).oi||0)/max*h;
+    const x = i*w;
+    return '<rect x="'+(x+3)+'" y="'+(h-c)+'" width="9" height="'+c+'" fill="var(--bad)" opacity="0.75"><title>CE OI '+((r.ce||{}).oi||0)+' @ '+r.strike+'</title></rect>'
+         + '<rect x="'+(x+13)+'" y="'+(h-p)+'" width="9" height="'+p+'" fill="var(--good)" opacity="0.75"><title>PE OI '+((r.pe||{}).oi||0)+' @ '+r.strike+'</title></rect>';
+  }).join('');
+  const labels = rows.map((r,i) => '<text x="'+(i*w+13)+'" y="'+(h+11)+'" font-size="8" text-anchor="middle" fill="var(--dim)">'+r.strike+'</text>').join('');
+  el.innerHTML = '<div class="sub" style="margin-bottom:2px">OI profile — <span style="color:var(--bad)">CE</span> vs <span style="color:var(--good)">PE</span>, nearest strikes</div>'
+    + '<svg width="'+(rows.length*w)+'" height="'+(h+16)+'" style="max-width:100%">'+bars+labels+'</svg>';
+}
+
+async function loadWatchPage_filings(sym){
+  const el = document.getElementById('wl_filings');
+  const cn = document.getElementById('wl_fcounts');
+  el.innerHTML = '<div class="sub">loading filings…</div>';
+  try{
+    const j = await (await fetch('/api/filings?symbol=' + encodeURIComponent(sym) + '&limit=40')).json();
+    if(j.error){ el.innerHTML = '<div class="sub" style="color:var(--bad)">' + j.error + '</div>'; cn.textContent=''; return; }
+    const f = j.filings || [];
+    const c = j.counts || {};
+    cn.innerHTML = (j.total||f.length) + ' filings · '
+      + '<span style="color:var(--bad)">' + (c.high||0) + ' high</span> · '
+      + '<span style="color:var(--warn,#e0a800)">' + (c.medium||0) + ' medium</span> · '
+      + '<span style="color:var(--dim)">' + (c.low||0) + ' low</span>';
+    if(!f.length){ el.innerHTML = '<div class="sub">no filings returned</div>'; return; }
+    const colour = t => t==='high' ? 'var(--bad)' : (t==='low' ? 'var(--dim)' : 'var(--warn,#e0a800)');
+    el.innerHTML = f.map(x =>
+      '<div style="border-left:3px solid ' + colour(x.tier) + ';padding:5px 0 5px 9px;margin-bottom:7px">'
+      + '<div><b style="color:' + colour(x.tier) + '">' + x.tier.toUpperCase() + '</b> '
+      + '<span class="sub">' + (x.when||'') + '</span> &middot; ' + (x.category||'') + '</div>'
+      + '<div class="sub" style="margin:2px 0">' + (x.text||'').replace(/</g,'&lt;') + '</div>'
+      + '<div class="sub" style="opacity:.7">' + x.why + (x.attachment ? ' · <a href="'+x.attachment+'" target="_blank" rel="noopener">attachment</a>' : '') + '</div>'
+      + '</div>').join('');
+  }catch(e){ el.innerHTML = '<div class="sub">filings failed: ' + e + '</div>'; }
+}
+
 async function loadSettings(){
-  // Phase 1 watchlist — populated whenever Settings is opened, so the
-  // archive-coverage numbers are current rather than from page load.
-  try{ wlLoad(); }catch(e){}
   settings=await (await fetch("/api/settings")).json();
   applyTheme(settings.theme||"dark");
   const badge=document.getElementById("modeBadge");
