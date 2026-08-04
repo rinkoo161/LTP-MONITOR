@@ -234,6 +234,47 @@ def _session_min(key, default):
     return max(0, min(24 * 60 - 1, v))
 
 
+def strip_cas_frozen(candles):
+    """Drop bars from the closing call-auction window, for INDICATOR use.
+
+    2026-08-04. From the NSE change effective 2026-08-03, F&O stocks stop
+    trading continuously at 15:15 and enter the closing call auction.
+    Every NIFTY/BANKNIFTY/FINNIFTY constituent IS an F&O stock, so from
+    that minute the INDEX has nothing left to discover: it repeats its
+    last value until the auction publishes the official close, which
+    arrives as a single step (~150 points on 2026-08-04, 15:28).
+
+    This was verified against the BROKER rather than inferred from our own
+    archive, because our archive could not distinguish "the market froze"
+    from "we stopped collecting". Dhan returns 0 flat 1m index bars for
+    15:15-15:30 on 2026-07-30 and 30 of 32 on 2026-08-03 — the first
+    session under the new rules.
+
+    WHAT THIS DOES NOT DO: it does not stop the bars being stored. They
+    are real broker data and the official close is genuinely useful; the
+    chart and the archive keep them. What they must not do is reach an
+    INDICATOR, because ~13 identical bars followed by a 150-point gap is
+    read by ATR as a volatility spike, by MACD/EMA as a cross, and by the
+    ZigZag as a pivot — none of which traded. ATR matters most: it feeds
+    `option_stop_geometry`, so a frozen-index artifact would set real
+    stop widths.
+
+    Futures keep trading to 15:40 and are NOT frozen, so this is
+    deliberately applied only where index candles feed indicators.
+    """
+    cutoff = _session_min("cas_freeze_time", "15:15")
+    out = []
+    for c in candles or []:
+        ts = c.get("ts") if isinstance(c, dict) else None
+        if ts is None:
+            out.append(c)
+            continue
+        t = datetime.fromtimestamp(int(ts), IST)
+        if t.hour * 60 + t.minute < cutoff:
+            out.append(c)
+    return out
+
+
 def market_open():
     """May we TRADE or HOLD an intraday position right now?
 
@@ -2181,9 +2222,21 @@ class RegimeAgent(Agent):
             return None
 
 
+        # 2026-08-04 — CAS filter. These three arrays are the ONLY source
+        # of indicator input for the whole downstream chain: RegimeAgent's
+        # own ATR/ADX, and `pa_candles:{sym}`, which PriceAction, S7, S8,
+        # S9 and MTF all read. Filtering here rather than in each
+        # indicator is the same reason the market-session check lives in
+        # one function — a per-consumer copy is what drifts.
+        #
+        # The bars are NOT deleted; they stay in the archive and on the
+        # chart. See strip_cas_frozen().
         c5_today, session_date = self._session_only(c5)
         c1_today, _ = self._session_only(c1)
         c15_today, _ = self._session_only(c15)
+        c5_today = strip_cas_frozen(c5_today)
+        c1_today = strip_cas_frozen(c1_today)
+        c15_today = strip_cas_frozen(c15_today)
         if len(c5_today) < 3:
             # not enough of TODAY's session yet for a meaningful opening
             # range/session read, even though multi-day history exists

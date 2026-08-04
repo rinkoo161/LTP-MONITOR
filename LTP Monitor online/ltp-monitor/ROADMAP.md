@@ -4,6 +4,82 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.17 — the index freezes at 15:15, and indicators were reading the step (2026-08-04)
+
+Reported from the chart: a price jump around 15:28 on 3 and 4 August that
+was not there before. It is real in the data and fake in the market.
+
+### What it is
+
+    15:14   O 24453.70  H 24466.15  L 24451.10  C 24462.95     real
+    15:15   ..........  24463.45 repeated, 13 bars ..........  FROZEN
+    15:28   O 24463.45  H 24614.90  L 24463.45  C 24614.90     +151 STEP
+    15:29   ..........  24614.90 repeated ....................  FROZEN
+
+From the NSE change effective 2026-08-03 — the same change v59.1
+implemented — F&O stocks stop trading continuously at 15:15 and enter the
+closing call auction. Every NIFTY/BANKNIFTY/FINNIFTY constituent IS an
+F&O stock, so from that minute the INDEX has nothing left to discover.
+It repeats its last value until the auction publishes the official close.
+
+### Three wrong answers before the right one
+
+I attributed this to the machine sleeping (the gaps lined up), then to
+our candle builder repeating the last LTP, then to v59.1 widening the
+write window. All three were plausible and all three were wrong.
+
+What settled it was asking the BROKER instead of reading our own archive,
+which by construction cannot tell "the market froze" from "we stopped
+collecting":
+
+    2026-07-30   Dhan 1m index bars 15:15-15:30 —  0 of 30 flat
+    2026-08-03   Dhan 1m index bars 15:15-15:30 — 30 of 32 flat
+
+The broker's own data changed character on the first session under the
+new rules. Our app stored it faithfully. Nothing in this repo caused it.
+
+v59.1 did make it MORE visible — the data window now runs to 15:40, so we
+store ten extra minutes of frozen tail that used to be discarded. That
+enlarged the contaminated span without creating it.
+
+### Why it mattered
+
+    NIFTY index, 2026-08-04
+      before filtering   385 bars, 24 flat, ATR(14) 10.82, largest 1-bar move 151.5
+      after  filtering   360 bars,  0 flat, ATR(14)  8.60, largest 1-bar move  17.8
+
+The phantom bar was 8.5x the largest move that actually traded, and it
+inflated ATR by 26%. ATR is the one that matters: `option_stop_geometry`
+consumes `atr_pct`, so a frozen-index artifact was sizing real stops.
+MACD and EMA cross on the step; the ZigZag registers a pivot there, and
+S9's structure logic consumes those pivots. Every session from now on,
+not a two-day glitch.
+
+### The fix — option A, filter indicators, KEEP the data
+
+`strip_cas_frozen()` drops bars at/after `cas_freeze_time` (15:15,
+configurable — the exchange has already revised these times once)
+applied to c1/c5/c15 in RegimeAgent, which is the ONLY source of
+indicator input for the downstream chain: RegimeAgent's own ATR/ADX plus
+`pa_candles:{sym}`, which PriceAction, S7, S8, S9 and MTF all read.
+Filtering there rather than in each indicator is the same reasoning that
+keeps the market-session check in one function.
+
+Option B — refusing to STORE the bars — was considered and explicitly
+rejected. They are real broker data, the official close is genuinely
+useful, and the chart should show what happened. Storage and indicator
+input are different questions. The test asserts the write path has no CAS
+filter, so a later "cleanup" cannot quietly turn A into B.
+
+### Not verified
+
+Futures trade continuously to 15:40 and should NOT be frozen, which is
+why the filter is scoped to index candles. That could not be confirmed:
+we archive futures OI but NOT futures candles (0 bars for security_id
+58072 today). Anything that wants to trade the 15:15-15:40 window needs
+futures candle archiving first, and that assumption should be tested
+rather than trusted.
+
 ## v59.16 — A1 fully diagnosed: TWO causes, and I dismissed one too early (2026-08-04)
 
 The live session finished the diagnosis the archive could only half
@@ -5485,6 +5561,13 @@ premium against a 60% documented bound. The rupee caps bound the amount,
 not the fraction, so a cheap option with the same stop passes. One line
 (clamp `sl` through the same `STOP_BOUNDS` every other stop path uses).
 RISK-LAYER CHANGE — needs explicit approval.
+
+**B9. Archive futures CANDLES, not just futures OI.** Exposed 2026-08-04
+(v59.17): the index freezes at 15:15 under the new CAS rules, futures
+trade on to 15:40, so futures are the only instrument with real prices in
+that window — and we store no candles for them (0 bars for 58072). Also
+blocks confirming that futures are genuinely unfrozen, which the v59.17
+filter's scoping assumes.
 
 **B3. Deck setup 7 — the correction after Wave 5.** The only unbuilt
 feature item. v58.48 absorbed setups 4, 5 and 6 into S3 on the grounds

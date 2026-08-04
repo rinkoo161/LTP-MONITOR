@@ -41,6 +41,19 @@ DEFAULTS = {
     "fno_open_time": "09:15",
     "fno_squareoff_time": "15:22",
     "fno_close_time": "15:40",
+    # 2026-08-04 — F&O stocks stop trading continuously at 15:15 and enter
+    # the closing call auction. NIFTY/BANKNIFTY/FINNIFTY constituents ARE
+    # F&O stocks, so from this minute the INDEX stops being discovered and
+    # simply repeats its last value until the auction publishes the
+    # official close (observed ~15:28, a ~150-point step on 2026-08-04).
+    #
+    # Verified against the broker, not inferred: Dhan returns 0 flat 1m
+    # index bars for 15:15-15:30 on 2026-07-30 and 30 of 32 on 2026-08-03,
+    # the first session under the new rules. The bars are REAL broker data
+    # and are still stored — only INDICATOR input is filtered, because an
+    # ATR or a ZigZag pivot computed across that step reads a 150-point
+    # breakout that never traded.
+    "cas_freeze_time": "15:15",
     "market_data_feed": "rest",  # "rest" (default, proven) or "websocket"
                                  # (dhan_ws.py — run test_dhan_ws.py against
                                  # a live account first, see its docstring)
