@@ -4,6 +4,87 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.27 — the S9 calibration defect was the INSTRUMENT, not the signals (2026-08-05)
+
+Asked to fix "the two code defects" I had reported in the S9 calibration
+analysis. Neither was a code defect. Investigating that turned up a real
+one underneath, which is what had produced the false diagnosis.
+
+### Both reported defects were WRONG
+
+**`bb_corrective_stall` — not established.** I said the signal never fires
+because `stall_dir` disagrees with the trade direction. That inference
+came entirely from the `direction` column being None on all 21
+CORRECTIVE_STALL rows. `direction` is None on ALL 204 rows: the column is
+never populated. And `stall_dir` is not stored at all, so one side of the
+comparison had never been recorded. The claim had no evidence behind it.
+
+**`gmma_expansion` — a threshold, not logic.** Measuring the real ribbon
+geometry on today's 385 NIFTY 1m closes:
+
+    separation reached  24 / 320 bars (7.5%)
+    p50 0.0142%   p90 0.0438%   p99 0.0843%   max 0.0859%
+    gmma_min_separation_pct = 0.05%      <- sits ABOVE p90
+
+The signal is starved because its threshold is set above the 90th
+percentile of the instrument's actual geometry, not because the state
+machine is broken. That is a calibration finding, which is what this
+exercise was for — and it contradicts my own earlier sentence that
+"neither is a threshold problem".
+
+### The REAL defect: a column that could never be populated
+
+`history.log_ta_observation` writes `conf.get("_direction")`, and NOTHING
+anywhere writes `_direction` into `conf`. The `direction` column has been
+structurally NULL since it was added.
+
+That is worse than a missing column, because it LOOKS like data. It is
+what led me to a confident, wrong conclusion about `bb_corrective_stall`
+— the first real calibration set this project has ever had, and one of
+its columns was decorative.
+
+Fixed: `ta_elliott` now writes `conf["_direction"]` and `conf["_stall_dir"]`,
+and `stall_dir` is a new column, because the `bb_corrective_stall`
+question CANNOT be answered without both sides of `stall_dir == d`.
+
+### A regression the suite caught immediately
+
+Adding the column to `_migrate_columns` alone broke the PK-rebuild path.
+`ta_calibration` has THREE schema definitions that must agree — the main
+CREATE, the rebuild CREATE, and the migration list. With the column in
+only the migration list, the rebuild copied 35 columns into a 34-column
+CREATE, the copy failed inside a `try/except`, and the table was left
+without its PRIMARY KEY — which the file's own comment says silently
+disables INSERT OR REPLACE dedupe.
+
+`test_schema_migration_and_grouping` failed on exactly that. Its width
+check had been hardcoded to 34; it now DERIVES the expected width from
+the migration list, so a real regression still fails while an intentional
+column does not.
+
+### What the calibration data actually says
+
+    204 observations, 51 distinct 5m candles
+    confluence   0 -> 28,  1 -> 149,  2 -> 27,  3+ -> ZERO
+    ta_min_confluence = 3, so S9 CANNOT fire at the shipped threshold
+
+    adx_dynamic          82.4%   near-constant, little discrimination
+    hidden_divergence    10.3%
+    macd_zero_reversal    6.9%
+    bb_corrective_stall     0%   state seen 21x; comparison unmeasurable
+    gmma_expansion          0%   threshold above p90 of real geometry
+    regular_divergence      0%   0 of 204 rows have >=2 pivot lows
+    rsi_divergence          0%   same
+
+`ta_zigzag_deviation_pct = 0.5` yielding ZERO usable pivot lows is the
+one clean threshold finding. The rest is not a tuning problem: three of
+seven signals function, one of those is on 82% of the time, and a
+confluence of 3 is arithmetically out of reach.
+
+NOTHING was tuned. Every threshold change alters what the strategy sees
+and needs its own decision — and one session of data is thin ground for
+any of them.
+
 ## v59.26 — first clean session, and two dead-code defects it exposed (2026-08-05)
 
 The first session in this engagement where the machine stayed awake

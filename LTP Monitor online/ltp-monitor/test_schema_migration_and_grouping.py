@@ -97,11 +97,21 @@ cc.commit(); cc.close()
 # state behind; restoring is not optional.
 import importlib as _il
 _il.reload(history)
+# 2026-08-05 — this was hardcoded to 34 and broke the moment a column was
+# legitimately added (`stall_dir`, so the bb_corrective_stall question is
+# answerable at all). Derive the width from the MIGRATION LIST in
+# history.py, which is the source of truth: a real width regression still
+# fails, and an intentional new column does not.
+import re as _re
+_mig = _re.search(r'_migrate_columns\(c, "ta_calibration", \[(.*?)\]\)',
+                  open("history.py").read(), _re.S).group(1)
+_EXPECTED_COLS = len(_re.findall(r'\("(\w+)"\s*,', _mig))
 _c3 = history._conn()
 _final = [r[1] for r in _c3.execute("PRAGMA table_info(ta_calibration)")]
 _c3.close()
 check("the table is restored to full width for later suites",
-      len(_final) == 34, f"{len(_final)} columns")
+      len(_final) == _EXPECTED_COLS,
+      f"{len(_final)} columns, migration list declares {_EXPECTED_COLS}")
 check("a PARTIAL table is repaired, not just an outdated one",
       all(k in _final for k in ("route", "bb_state", "adx", "blocked")),
       "listing only the newest columns repeats the original assumption")
@@ -129,7 +139,8 @@ _cy.close()
 check("the PRIMARY KEY is restored", "PRIMARY KEY" in _sql,
       "SQLite cannot ALTER one in, so the table must be rebuilt")
 check("existing rows survive the rebuild", _n == 1, f"{_n} rows")
-check("width is correct after rebuild", _w == 34, f"{_w} columns")
+check("width is correct after rebuild", _w == _EXPECTED_COLS,
+      f"{_w} columns, migration list declares {_EXPECTED_COLS}")
 check("without a PK, INSERT OR REPLACE silently stops deduping",
       "dedupe was silently disabled" in open("history.py").read())
 _cz = _sq.connect(_dbp); _cz.execute("DELETE FROM ta_calibration"); _cz.commit(); _cz.close()

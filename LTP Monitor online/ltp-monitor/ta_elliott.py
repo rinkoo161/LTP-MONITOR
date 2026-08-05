@@ -638,6 +638,19 @@ def evaluate(state, c1=None, params=None, taken_today=0, pivots=None):
     d = tide if tide else bb.get("stall_dir")
     if not d:
         return None, dict(conf, direction="skipped (no direction available)")
+    # 2026-08-05 — history.log_ta_calibration reads conf["_direction"] and
+    # NOTHING ever wrote it, so the `direction` column was NULL on all 204
+    # rows of the first real calibration set. That is worse than a missing
+    # column: it looks like data. It led me to conclude bb_corrective_stall
+    # never fires because stall_dir disagrees with the direction — an
+    # inference drawn entirely from an always-null field.
+    #
+    # `_stall_dir` is recorded alongside it because the bb_corrective_stall
+    # question CANNOT be answered without both: the signal requires
+    # `stall_dir == d`, and only one side of that comparison was ever
+    # stored.
+    conf["_direction"] = d
+    conf["_stall_dir"] = bb.get("stall_dir")
 
     # The gate is "do not CHASE an impulse", not "must be positively
     # classified as corrective". Measured on replay: the Bollinger

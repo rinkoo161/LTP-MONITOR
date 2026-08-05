@@ -166,6 +166,7 @@ def _ensure_schema(c):
     c.execute("""CREATE TABLE IF NOT EXISTS ta_calibration(
         ts INTEGER, as_of INTEGER, day TEXT, symbol TEXT, strategy TEXT,
         phase TEXT, route TEXT, tide INTEGER, direction INTEGER,
+        stall_dir INTEGER,
         bb_state TEXT, gmma_state TEXT, adx REAL, dynamic INTEGER,
         macd_zero_reversal INTEGER, rsi REAL,
         sig_bb_stall INTEGER, sig_gmma INTEGER, sig_macd_zero INTEGER,
@@ -205,6 +206,7 @@ def _ensure_schema(c):
         ("ts", "INTEGER"), ("as_of", "INTEGER"), ("day", "TEXT"),
         ("symbol", "TEXT"), ("strategy", "TEXT"), ("phase", "TEXT"),
         ("route", "TEXT"), ("tide", "INTEGER"), ("direction", "INTEGER"),
+        ("stall_dir", "INTEGER"),
         ("bb_state", "TEXT"), ("gmma_state", "TEXT"), ("adx", "REAL"),
         ("dynamic", "INTEGER"), ("macd_zero_reversal", "INTEGER"),
         ("rsi", "REAL"), ("sig_bb_stall", "INTEGER"), ("sig_gmma", "INTEGER"),
@@ -234,6 +236,7 @@ def _ensure_schema(c):
             c.execute("""CREATE TABLE ta_calibration(
                 ts INTEGER, as_of INTEGER, day TEXT, symbol TEXT, strategy TEXT,
                 phase TEXT, route TEXT, tide INTEGER, direction INTEGER,
+                  stall_dir INTEGER,
                 bb_state TEXT, gmma_state TEXT, adx REAL, dynamic INTEGER,
                 macd_zero_reversal INTEGER, rsi REAL,
                 sig_bb_stall INTEGER, sig_gmma INTEGER, sig_macd_zero INTEGER,
@@ -851,7 +854,7 @@ def log_ta_observation(symbol, strategy, state, conf, fired=False, blocked=None)
     # Found because a migrated table put confluence_hits at position 6.
     c.execute("""INSERT OR REPLACE INTO ta_calibration
                  (ts, as_of, day, symbol, strategy, phase, route, tide,
-                  direction, bb_state, gmma_state, adx, dynamic,
+                  direction, stall_dir, bb_state, gmma_state, adx, dynamic,
                   macd_zero_reversal, rsi, sig_bb_stall, sig_gmma,
                   sig_macd_zero, sig_hidden_div, sig_regular_div,
                   sig_rsi_div, sig_adx, confluence_hits, confluence_need,
@@ -859,10 +862,10 @@ def log_ta_observation(symbol, strategy, state, conf, fired=False, blocked=None)
                   gmma_thresh, gmma_tf, pivots_5m, pivot_lows, pivot_highs)
                  VALUES
                  (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,
-                  ?,?,?,?,?,?,?,?)""", (
+                  ?,?,?,?,?,?,?,?,?)""", (
         int(time.time()), int(as_of), _now_ist_date(), symbol, strategy,
         state.get("phase"), state.get("route"), state.get("tide"),
-        conf.get("_direction"),
+        conf.get("_direction"), conf.get("_stall_dir"),
         bb.get("state"), gm.get("state"), state.get("adx"),
         1 if state.get("dynamic") else 0,
         state.get("macd_zero_reversal"), state.get("rsi"),
