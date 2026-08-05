@@ -86,9 +86,20 @@ check("watch_symbols is a SEPARATE config key from the traded list",
 # The archiver is the only consumer. If a strategy/execution path ever
 # reads watch_symbols, this fails and someone has to justify it.
 AG = open(os.path.join(HERE, "agents.py")).read()
-_readers = AG.count('cfg.get("watch_symbols"')
+_readers = AG.count("watch_symbols")
 check("exactly one reader of watch_symbols in agents.py", _readers == 1,
       f"{_readers} — it must stay archive-only")
+# 2026-08-05 — this check previously counted the literal
+# `cfg.get("watch_symbols"`. That string was PRESENT and the code was
+# DEAD: `cfg` is not bound in _run(), so every daily cycle raised
+# NameError and the loop never ran once from v59.22 until it was found by
+# reading the log. Counting a substring cannot see a runtime binding
+# error. Pin the resolved form instead, and note plainly that this is
+# still a source check — the only thing that actually proved the loop
+# works was executing it against the broker.
+check("the reader uses a name that is actually bound in scope",
+      'config.load().get("watch_symbols")' in AG,
+      "`cfg` is not defined in _run(); config is a module-level import")
 
 print("\n3b) FILINGS — materiality is a tier, never a direction")
 import filings as _fl

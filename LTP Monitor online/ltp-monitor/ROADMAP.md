@@ -4,6 +4,92 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.26 — first clean session, and two dead-code defects it exposed (2026-08-05)
+
+The first session in this engagement where the machine stayed awake
+through market hours. It settled the outstanding questions and exposed
+two defects that only a real cycle could reveal.
+
+### A1 IS CLOSED — and it was sleep, not the freshness window
+
+    2026-08-03     9 rows /  3 candles   (machine asleep)
+    2026-08-04    25 rows /  8 candles   (machine asleep)
+    2026-08-05   204 rows / 51 candles   (awake)
+
+51 candles is enough to calibrate S9 thresholds, which was A1's entire
+purpose and has never been possible before.
+
+`pack_stale` did NOT fire once. Every skip today was `pack_absent`,
+always exactly one symbol, always exactly one 180s agent cycle, always
+self-resolving. The `pack["ts"] > 240` freshness window I proposed,
+buried, resurrected and defended across three releases is DEAD — and the
+split I built specifically to test it is what killed it. The remaining
+shortfall against the ~300 design target is the 23-bar morning blackout,
+a separate and already-documented issue.
+
+### The v59.1 boundary is proven
+
+    2026-08-04   square-off fired 15:29:04   4 min PAST the broker's 15:25
+    2026-08-05   square-off fired 15:23:00   2 min BEFORE it
+
+Book flat at 15:23. Yesterday's 15:29 was the machine asleep and proved
+nothing about the code. Note ~60s of loop latency against a 15:22
+boundary even with the execution agent on a 2s cycle — the 3-minute
+margin absorbs it, and anyone tempted to tighten `fno_squareoff_time`
+toward 15:25 should know that is why it exists.
+
+### TWO DEFECTS in code I shipped, both DEAD CODE, both mine
+
+**1. `cfg` is not bound in `_run()`.** The watch-symbol archive loop
+added in v59.22 raised `NameError` on every daily cycle since. It never
+ran once. ADANIENSOL archived nothing for two days while appearing
+configured and validated.
+
+It failed LOUDLY — `⚠ name 'cfg' is not defined` at 16:31:39 — and was
+still missed, because the message names no context and nothing was
+watching for it. "Fails loudly" is not the same as "is noticed".
+
+**2. `sync_day_chain` was index-only in TWO places.** `SEG[symbol]`
+KeyError'd on ADANIENSOL, and the underlying-candle probe calls
+`_intraday_range()`, which does `UNDERLYINGS[symbol]` internally. Third
+and fourth index-only maps in this call path, after
+`broker_adapter.UNDERLYINGS` and `dhan_scrip_master`'s exchange table.
+The probe is now SKIPPED for non-index symbols rather than generalised —
+it exists to detect "market closed" before walking the chain, the option
+legs are what a watch symbol needs, and generalising it would mean a
+fifth segment mapping.
+
+After both fixes, executed against the live broker: **36 ADANIENSOL
+option legs archived, 126 legs registered, 385 futures candles.**
+
+### The test that guarded it was worthless, and why
+
+It asserted `AG.count('cfg.get("watch_symbols"') == 1`. The string was
+present. The code was dead. A substring count cannot see a runtime
+binding error, and this is the SECOND time in two days a source-presence
+check passed on broken code — the first was the rail label, where a CSS
+class that does not exist passed every string and syntax check.
+
+Both were found by a human looking at the running system, not by the
+suite. The only thing that proved the archive works was executing it.
+
+### Session result
+
+    14 trades, 10 wins, P&L +Rs1,649
+      spreads              7 trades, 5 wins, +Rs  530
+      directional options  7 trades, 5 wins, +Rs1,119
+
+    116 signals, 109 rejected, 7 approved (6%)
+      94 timeframe confluence  ·  51 regime choppy/rangebound
+
+Exits were dominated by profit floor/lock (5) and captured credit (3) —
+only 2 reached the 15:22 square-off. The largest single winner was a
+SENSEX PE at +Rs2,009 exited on the profit floor.
+
+Directional options OUTPERFORMED spreads today (+1,119 vs +530), the
+reverse of 2026-08-04 (-386 vs +1,430). Two sessions is not a pattern,
+and neither day should be read as evidence about class edge.
+
 ## v59.25 — the rail label bug, and what "tested" did not mean (2026-08-05)
 
 Reported: the Watch icon showed raw "watch" text in the rail.

@@ -6317,7 +6317,14 @@ class BacktestAgent(Agent):
             # Chains are fetched straight from the broker rather than
             # through ctx["get_chain"], which carries index-shaped bus
             # caching this path has no business touching.
-            for wsym in (cfg.get("watch_symbols") or []):
+            # `cfg` is NOT in scope in _run() — referencing it raised
+            # NameError on every daily cycle from v59.22 until
+            # 2026-08-05, so this loop never ran once and ADANIENSOL
+            # archived nothing. It failed LOUDLY ("name 'cfg' is not
+            # defined") and was still missed, because the message names
+            # no context and the test asserted the STRING was present
+            # rather than executing the loop.
+            for wsym in (config.load().get("watch_symbols") or []):
                 try:
                     import instrument_registry as _ireg
                     ok, why, _d = _ireg.validate(wsym)

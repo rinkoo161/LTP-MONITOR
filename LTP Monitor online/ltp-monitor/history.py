@@ -1600,18 +1600,30 @@ def sync_day_chain(get_chain, dhan, symbol, log=print, progress=lambda m: None):
     # a real API failure (502/500/DNS) must NOT be silently relabeled as
     # "market closed" — that mislabeling is exactly what hid a real Dhan
     # outage for SENSEX on 2026-07-21 behind a misleading log line.
-    seg_kind, sec = SEG[symbol]
-    try:
-        probe = _dhan_call_with_retry(dhan._intraday_range, symbol, "1", day, day)
-    except Exception as e:
-        log(f"  {symbol}: chain sync FAILED after retries — {str(e)[:150]}")
-        log_sync(symbol, f"failed: {str(e)[:100]}")
-        return 0
-    if not probe:
-        log(f"  {symbol}: no candles today (market closed) — skipping")
-        log_sync(symbol, "skipped: market closed")
-        return 0
-    upsert_candles(sec, probe)
+    # 2026-08-05 — this function was INDEX-ONLY in two places at once and
+    # both KeyError'd on the first watch symbol: SEG[symbol] here, and
+    # _intraday_range() below, which does UNDERLYINGS[symbol] internally.
+    # That is the third and fourth index-only map in this call path, after
+    # broker_adapter.UNDERLYINGS and dhan_scrip_master's exchange table.
+    #
+    # The underlying-candle PROBE is skipped for non-index symbols rather
+    # than generalised: it exists to detect "market closed" before walking
+    # the chain, the option legs below are what actually matter for a watch
+    # symbol, and generalising it would mean a fifth segment mapping.
+    # Indices keep the proven path untouched.
+    if symbol in SEG:
+        seg_kind, sec = SEG[symbol]
+        try:
+            probe = _dhan_call_with_retry(dhan._intraday_range, symbol, "1", day, day)
+        except Exception as e:
+            log(f"  {symbol}: chain sync FAILED after retries — {str(e)[:150]}")
+            log_sync(symbol, f"failed: {str(e)[:100]}")
+            return 0
+        if not probe:
+            log(f"  {symbol}: no candles today (market closed) — skipping")
+            log_sync(symbol, "skipped: market closed")
+            return 0
+        upsert_candles(sec, probe)
     chain = get_chain(symbol)
     n_ok = 0
     n_failed = 0
