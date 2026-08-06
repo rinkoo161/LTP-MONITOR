@@ -70,7 +70,10 @@ check("and the fallback is the flat model, not zero", bad >= flat,
 
 print("\n5) it reuses the EXISTING models, it does not add a third")
 AG = open(os.path.join(HERE, "agents.py")).read()
-body = AG.split("def realistic_fees(")[1]
+# realistic_fees() is now a thin wrapper returning the total; the model
+# dispatch lives in _cost_parts(), which is what must not grow its own
+# copy of the tax table.
+body = AG.split("def _cost_parts(")[1]
 body = body[:body.index("\ndef ")]
 check("options path calls options_costs", "options_costs" in body)
 check("futures path calls futures_costs", "futures_costs" in body)
@@ -86,9 +89,21 @@ flat_sites = [l for l in _code
               if re.search(r'fees\s*=\s*round\(cfg\.get\("fee_per_lot"', l)]
 check("no live exit still computes fees from the flat model",
       not flat_sites, f"{flat_sites}")
-check("three exit paths call realistic_fees",
-      sum(1 for l in _code if "fees = realistic_fees(" in l) == 3,
+# 2026-08-06 — the exit paths now call realistic_costs(), which splits
+# statutory charges from the bid-ask, after a NIFTY round trip showed
+# Rs 133 against a fee_per_lot of 30. It is Rs 68.17 statutory +
+# Rs 65.00 bid-ask, and only the first is money a broker debits.
+check("three exit paths compute the cost split",
+      sum(1 for l in _code if "_c = realistic_costs(" in l) == 3,
       "single-leg options, spreads and futures")
+check("and each unpacks BOTH parts",
+      sum(1 for l in _code if 'fees, slippage = _c[' in l) == 3)
+check("P&L nets BOTH, so the total is unchanged",
+      sum(1 for l in _code if "gross - fees - slippage" in l) >= 3,
+      "splitting the label must not change what a trade earned")
+check("every closed record carries slippage",
+      AG.count("slippage=slippage") + AG.count('"slippage": slippage') == 3,
+      "a cost that is computed but not recorded cannot be audited later")
 
 print("\n7) the BACKTESTER agrees with live")
 BT = open(os.path.join(HERE, "backtester.py")).read()

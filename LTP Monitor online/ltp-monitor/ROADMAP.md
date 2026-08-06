@@ -4,6 +4,67 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.52 — costs split: fees are what the broker debits (2026-08-06)
+
+Asked why a NIFTY round trip showed Rs 133 when `fee_per_lot` is 30.
+It was not random, and it was not 30 either:
+
+    NIFTY 24650 CE, 65 qty, 144.6 -> 146.3
+      brokerage   Rs 20 x 2 orders                 = 40.00
+      STT         0.10% x sell notional            =  9.51
+      exchange    0.05% x both sides               =  9.45
+      stamp       0.003% x buy notional            =  0.28
+      GST         18% x (brokerage+exchange+SEBI)  =  8.90
+      ------------------------------------ statutory  68.17
+      bid-ask     0.5 pts x 65 lot x 2 txns        = 65.00
+      ------------------------------------ TOTAL    133.17
+
+Brokerage ALONE is Rs 40 for the round trip — already two-thirds of the
+Rs 60 the flat model charged, before a single tax. `fee_per_lot` has
+been a fallback since v59.49, not the charge.
+
+### Why they are now two columns
+
+The bid-ask half is NOT money a broker debits. It is the cost of
+crossing the spread, which this system would otherwise miss entirely
+because fills are recorded at LTP — between bid and ask — so the
+crossing never appears in the fill price. Real, but not a fee.
+
+`realistic_costs()` returns `{fees, slippage, total}`; all three exit
+paths record both, and P&L nets both. THE TOTAL IS UNCHANGED — this
+relabels, it does not re-price. Historical records were re-split the
+same way, with a guard that skips any row whose recomputed total moves
+by more than Rs 1.50, so no P&L could drift under cover of a relabel.
+
+    book P&L   -Rs 156,702  (unchanged)
+    of which   fees Rs 60,041 + slippage Rs 39,775 = Rs 99,816
+
+Slippage is 40% of all trading cost. On a 65-lot NIFTY option a
+one-point spread costs Rs 65 — more than every statutory charge
+combined.
+
+### The trade that prompted the question
+
+Entry 144.6 -> 146.3 on 65 qty is +Rs 110 gross against Rs 133 of
+cost. It could not have been profitable at any fill. That arithmetic is
+the restated book in miniature: a strategy taking 1-2 point scalps pays
+more to trade than the move is worth.
+
+### Test churn worth noting
+
+`test_notional_costs` failed twice on my own changes — first because
+the exit paths moved from `realistic_fees(` to `_c = realistic_costs(`,
+then because it sliced `realistic_fees()`, which is now a thin wrapper,
+to look for the model dispatch that had moved into `_cost_parts()`.
+Both were the test correctly noticing the shape had changed. Also
+briefly wrote `"slippage": slippage` three times into one record and
+`slippage=slippage` twice into another, from replacements that matched
+more than intended — caught by py_compile and a duplicate-key
+SyntaxError.
+
+`test_authoritative_prev_close` remains failing and remains
+unattributed (see v59.51). Suite 129/132, 1 failed — still NOT green.
+
 ## v59.51 — a FLOOR under fee_per_lot, because the warning was not enough (2026-08-06)
 
 184 of 300 journal records were charged ZERO fees across six sessions

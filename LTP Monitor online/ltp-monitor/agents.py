@@ -471,8 +471,47 @@ def paper_order_id():
     return f"PAPER-{int(time.time())}-{uuid.uuid4().hex[:8]}"
 
 
+def realistic_costs(kind, symbol, lots, premium_in, premium_out, cfg,
+                    legs=1, log=None):
+    """{"fees", "slippage", "total"} — statutory charges kept SEPARATE
+    from the cost of crossing the bid-ask.
+
+    2026-08-06, on being asked why a NIFTY round trip cost Rs 133 when
+    fee_per_lot is 30. It breaks down as Rs 68.17 statutory + Rs 65.00
+    bid-ask, and only the first is money a broker debits:
+
+        brokerage  Rs 20 x 2 orders            = 40.00
+        STT        0.10% x sell notional       =  9.51
+        exchange   0.05% x both sides          =  9.45
+        stamp      0.003% x buy notional       =  0.28
+        GST        18% x (brokerage+exch+sebi) =  8.90
+        ------------------------------------------------
+        bid-ask    0.5 pts x 65 lot x 2 txns   = 65.00
+
+    Reporting the sum as "fees" overstates what was charged. The
+    bid-ask is nonetheless a REAL cost this system would otherwise miss
+    entirely, because fills are recorded at LTP — between bid and ask —
+    so crossing the spread never appears in the fill price. Hence: both
+    are booked, under their own names.
+
+    P&L is unchanged: pnl = gross - fees - slippage, and fees +
+    slippage is exactly what the previous single figure was.
+    """
+    r = _cost_parts(kind, symbol, lots, premium_in, premium_out, cfg,
+                    legs=legs, log=log)
+    return r
+
+
 def realistic_fees(kind, symbol, lots, premium_in, premium_out, cfg,
                    legs=1, log=None):
+    """Total round-trip cost. Thin wrapper over realistic_costs() for
+    callers that only need one number (the replays)."""
+    return _cost_parts(kind, symbol, lots, premium_in, premium_out, cfg,
+                       legs=legs, log=log)["total"]
+
+
+def _cost_parts(kind, symbol, lots, premium_in, premium_out, cfg,
+                legs=1, log=None):
     """Round-trip cost in rupees, notional/premium-aware.
 
     2026-08-06. Every live P&L figure charged `fee_per_lot * lots * N` —
@@ -508,9 +547,11 @@ def realistic_fees(kind, symbol, lots, premium_in, premium_out, cfg,
             r = options_costs.cost_round_trip(
                 float(premium_in), float(premium_out), lot,
                 legs=legs, cfg=cfg)
-        total = float(r["total"]) * lots
-        if total > 0:
-            return round(total, 0)
+        stat = float(r.get("statutory", 0)) * lots
+        slip = float(r.get("spread", 0)) * lots
+        if stat + slip > 0:
+            return {"fees": round(stat, 0), "slippage": round(slip, 0),
+                    "total": round(stat + slip, 0)}
     except Exception as e:
         if log:
             log(f"cost model unavailable for {symbol} ({type(e).__name__}) "
@@ -525,7 +566,10 @@ def realistic_fees(kind, symbol, lots, premium_in, premium_out, cfg,
     import config as _cfg
     flat = max(float(cfg.get("fee_per_lot") or 0),
                float(_cfg.DEFAULTS.get("fee_per_lot", 40)))
-    return round(flat * lots * 2 * max(1, legs), 0)
+    # The flat model has no notion of a spread, so all of it is booked
+    # as fees rather than inventing a slippage split.
+    t = round(flat * lots * 2 * max(1, legs), 0)
+    return {"fees": t, "slippage": 0.0, "total": t}
 
 
 def instant_exit_reason(pos, ltp, spot):
@@ -4865,9 +4909,10 @@ class ExecutionAgent(Agent):
             else:
                 reason = f"{reason} [no broker/security_id for live close " \
                          f"— verify position at the broker manually]"
-        fees = realistic_fees("future", symbol, p["lots"],
-                              p.get("entry"), p.get("ltp") or p.get("entry"),
-                              cfg, log=lambda m: self.bus.log(self.name, m))
+        _c = realistic_costs("future", symbol, p["lots"],
+                             p.get("entry"), p.get("ltp") or p.get("entry"),
+                             cfg, log=lambda m: self.bus.log(self.name, m))
+        fees, slippage = _c["fees"], _c["slippage"]
         warn_zero_fees(self.bus, self.name, "position", p.get("lots"), fees)
         gross = p.get("pnl", 0)
         now = now_ist()
@@ -4883,8 +4928,8 @@ class ExecutionAgent(Agent):
         closed = dict(p, closed=now.strftime("%H:%M:%S"),
                       closed_date=now.strftime("%Y-%m-%d"),
                       closed_at=now.isoformat(),
-                      gross_pnl=gross, fees=fees,
-                      pnl=round(gross - fees, 0),   # NET, same convention
+                      gross_pnl=gross, fees=fees, slippage=slippage,
+                      pnl=round(gross - fees - slippage, 0),   # NET of BOTH cost parts
                       reason=reason)
         trades = self.bus.get("closed_trades", [])
         trades.append(closed)
@@ -4892,10 +4937,11 @@ class ExecutionAgent(Agent):
         _append_trade(closed)
         self.bus.log(self.name, f"FUT exit {p['side']} {symbol} — {reason} — "
                      f"gross \u20b9{gross:.0f}, fees \u20b9{fees:.0f}, "
-                     f"net \u20b9{gross - fees:.0f}")
+                     f"slippage \u20b9{slippage:.0f}, "
+                     f"net \u20b9{gross - fees - slippage:.0f}")
         self.bus.alert("high", self.name, symbol,
                        f"Futures {p['side']} closed — {reason} — "
-                       f"net \u20b9{gross - fees:.0f}")
+                       f"net \u20b9{gross - fees - slippage:.0f}")
         self.bus.publish("closed", closed)
         return {"ok": True, "closed": closed}
 
@@ -5556,10 +5602,11 @@ class ExecutionAgent(Agent):
             return {"error": "spread not found"}
         cfg = config.load()
         # fees: per lot per transaction; 2 legs x 2 transactions = 4
-        fees = realistic_fees("option", sp.get("symbol"), sp.get("lots"),
-                              sp.get("credit"), sp.get("pnl_per_share", 0),
-                              cfg, legs=2,
-                              log=lambda m: self.bus.log(self.name, m))
+        _c = realistic_costs("option", sp.get("symbol"), sp.get("lots"),
+                             sp.get("credit"), sp.get("pnl_per_share", 0),
+                             cfg, legs=2,
+                             log=lambda m: self.bus.log(self.name, m))
+        fees, slippage = _c["fees"], _c["slippage"]
         warn_zero_fees(self.bus, self.name, "spread", sp.get("lots"), fees)
         gross = sp.get("pnl", 0)
         now = now_ist()
@@ -5605,14 +5652,15 @@ class ExecutionAgent(Agent):
             "closed_date": now.strftime("%Y-%m-%d"),
             "closed_at": now.isoformat(),
             "opened": sp["opened"], "opened_ts": sp.get("opened_ts"), "paper": True,
-            "gross_pnl": gross, "fees": fees,
+            "gross_pnl": gross, "fees": fees, "slippage": slippage,
             "mfe": sp.get("mfe", 0), "mae": sp.get("mae", 0),
-            "pnl": round(gross - fees, 0),
+            "pnl": round(gross - fees - slippage, 0),
             "reason": f"[{sp['strategy']}] {reason}",
         }
         self.bus.log(self.name,
                      f"📄 SPREAD CLOSED {sp['strategy']} {sp['symbol']} — "
                      f"{reason} · gross ₹{gross:.0f} - fees ₹{fees:.0f} "
+                     f"- slippage ₹{slippage:.0f} "
                      f"= net ₹{closed['pnl']:.0f}")
         spreads.pop(sid, None)
         self.bus.set("spreads", spreads)
@@ -6371,10 +6419,11 @@ class ExecutionAgent(Agent):
         # fees: ₹fee_per_lot per lot per transaction; entry + exit = 2
         cfg = config.load()
         lots = p.get("lots") or max(1, round(p["qty"] / cfg["lot_sizes"].get(p["symbol"], 75)))
-        fees = realistic_fees("option", p.get("symbol"), lots,
-                              p.get("entry"), p.get("ltp") or p.get("entry"),
-                              cfg, legs=1,
-                              log=lambda m: self.bus.log(self.name, m))
+        _c = realistic_costs("option", p.get("symbol"), lots,
+                             p.get("entry"), p.get("ltp") or p.get("entry"),
+                             cfg, legs=1,
+                             log=lambda m: self.bus.log(self.name, m))
+        fees, slippage = _c["fees"], _c["slippage"]
         gross = p.get("pnl", 0)
         closed = dict(p,
                       closed=now.strftime("%H:%M:%S"),
@@ -6382,7 +6431,8 @@ class ExecutionAgent(Agent):
                       closed_at=now.isoformat(),
                       gross_pnl=gross,
                       fees=fees,
-                      pnl=round(gross - fees, 0),   # NET of fees
+                      slippage=slippage,
+                      pnl=round(gross - fees - slippage, 0),   # NET of BOTH cost parts
                       reason=reason)
         self.bus.set("position", None)
         positions.pop(symbol, None)
