@@ -3664,11 +3664,26 @@ class RiskAgent(Agent):
         # the cap.
         try:
             import sizing as _sz
-            _cap_lots, _cap_why = _sz.cap_by_rupee_risk(
+            # ONE lot, deliberately. This gate answers exactly one
+            # question: "can even a single lot fit inside the per-trade
+            # rupee cap?" — because if not, the order is unplaceable and
+            # should be rejected here rather than approved and refused a
+            # fraction of a second later at execution.
+            #
+            # 2026-08-06 — it previously passed cfg["lots_per_trade"],
+            # so the gate line read "capped 5->3 lot(s)" for a trade
+            # that execution then filled at ONE lot. Execution sizes via
+            # size_option_buy (dynamic sizing, deployed capital) and
+            # caps THAT; the gate cannot know the answer and should not
+            # print a number implying it does. Same class as the
+            # "✓ SENSEX is on hold" label shipped and fixed earlier the
+            # same day: a gate line stating something that is not true.
+            _one_lot, _cap_why = _sz.cap_by_rupee_risk(
                 cfg, job["symbol"], sig.get("entry"), sig.get("stoploss"),
-                cfg.get("lots_per_trade", 1),
-                key="option_risk_per_trade_rupees")
-            check(_cap_lots >= 1, _cap_why or "per-trade rupee cap")
+                1, key="option_risk_per_trade_rupees")
+            check(_one_lot >= 1,
+                  "per-trade rupee cap allows at least 1 lot"
+                  if _one_lot >= 1 else (_cap_why or "per-trade rupee cap"))
         except Exception as _e:
             # A failure to EVALUATE the cap must not silently approve.
             check(False, f"per-trade rupee cap could not be evaluated "

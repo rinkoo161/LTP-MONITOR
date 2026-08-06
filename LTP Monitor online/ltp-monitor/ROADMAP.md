@@ -4,6 +4,36 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.42 — the risk gate printed a lot count it could not know (2026-08-06)
+
+My own defect from v59.30. The gate line read
+
+    ✓ capped 5->3 lot(s): risk Rs 1,973 <= cap Rs 2,000
+
+for a trade execution then filled at ONE lot. The check passed
+`cfg["lots_per_trade"]` (5) into `cap_by_rupee_risk`, while execution
+sizes via `size_option_buy` — dynamic sizing, deployed capital — and
+caps THAT. The gate cannot know the final size and should not print a
+number implying it does.
+
+Same class as the "✓ SENSEX is on hold (paused_symbols)" label shipped
+and fixed earlier the same day, and as the 2026-08-03 exit label where
+"stoploss" was printed for profitable trail exits: a gate line stating
+something that is not true.
+
+The gate's actual job is narrower and it now says so — "can even ONE
+lot fit inside the per-trade rupee cap?" If not the order is
+unplaceable and belongs rejected here rather than approved and refused
+a fraction of a second later at execution. On today's geometry:
+
+    NIFTY      1 lot -> allowed
+    SENSEX     1 lot -> allowed
+    BANKNIFTY  1 lot risks Rs 3,450 > cap Rs 2,000 (115pt stop x 30)
+    FINNIFTY   1 lot risks Rs 3,540 > cap Rs 2,000 ( 59pt stop x 60)
+
+The DECISION is unchanged — the same trades pass and fail. Only the
+line stops asserting a size it never determined.
+
 ## v59.41 — the tuner now moves live, seeded so nothing moves today (2026-08-06)
 
 ### A correction to v59.39 first

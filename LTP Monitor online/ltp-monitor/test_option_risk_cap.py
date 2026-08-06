@@ -212,6 +212,19 @@ check("it reuses the SHARED helper, not a second implementation",
 check("a failure to EVALUATE the cap does not silently approve",
       "could not be evaluated" in _risk_body,
       "an exception here must reject, not pass")
+# 2026-08-06 — the gate passed cfg["lots_per_trade"], so its line read
+# "capped 5->3 lot(s)" for a trade execution then filled at ONE lot.
+# Execution sizes via size_option_buy (dynamic sizing, deployed capital)
+# and caps THAT; the gate cannot know the final size. It now asks the
+# only question it can answer — does even one lot fit — and its label
+# says exactly that.
+check("the gate tests ONE lot, not lots_per_trade",
+      'lots_per_trade' not in _risk_body.split("cap_by_rupee_risk")[1][:300],
+      "printing a lot count the trade will not use is the same class as "
+      "the '✓ SENSEX is on hold' label shipped and fixed the same day")
+check("and its PASSING label makes a claim it can support",
+      "allows at least 1 lot" in _risk_body,
+      "the gate decides placeable/unplaceable, not size")
 
 print("\n7) it sits AFTER sizing and BEFORE the order")
 i_size = AG.find("sizing.size_option_buy")
