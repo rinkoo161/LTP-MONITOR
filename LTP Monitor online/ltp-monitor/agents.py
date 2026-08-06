@@ -3506,8 +3506,15 @@ class RiskAgent(Agent):
               f"concurrent positions {len(positions)}/{max_pos}")
         check(trades < cfg["max_trades_per_day"],
               f"trades {trades}/{cfg['max_trades_per_day']}")
+        # The label must describe the PASSING state, like every other
+        # gate on this line ("market open", "autopilot not halted", "no
+        # open position on X"). Shipped first as "{sym} is on hold",
+        # which rendered as "✓ SENSEX is on hold (paused_symbols)" on
+        # an APPROVED order — reading as held-and-approved-anyway. Same
+        # class of dishonest label as the 2026-08-03 "stoploss" that was
+        # really a profitable trail exit.
         check(not symbol_paused(job["symbol"], cfg),
-              f"{job['symbol']} is on hold (paused_symbols)")
+              f"{job['symbol']} not on hold")
         # PER-TRADE RUPEE CAP, EVALUATED HERE RATHER THAN AT EXECUTION.
         #
         # 2026-08-06. This ceiling already existed, but only inside

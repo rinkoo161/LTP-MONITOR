@@ -66,6 +66,26 @@ check("the key is registered in DEFAULTS", "paused_symbols" in config.DEFAULTS,
       "config.save() silently drops unregistered keys — the hold would "
       "vanish on the next save")
 
+# 2026-08-06, shipped and caught live: the risk-gate label read
+# "{sym} is on hold (paused_symbols)", so an APPROVED order rendered as
+# "✓ SENSEX is on hold (paused_symbols)" — held and approved anyway.
+# Every other gate on that line names the PASSING state. Same class of
+# dishonest label as the 2026-08-03 "stoploss" that was really a
+# profitable trail exit.
+HERE0 = os.path.dirname(os.path.abspath(__file__))
+_ag = open(os.path.join(HERE0, "agents.py")).read()
+_gate = _ag.split("    def evaluate(self, job):")[1]
+_gate = _gate[:_gate.index("\n    def ")]
+# CODE lines only — the first version of this check also matched the
+# comment above it, so a comment alone could have satisfied it.
+_lbl = [l.strip() for l in _gate.splitlines()
+        if not l.strip().startswith("#") and 'f"' in l
+        and ("not on hold" in l or "is on hold" in l)]
+check("a gate label about the hold exists in code", len(_lbl) == 1, str(_lbl))
+check("and it names the PASSING state",
+      _lbl and "not on hold" in _lbl[0] and "is on hold" not in _lbl[0],
+      f"{_lbl} — a ✓ beside 'is on hold' reads as held-and-approved-anyway")
+
 print("\n2) ALL THREE entry paths are guarded, not just the risk gate")
 HERE = os.path.dirname(os.path.abspath(__file__))
 AG = open(os.path.join(HERE, "agents.py")).read()

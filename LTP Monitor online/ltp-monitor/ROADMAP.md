@@ -4,6 +4,34 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.34 — the hold's gate label said the opposite of what it meant (2026-08-06)
+
+Caught live, minutes after v59.33 shipped, on an APPROVED order:
+
+    ✓ SENSEX is on hold (paused_symbols)
+
+A tick beside "SENSEX is on hold" reads as held-and-approved-anyway.
+The behaviour was correct — SENSEX is not held, BANKNIFTY is, and the
+trade rightly filled — but the label described the FAILING state while
+every other gate on that line describes the passing one: "market open",
+"autopilot not halted", "no open position on SENSEX".
+
+Same class of defect as the 2026-08-03 exit label, where "stoploss" was
+printed for trail exits that were actually banking a profit and made 8
+of 34 exits unanalysable. A gate line is read by a human deciding
+whether to trust the system; one that states the inverse of the truth
+is worse than no line.
+
+Now `{sym} not on hold`.
+
+### The test that pins it was itself sloppy first
+
+The check scanned `RiskAgent.evaluate`'s body for lines mentioning the
+hold — and matched the explanatory COMMENT above the code, so a comment
+alone could have satisfied it. Narrowed to code lines carrying an
+f-string, plus an assertion that there is EXACTLY ONE such label, so a
+second one drifting in gets caught rather than averaged over.
+
 ## v59.33 — BANKNIFTY held, and the P&L breakdown behind it (2026-08-06)
 
 The question asked was why the tool is "only stuck to 1000 to 2000"
