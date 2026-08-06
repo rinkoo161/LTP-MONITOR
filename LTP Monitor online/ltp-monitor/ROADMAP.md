@@ -4,6 +4,69 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.38 — phase 1c: a portfolio replay, and the hypothesis it tests (2026-08-06)
+
+    v59.36  exits shared      FINNIFTY replay -3,477  vs LIVE +4,702
+    v59.37  entries mirrored  LIVE 7.0 spreads/day across the WHOLE book
+                              per-pair replay ~17/day for ONE pair
+    v59.38  portfolio replay  2.9/day, max 2 concurrent (LIVE: 2)
+
+`backtester.replay_portfolio()` walks all four symbols and both
+strategies TOGETHER against ONE slot pool and ONE capital pool, exits
+via the shared `agents.spread_exit_reason`, and admits entries on the
+same five rules `_auto_spreads` uses — reading the same config keys, so
+a Settings change moves both together.
+
+Concurrency fidelity is now measurable rather than asserted: the replay
+peaks at 2 simultaneous spreads and live peaked at 2 on 2026-08-06.
+
+### An arithmetic error of mine, corrected here
+
+I read `capital 200,000 x 60% / margin 85,000 = 1` and said the cap
+allowed only ONE concurrent spread, contradicting live's observed two.
+Wrong: the check tests deployed capital BEFORE adding the new spread,
+so one open spread reads 42.5% < 60% and a second is admitted; the
+third is refused at 85%. Cap is 2, matching live. The 21,805
+`capital_concentration` refusals are ticks while full, not a stuck cap.
+
+### What the portfolio replay says
+
+    12 days, n=32, Rs -1,321, win 34%, mean -41
+    BANKNIFTY  n=16  -1,117  31%
+    NIFTY      n= 7    -390  29%
+    FINNIFTY   n= 9    +186  44%
+    bull_put_spread   n=20  -2,601  30%
+    bear_call_spread  n=12  +1,280  42%
+
+Note bear_call is POSITIVE here while bull_put is negative — the
+opposite of the per-pair replay, and a different split again from live.
+That is exactly why the per-pair numbers should not have been trusted.
+
+### The remaining divergence, stated rather than buried
+
+    replay 2.9 spreads/day    LIVE 7.0
+
+`_eval_with_params` calls
+`slib.evaluate(name, analysis, {"regime": "rangebound"})` — a HARDCODED
+permissive regime with NO candles. Live passes the real regime and
+`regime_candles:{sym}`. So eligibility is still decided on different
+inputs, and closing it needs historical regime reconstructed from the
+archived index candles. That is phase 1d, and
+`test_portfolio_replay` asserts the hardcoded regime is STILL THERE so
+it cannot be mistaken for fidelity.
+
+### The hypothesis is still open, and now testable
+
+The capacity hypothesis from v59.37 — that live's profitability comes
+from being capacity constrained rather than from setup quality — is not
+settled by this. The portfolio replay is negative (-1,321) where live
+was positive, but it also takes 2.9/day against live's 7.0 on different
+eligibility inputs. Two variables still move at once. Phase 1d removes
+the second.
+
+NOTHING has been tuned, disabled or promoted on the strength of any
+number in this entry.
+
 ## v59.37 — phase 1b: the entries were the difference, and one cap cannot be modelled (2026-08-06)
 
 v59.36 shared the EXIT decision and the replay still disagreed with live

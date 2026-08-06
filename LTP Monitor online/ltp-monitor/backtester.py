@@ -28,6 +28,7 @@ def _completed_days(day_list):
     return [d for d in day_list if d != today]
 
 import statistics
+import collections
 import history
 import agents as _ag
 import config
@@ -417,6 +418,141 @@ def replay_spreads(symbol, name, params=None, days=None, log=lambda m: None):
                            "entry_ts": ts, "entry_spot": chain["spot"]})
         log(f"  {day}: cumulative trades {len(trades)}")
     return trades
+
+
+def replay_portfolio(symbols=None, names=None, days=None, log=lambda m: None):
+    """Walk ALL symbols and strategies TOGETHER against ONE shared slot
+    count and ONE shared capital pool — the way live actually runs.
+
+    2026-08-06, phase 1c. `replay_spreads(symbol, name)` walks a single
+    pair in isolation, so `max_concurrent_spreads` (10 slots) and
+    `max_spread_capital_pct` (60% of capital) get applied as though that
+    pair owned the entire book. Measured consequence:
+
+        LIVE     7.0 spreads/day across the WHOLE book
+        per-pair replay  ~17/day for FINNIFTY bull_put ALONE
+
+    Ten times the setups live could ever have taken. Those extra trades
+    were net NEGATIVE, which raised the hypothesis this function exists
+    to test: that live's profitability comes from being CAPACITY
+    CONSTRAINED — the caps acting as an accidental filter — rather than
+    from setup quality. If so, "trade more" loses money.
+
+    Exits go through agents.spread_exit_reason, the same function the
+    live monitor calls (v59.36). Entry admission mirrors _auto_spreads:
+    60s evaluation gate, portfolio slot count, per-(symbol,strategy)
+    re-entry cooldown, consecutive-loss halt, and the capital cap
+    computed on the SAME basis live uses
+    (margin_per_lot_spread x lots vs backtest_capital).
+    """
+    cfg = config.load()
+    symbols = symbols or ["NIFTY", "BANKNIFTY", "FINNIFTY", "SENSEX"]
+    names = names or ["bull_put_spread", "bear_call_spread"]
+    eval_gap = 60
+    max_open = int(cfg.get("max_concurrent_spreads", 2))
+    cooldown = cfg.get("spread_reentry_cooldown_min", 15) * 60
+    stop_n = cfg.get("spread_stop_after_consecutive_losses", 2)
+    capital = cfg.get("backtest_capital", 200000)
+    margin_per_lot = cfg.get("margin_per_lot_spread", 85000)
+    max_cap_pct = cfg.get("max_spread_capital_pct", 60.0)
+    fee_per = cfg.get("fee_per_lot", 40) * 4
+
+    day_sets = [set(history.chain_days(s)) for s in symbols]
+    all_days = sorted(_completed_days(sorted(set.union(*day_sets))))
+    if days:
+        all_days = [d for d in all_days if d in set(days)]
+
+    trades, skipped = [], collections.Counter()
+    for day in all_days:
+        frames = {}
+        for sym in symbols:
+            for ts, chain in history.day_chain_frames(sym, day):
+                frames.setdefault(ts, {})[sym] = chain
+        stamps = sorted(frames)
+        if len(stamps) < 30:
+            continue
+        open_list, cd, consec, last_eval = [], {}, collections.Counter(), 0
+        for ts in stamps:
+            here = frames[ts]
+            # ---- manage every open spread first (slots free before entries)
+            for sp in list(open_list):
+                chain = here.get(sp["symbol"])
+                if not chain:
+                    continue
+                pnl_ps, ok = 0.0, True
+                for leg in sp["legs"]:
+                    row = next((r for r in chain["rows"]
+                                if r["strike"] == leg["strike"]), None)
+                    ltp = row and row[leg["leg"].lower()].get("ltp")
+                    if not ltp:
+                        ok = False
+                        break
+                    pnl_ps += ((leg["entry"] - ltp) if leg["action"] == "SELL"
+                               else (ltp - leg["entry"]))
+                if not ok:
+                    continue
+                tot = pnl_ps * sp["qty"]
+                sp["mfe"] = max(sp.get("mfe", 0), tot)
+                sp["mae"] = min(sp.get("mae", 0), tot)
+                reason = _ag.spread_exit_reason(
+                    sp, pnl_ps, chain.get("spot"), cfg,
+                    now_ts=ts, market_is_open=(ts != stamps[-1]))
+                if reason:
+                    pnl = round(tot - fee_per, 0)
+                    trades.append({"day": day, "symbol": sp["symbol"],
+                                   "strategy": sp["strategy"], "pnl": pnl,
+                                   "reason": reason, "entry_ts": sp["opened_ts"],
+                                   "exit_ts": ts})
+                    open_list.remove(sp)
+                    k = f"{sp['symbol']}:{sp['strategy']}"
+                    consec[k] = consec[k] + 1 if pnl < 0 else 0
+            # ---- then consider new entries, against the SHARED limits
+            if ts - last_eval < eval_gap:
+                continue
+            last_eval = ts
+            for sym in symbols:
+                chain = here.get(sym)
+                if not chain:
+                    continue
+                analysis = _an.analyze(chain)
+                for name in names:
+                    if len(open_list) >= max_open:
+                        skipped["max_concurrent"] += 1
+                        continue
+                    k = f"{sym}:{name}"
+                    if ts - cd.get(k, 0) < cooldown:
+                        skipped["on_cooldown"] += 1
+                        continue
+                    if stop_n and consec[k] >= stop_n:
+                        skipped["consec_loss_halt"] += 1
+                        continue
+                    # Recomputed from the CURRENT open list every time —
+                    # live had a bug where a stale pre-cycle figure let
+                    # several spreads each pass the same check.
+                    deployed = sum(margin_per_lot * (x.get("lots") or 1)
+                                   for x in open_list)
+                    if capital > 0 and (deployed / capital * 100) >= max_cap_pct:
+                        skipped["capital_concentration"] += 1
+                        continue
+                    pp = get_params(name, sym)
+                    ev = _eval_with_params(name, analysis, pp)
+                    if not (ev and ev.get("eligible")):
+                        continue
+                    lot = cfg["lot_sizes"].get(sym, 75)
+                    credit = ev["credit"]
+                    open_list.append({
+                        "legs": [dict(l, entry=l["ltp"]) for l in ev["legs"]],
+                        "credit": credit, "max_loss": ev["max_loss"],
+                        "short_strike": ev["short_strike"],
+                        "width": ev.get("width") or abs(ev["legs"][0]["strike"]
+                                                        - ev["legs"][1]["strike"]),
+                        "symbol": sym, "strategy": name, "qty": lot, "lots": 1,
+                        "profit_target": credit * pp["profit_capture"],
+                        "loss_limit": min(credit * pp["loss_mult"], ev["max_loss"]),
+                        "opened_ts": ts, "mfe": 0.0, "mae": 0.0})
+                    cd[k] = ts        # live stamps on ENTRY, not on exit
+        log(f"  {day}: cumulative {len(trades)}")
+    return {"trades": trades, "skipped": dict(skipped), "days": all_days}
 
 
 def _eval_with_params(name, analysis, p):
