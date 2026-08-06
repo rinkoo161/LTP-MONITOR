@@ -444,6 +444,33 @@ def spread_exit_reason(sp, pnl_ps, spot, cfg, now_ts, market_is_open,
     return None
 
 
+def paper_order_id():
+    """A paper order id that is actually unique.
+
+    2026-08-06. It was `f"PAPER-{int(time.time())}"` — SECOND
+    resolution — so any two positions opened in the same second shared
+    one. Found while purging duplicate journal closes: keying on
+    order_id alone reported four duplicate groups, and two of them were
+    not duplicates at all but DIFFERENT INSTRUMENTS sharing an id:
+
+        PAPER-1785143942 -> SENSEX + FINNIFTY + NIFTY futures
+        PAPER-1785144544 -> NIFTY + SENSEX futures
+
+    all opened 2026-07-27 14:49:02 and 14:59:04 respectively. A filter
+    that trusted the id would have deleted five genuine trades.
+
+    The uuid suffix also distinguishes ids minted by DIFFERENT
+    PROCESSES, which is not hypothetical: on 2026-08-06 a restart left
+    the previous process alive for three minutes and both wrote to the
+    same journal. A pid would cover that case; a uuid covers it and
+    restart-within-the-same-second too, without carrying state.
+
+    The epoch prefix is kept so ids still sort chronologically.
+    """
+    import uuid
+    return f"PAPER-{int(time.time())}-{uuid.uuid4().hex[:8]}"
+
+
 def instant_exit_reason(pos, ltp, spot):
     """The exit conditions that can already be TRUE at the moment of
     entry — evaluated against LIVE data, returning a reason or None.
@@ -4320,7 +4347,7 @@ class ExecutionAgent(Agent):
                              f"available \u20b9{max(0, capital - deployed):,.0f} "
                              f"(\u20b9{deployed:,.0f} already deployed across "
                              f"positions/spreads/futures)"}
-        order_id = f"PAPER-{int(time.time())}"
+        order_id = paper_order_id()
         if live:
             # Live path: real order on the FRONT-month contract's own
             # security_id (future_months:{sym}["front"] — populated by
@@ -5804,7 +5831,7 @@ class ExecutionAgent(Agent):
                            f"entry refused — already at exit: {_already}")
             return {"error": f"would exit immediately: {_already}"}
         if cfg["paper_mode"]:
-            order_id = f"PAPER-{int(time.time())}"
+            order_id = paper_order_id()
             self.bus.log(self.name, f"📄 PAPER BUY {qty} x {label} @ ₹{fill}")
         else:
             orders = self.ctx["orders_factory"]()

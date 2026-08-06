@@ -4,6 +4,67 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.43 — order_id was not unique, and a purge nearly acted on that (2026-08-06)
+
+`order_id = f"PAPER-{int(time.time())}"` — SECOND resolution. Any two
+positions opened in the same second shared one.
+
+Found while cleaning the two phantom journal closes from the
+two-process overlap. The purge keyed on order_id, reported FOUR
+duplicate groups rather than the expected two, and REFUSED TO WRITE.
+Two of those groups were not duplicates at all:
+
+    PAPER-1785143942 -> SENSEX + FINNIFTY + NIFTY futures  (14:49:02)
+    PAPER-1785144544 -> NIFTY + SENSEX futures             (14:59:04)
+
+Different instruments, same id, because they opened in the same second.
+A filter that trusted the id would have deleted FIVE genuine
+2026-07-27 futures trades. The refusal is the only reason it was
+noticed — the expected-count guard was written as a formality and
+turned out to be the thing that mattered.
+
+### Fix
+
+`paper_order_id()` — `PAPER-{epoch}-{uuid4[:8]}`, one helper, both call
+sites (options and futures). The epoch prefix keeps ids sortable; the
+uuid makes them unique within a second, ACROSS THREADS (manual_trade
+runs on the HTTP thread while cycle() runs on the agent thread), and
+across PROCESSES — which is not hypothetical, since a restart that day
+left the previous process alive for three minutes with both writing to
+the same journal.
+
+Verified: 2000 ids in a tight loop and 2000 across four threads, all
+unique, spanning 1-3 epoch seconds so the test is genuinely exercising
+same-second collision.
+
+### What it does NOT fix
+
+Ids minted BEFORE this change are still not unique and cannot be made
+so. Any dedup over historical records must therefore key on
+(order_id, symbol, strike, leg), and the test pins that as its own
+check rather than leaving it as folklore.
+
+### A third prose-matching slip
+
+The check for "no remaining old literal" scanned source with `#`
+comments filtered — and matched the new helper's own DOCSTRING quoting
+the old form to explain what it replaced. After test_symbol_hold's gate
+label and test_mechanism_defects' prompt check, that is three in one
+day. Fixed by making the check PRECISE rather than the filter wider: it
+now matches the ASSIGNMENT, which cannot appear in prose.
+
+### Also in this session, both done on request
+
+- `option_ai_auto_exit_enabled` -> False. All five auto-exits it had
+  ever taken would be blocked by v59.40's contradiction guard, so there
+  was no positive evidence it had ever made a good call. Advisory
+  alerts are unaffected.
+- The two phantom closes purged with the corrected key: 309 -> 307
+  records, zero duplicate positions remaining, 2026-08-06 now reads
+  -Rs 3,025 rather than -Rs 3,436. The 24 futures records from
+  2026-07-27 verified intact. Backup at
+  `~/.ltp-monitor/trades.pre-phantom-purge.jsonl`.
+
 ## v59.42 — the risk gate printed a lot count it could not know (2026-08-06)
 
 My own defect from v59.30. The gate line read
