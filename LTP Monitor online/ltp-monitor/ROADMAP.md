@@ -4,6 +4,38 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.48 — the theme toggle was broken by the restyle (2026-08-06)
+
+Reported: "no dark skin, it is showing white on toggle."
+
+The file ALREADY had the right structure and I ignored it:
+
+    <html data-theme="dark">     <- the default
+    :root{...}                   <- the DARK palette
+    [data-theme="light"]{...}    <- the LIGHT overrides
+
+v59.44 overwrote `:root` with the QC light values. So "dark" — which
+resolves to `:root` — rendered white, and there was nothing left to
+switch to. The light palette belonged in the block that already existed
+for exactly this purpose.
+
+Restored: `:root` back to the dark palette it always held, the QC light
+values moved into `[data-theme="light"]`, and the document default
+changed to `light` since that is what was asked for. The `--dark-*`
+copies added in v59.44 as a "one-line revert" are gone — they were a
+workaround for a problem I had created by discarding the real
+mechanism.
+
+Verified both ways rather than one: light resolves to
+rgb(255,255,255)/rgb(22,24,29), dark to rgb(11,14,20)/rgb(232,236,243),
+and the new Strategy Performance table renders correctly in both.
+
+The login page carried `data-theme="dark"` while having no theme blocks
+and no toggle — vestigial, and after the restyle it claimed dark while
+rendering light. Set to `light` so the attribute matches what it draws;
+a marker that states the opposite of the truth is the same defect class
+as the "✓ SENSEX is on hold" gate label.
+
 ## v59.47 — the login card had a border and it was invisible (2026-08-06)
 
 Reported: "everything is white now, no boundary of login panel."
