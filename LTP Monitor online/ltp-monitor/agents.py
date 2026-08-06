@@ -5082,8 +5082,30 @@ class ExecutionAgent(Agent):
         # band, and history.get_daily_atm_iv_history() for the
         # percentile tier (falls through gracefully if that backfill
         # hasn't been run).
+        # 2026-08-06 — prefer the TUNED per-symbol value. profit_capture
+        # and loss_mult sat in the tuner's DEFAULT_PARAMS but nothing
+        # live ever read them, so every sweep of those two moved
+        # backtest numbers only. wall_gap_frac/credit_min_frac were
+        # already connected (strategies.evaluate fetches them via
+        # get_params), which is what made the gap easy to miss.
+        #
+        # Their defaults are now SEEDED at what live already used
+        # (0.18 / 1.0), so this reads the same numbers today as the
+        # config path did. The config keys remain the fallback for any
+        # symbol the tuner has no entry for.
         target_pct = cfg.get("spread_profit_target_pct", 30)
+        loss_mult = cfg.get("spread_loss_limit_multiple", 1.0)
         target_basis = "fixed (dynamic targets off)"
+        try:
+            import backtester as _bt
+            _tp = _bt.get_params(spread["name"], sym)
+            if _tp.get("profit_capture"):
+                target_pct = _tp["profit_capture"] * 100.0
+                target_basis = f"tuned ({spread['name']}/{sym})"
+            if _tp.get("loss_mult"):
+                loss_mult = _tp["loss_mult"]
+        except Exception:
+            pass          # fall back to the config values above
         if cfg.get("dynamic_spread_targets_enabled", False):
             import risk_engine, history as _hist
             an = self.bus.get(f"analysis:{sym}") or {}
@@ -5122,10 +5144,10 @@ class ExecutionAgent(Agent):
             # loss_limit in place, so the closed record shows the
             # defended limit rather than the one the position was opened
             # against. Preserved below as initial_loss_limit.
-            "loss_limit": round(min(credit * cfg.get("spread_loss_limit_multiple", 1.0),
+            "loss_limit": round(min(credit * loss_mult,
                                     spread["max_loss"]), 2),
             "initial_loss_limit": round(min(
-                credit * cfg.get("spread_loss_limit_multiple", 1.0),
+                credit * loss_mult,
                 spread["max_loss"]), 2),
             "opened": now_ist().strftime("%H:%M:%S"), "opened_ts": time.time(),
             "pnl": 0.0, "paper": True, "ai_advice": None, "ai_ts": 0,

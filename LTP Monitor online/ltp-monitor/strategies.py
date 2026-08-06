@@ -35,8 +35,23 @@ SPREAD_BOUNDS = {
     # had a far more reasonable 1.2-1.8:1 ratio. 0.25 is a middle
     # ground: meaningfully better than 0.08-0.15 without demanding the
     # rarer 35%+ setups that would cut trade frequency drastically.
-    "bull_put_spread":  {"wall_gap_frac": (1.5, 4.0, -1), "credit_min_frac": (0.25, 0.40, -1)},
-    "bear_call_spread": {"wall_gap_frac": (1.5, 4.0, -1), "credit_min_frac": (0.25, 0.40, -1)},
+    # 2026-08-06 — profit_capture and loss_mult added to BOUNDS so the
+    # tuner can actually sweep them. They were in DEFAULT_PARAMS but not
+    # here, and live ignored them entirely (enter_spread used
+    # spread_profit_target_pct / spread_loss_limit_multiple).
+    #
+    # Ranges BRACKET the live values (0.18 / 1.0) rather than reaching
+    # for a wider search. relax_dir is -1 for profit_capture: a LOWER
+    # target exits sooner and turns over more, which is the permissive
+    # direction. It is +1 for loss_mult, where a HIGHER multiple sits a
+    # stop further away and lets more trades survive. Both floors are
+    # deliberately conservative — these have never been swept against a
+    # backtest that matched live, so the first sweeps are exploration,
+    # not optimisation.
+    "bull_put_spread":  {"wall_gap_frac": (1.5, 4.0, -1), "credit_min_frac": (0.25, 0.40, -1),
+                         "profit_capture": (0.10, 0.45, -1), "loss_mult": (0.6, 1.5, 1)},
+    "bear_call_spread": {"wall_gap_frac": (1.5, 4.0, -1), "credit_min_frac": (0.25, 0.40, -1),
+                         "profit_capture": (0.10, 0.45, -1), "loss_mult": (0.6, 1.5, 1)},
 }
 
 

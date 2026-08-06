@@ -4,6 +4,73 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.41 — the tuner now moves live, seeded so nothing moves today (2026-08-06)
+
+### A correction to v59.39 first
+
+v59.39 said `profit_capture`/`loss_mult` were inert. Investigating the
+fix, I claimed the ENTIRE spread tuner was disconnected — all four
+parameters — on the strength of grepping `agents.py` alone. WRONG.
+`strategies.evaluate()` fetches them itself:
+
+    from backtester import get_params
+    _p = get_params(name, analysis.get("symbol"))
+    wall_gap_frac  = _p.get("wall_gap_frac", 2.0)
+    credit_min_frac = _p.get("credit_min_frac", 0.28)
+
+and `analyze()` does carry `symbol`, verified by running it. So
+`wall_gap_frac`/`credit_min_frac` WERE tuned and DID reach live. Only
+two of four were inert — which is what v59.39 originally said. Grepping
+one file and generalising is what made the second claim wrong.
+
+### The fix, and why it runs in the direction it does
+
+`enter_spread` now prefers the TUNED per-symbol `profit_capture` and
+`loss_mult`, with the config keys as fallback for any symbol the tuner
+has no entry for. `SPREAD_BOUNDS` gains ranges for both, so a sweep can
+actually move them — they sat in DEFAULT_PARAMS with no bounds, so no
+sweep ever could.
+
+The obvious fix — point live at the existing tuned values — would have
+been actively harmful. `profit_capture` defaulted to 0.60 against
+live's 18%: a 2.5-3x looser profit target, in exactly the direction the
+replay showed spreads riding to "market closing" and losing. So the
+DEFAULTS were reseeded DOWN to what live already used (0.18 / 1.0)
+instead.
+
+### The trap this nearly walked into
+
+After reseeding, live still resolved to 45%, not 18%. Stored versions
+carried `profit_capture: 0.6` explicitly — invisible in an earlier diff
+because 0.6 WAS the default then, so it showed as "no difference from
+default". Merged over the new default and clamped to the new 0.45
+ceiling, it would have moved live from an 18% target to 45% on deploy.
+
+My own verification script printed "=> behaviour on deploy is
+UNCHANGED" as hardcoded text directly beneath a table showing 45%. The
+data caught it; the reassurance did not.
+
+58 stored `profit_capture`/`loss_mult` values were stripped so the
+reseeded defaults apply. That is correct on the merits and not merely
+safe: every one was selected against the backtester v59.36-39 proved
+was measuring a different strategy. Backup at
+`~/.ltp-monitor/strategy_versions.pre-reseed.json`.
+
+Verified after: all eight (strategy, symbol) pairs resolve to 18% and
+loss_mult 1.0, matching `spread_profit_target_pct`. Behaviour on deploy
+is unchanged — by comparison, not by assertion, and the test pins all
+eight.
+
+### What is NOT claimed
+
+The tuner can now move live. Nothing says it SHOULD yet. Its bounds for
+these two are provisional and bracket the live values rather than
+reaching wide, because they have never been swept against a backtest
+that matched live. `wall_gap_frac`/`credit_min_frac` retain their
+floors — raised on 2026-07-23/24 after real spreads at 15-22% credit
+fraction produced 4-5.6:1 against the trader — and `_clamp_to_current_bounds`
+still lifts the stale 0.15/0.8 entries to those floors.
+
 ## v59.40 — phase 2: the two mechanism defects (2026-08-06)
 
 Between them these cost 78% of the directional-option loss since the

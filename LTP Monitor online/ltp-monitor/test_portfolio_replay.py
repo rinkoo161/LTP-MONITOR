@@ -36,6 +36,7 @@ def check(label, cond, detail=""):
 
 import backtester
 import config
+import strategies as slib
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 BT = open(os.path.join(HERE, "backtester.py")).read()
@@ -140,17 +141,44 @@ print("\n7) the replay reads the SAME profit/loss keys LIVE reads")
 # The replay demanding 3.3x more profit than live before taking it is
 # why replay spreads rode to "market closing" holding slots while live's
 # turned over in minutes.
+# 2026-08-06, later the same day — this asserted that agents.py did NOT
+# read profit_capture/loss_mult, and flagged that "if live starts
+# reading them, this test's premise changes". It has: enter_spread now
+# prefers the TUNED per-symbol value, with the config key as fallback,
+# so a tuner sweep can finally move live behaviour. The invariant worth
+# defending is no longer "live ignores them" but "live and the replay
+# read the SAME value".
 AG_SRC = open(os.path.join(HERE, "agents.py")).read()
-check("agents.py genuinely does not read profit_capture/loss_mult",
-      "profit_capture" not in AG_SRC and '"loss_mult"' not in AG_SRC,
-      "if live starts reading them, this test's premise changes")
-for k in ("spread_profit_target_pct", "spread_loss_limit_multiple"):
-    check(f"the replay reads {k}", k in BT,
-          "reading a key live ignores makes every replay number fiction")
-check("and no longer sizes the target off profit_capture",
-      'p["profit_capture"]' not in BT and 'pp["profit_capture"]' not in BT,
-      "60% of credit vs live's 18% — a 3.3x difference in when a spread "
-      "takes profit")
+check("LIVE now reads the tuned profit_capture",
+      "profit_capture" in AG_SRC,
+      "it never did — every sweep of it moved backtest numbers only")
+check("and the tuned loss_mult",
+      '_tp.get("loss_mult")' in AG_SRC or "_tp[\"loss_mult\"]" in AG_SRC
+      or 'loss_mult = _tp' in AG_SRC)
+check("the config keys remain the FALLBACK, not the source",
+      "spread_profit_target_pct" in AG_SRC
+      and "spread_loss_limit_multiple" in AG_SRC,
+      "a symbol the tuner has no entry for must still open spreads")
+check("the replay reads the same tuned params",
+      'p["profit_capture"]' in BT and 'pp["profit_capture"]' in BT,
+      "the whole point is that both sides read ONE value")
+
+# The seeded default must equal what live ran BEFORE this change, or
+# deploying it silently alters behaviour. Stored versions carried
+# profit_capture 0.6 — chosen against the backtester v59.36-39 proved
+# was measuring a different strategy — which would have clamped to 0.45
+# and moved live from an 18% target to 45%.
+import backtester as _bt
+for _n in ("bull_put_spread", "bear_call_spread"):
+    for _s in ("NIFTY", "BANKNIFTY", "FINNIFTY", "SENSEX"):
+        _p = _bt.get_params(_n, _s)
+        check(f"{_n}/{_s} target still 18%",
+              abs(_p["profit_capture"] * 100 - 18.0) < 0.01,
+              f"{_p['profit_capture']*100:.0f}% — a reseed that changes live "
+              f"behaviour on deploy is not a reseed")
+check("bounds exist so the tuner can actually sweep them",
+      "profit_capture" in (slib.SPREAD_BOUNDS.get("bull_put_spread") or {}),
+      "it sat in DEFAULT_PARAMS with no bounds, so no sweep could move it")
 
 print()
 if FAILED:

@@ -53,10 +53,28 @@ DEFAULT_PARAMS = {
     # spreads at 15-22% credit fraction were producing 4-5.6:1 risk:
     # reward against the trader; 0.28 sits toward the upper-middle of
     # the new (0.25, 0.40) bounds range.
+    # 2026-08-06 — profit_capture 0.60 -> 0.18 and loss_mult 1.5 -> 1.0,
+    # SEEDED AT WHAT LIVE ACTUALLY USES. These two were the only tuner
+    # params live never read: strategies.evaluate() fetches
+    # wall_gap_frac/credit_min_frac via get_params (so those WERE
+    # connected), but enter_spread computed its target from
+    # cfg["spread_profit_target_pct"] (18%) and its limit from
+    # cfg["spread_loss_limit_multiple"] (1.0), ignoring these entirely.
+    #
+    # So the tuner swept 60%/1.5 while live ran 18%/1.0 — a 3.3x
+    # difference in when a spread takes profit, and the reason replay
+    # spreads rode to "market closing" while live's turned over in
+    # minutes.
+    #
+    # Reseeding to the live values rather than pointing live at 0.60
+    # is deliberate: switching live to a 60% profit target would be a
+    # large, unmeasured behaviour change in the direction the replay
+    # showed LOSING money. Deploy changes nothing today; the tuner can
+    # now move these, within bounds, on evidence.
     "bull_put_spread":  {"wall_gap_frac": 2.0, "credit_min_frac": 0.28,
-                         "profit_capture": 0.60, "loss_mult": 1.5},
+                         "profit_capture": 0.18, "loss_mult": 1.0},
     "bear_call_spread": {"wall_gap_frac": 2.0, "credit_min_frac": 0.28,
-                         "profit_capture": 0.60, "loss_mult": 1.5},
+                         "profit_capture": 0.18, "loss_mult": 1.0},
     "momentum_buy":     {"sl_frac": 0.70, "t1_frac": 1.60, "t2_frac": 2.05,
                          "min_confidence": 70, "trail_trigger": 1.05,
                          "trail_gap": 0.10},
@@ -426,11 +444,11 @@ def replay_spreads(symbol, name, params=None, days=None, log=lambda m: None):
                         # "market closing" holding slots while live's
                         # turned over in minutes ("captured ₹6.5 of
                         # ₹33.45" = 19%). Read what LIVE reads.
-                           "profit_target": round(_credit * cfg.get(
-                               "spread_profit_target_pct", 30) / 100.0, 2),
-                           "loss_limit": round(min(
-                               _credit * cfg.get("spread_loss_limit_multiple", 1.0),
-                               slib_ev["max_loss"]), 2),
+                           # Tuned value, which now MEANS the same thing
+                           # live means by spread_profit_target_pct.
+                           "profit_target": round(_credit * p["profit_capture"], 2),
+                           "loss_limit": round(min(_credit * p["loss_mult"],
+                                                   slib_ev["max_loss"]), 2),
                            "opened_ts": ts, "mfe": 0.0, "mae": 0.0,
                            "entry_ts": ts, "entry_spot": chain["spot"]})
         log(f"  {day}: cumulative trades {len(trades)}")
@@ -618,11 +636,9 @@ def replay_portfolio(symbols=None, names=None, days=None, log=lambda m: None):
                         "symbol": sym, "strategy": name, "qty": lot, "lots": 1,
                         # See the note in replay_spreads: LIVE reads
                         # spread_profit_target_pct / spread_loss_limit_multiple.
-                        "profit_target": round(credit * cfg.get(
-                            "spread_profit_target_pct", 30) / 100.0, 2),
-                        "loss_limit": round(min(
-                            credit * cfg.get("spread_loss_limit_multiple", 1.0),
-                            ev["max_loss"]), 2),
+                        "profit_target": round(credit * pp["profit_capture"], 2),
+                        "loss_limit": round(min(credit * pp["loss_mult"],
+                                                ev["max_loss"]), 2),
                         "opened_ts": ts, "mfe": 0.0, "mae": 0.0})
                     cd[k] = ts        # live stamps on ENTRY, not on exit
         log(f"  {day}: cumulative {len(trades)}")
