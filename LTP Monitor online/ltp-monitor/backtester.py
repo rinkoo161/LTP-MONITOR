@@ -29,6 +29,7 @@ def _completed_days(day_list):
 
 import statistics
 import history
+import agents as _ag
 import config
 import analyzer as _an
 import strategies as slib
@@ -301,19 +302,30 @@ def replay_spreads(symbol, name, params=None, days=None, log=lambda m: None):
                     d = (leg["entry"] - ltp) if leg["action"] == "SELL" else (ltp - leg["entry"])
                     pnl_ps += d
                 if ok:
-                    reason = None
-                    if pnl_ps >= open_sp["credit"] * p["profit_capture"]:
-                        reason = "profit target"
-                    elif pnl_ps <= -min(open_sp["credit"] * p["loss_mult"],
-                                        open_sp["max_loss"]):
-                        reason = "loss limit"
-                    elif ((open_sp["legs"][0]["leg"] == "PE" and
-                           chain["spot"] < open_sp["short"]) or
-                          (open_sp["legs"][0]["leg"] == "CE" and
-                           chain["spot"] > open_sp["short"])):
-                        reason = "strike breach"
-                    elif ts == frames[-1][0]:
-                        reason = "EOD"
+                    _tot = pnl_ps * open_sp["qty"]
+                    open_sp["mfe"] = max(open_sp.get("mfe", 0), _tot)
+                    open_sp["mae"] = min(open_sp.get("mae", 0), _tot)
+                    # 2026-08-06 — THE SAME decision function the live
+                    # monitor uses. This block previously modelled four
+                    # exits (profit target / loss limit / strike breach
+                    # / EOD) while the live path ALSO ran the defense
+                    # zone, the per-share profit-lock ratchet,
+                    # rupee_profit_floor and the time stop.
+                    # rupee_profit_floor appeared 8 times in agents.py
+                    # and ZERO times here.
+                    #
+                    # So this replay measured a DIFFERENT STRATEGY from
+                    # the one running, and said so on the same days:
+                    #     FINNIFTY bull_put  replay n=15 -3,081  47%
+                    #                        LIVE   n=17 +4,702  82%
+                    # Every promotion decision and tuner sweep for
+                    # spreads inherited that error.
+                    #
+                    # market_is_open is False only on the final frame,
+                    # which is what "EOD square-off" means in a replay.
+                    reason = _ag.spread_exit_reason(
+                        open_sp, pnl_ps, chain.get("spot"), cfg,
+                        now_ts=ts, market_is_open=(ts != frames[-1][0]))
                     if reason:
                         trades.append({"day": day, "strategy": name,
                                        "pnl": round(pnl_ps * lot - fee, 0),
@@ -339,11 +351,27 @@ def replay_spreads(symbol, name, params=None, days=None, log=lambda m: None):
             # inject tunable params into the real evaluator
             slib_ev = _eval_with_params(name, analysis, p)
             if slib_ev and slib_ev.get("eligible"):
+                # Shape it the way the LIVE spread dict is shaped, because
+                # spread_exit_reason reads these by name. Reproducing the
+                # SHAPE of a structure instead of its MEANING has silently
+                # zeroed out whole strategies in this codebase before, so
+                # these are the live field names, not replay-local ones.
+                _credit = slib_ev["credit"]
                 open_sp = {"legs": [dict(l, entry=l["ltp"])
                                     for l in slib_ev["legs"]],
-                           "credit": slib_ev["credit"],
+                           "credit": _credit,
                            "max_loss": slib_ev["max_loss"],
                            "short": slib_ev["short_strike"],
+                           "short_strike": slib_ev["short_strike"],
+                           "width": slib_ev.get("width")
+                                    or abs(slib_ev["legs"][0]["strike"]
+                                           - slib_ev["legs"][1]["strike"]),
+                           "symbol": symbol, "strategy": name,
+                           "qty": lot,
+                           "profit_target": _credit * p["profit_capture"],
+                           "loss_limit": min(_credit * p["loss_mult"],
+                                             slib_ev["max_loss"]),
+                           "opened_ts": ts, "mfe": 0.0, "mae": 0.0,
                            "entry_ts": ts, "entry_spot": chain["spot"]}
         log(f"  {day}: cumulative trades {len(trades)}")
     return trades

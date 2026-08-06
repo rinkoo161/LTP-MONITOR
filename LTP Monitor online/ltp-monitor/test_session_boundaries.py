@@ -97,8 +97,33 @@ check("market_open() closes EARLIER than the market does", SQ < CL,
 AG = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
                        "agents.py")).read()
 _code = [l for l in AG.split("\n") if not l.strip().startswith("#")]
+# 2026-08-06 — the SPREAD square-off branch moved into the shared
+# agents.spread_exit_reason(), which takes the gate as a PARAMETER so a
+# replay can drive historical timestamps through identical code. The
+# invariant is unchanged: both branches must be driven by the TRADING
+# gate market_open(), never by fno_session_open(). Assert that at the
+# branch AND at the call site that feeds it.
 _sq = [l for l in _code if "elif not market_open():" in l]
-check("BOTH square-off branches use the trading gate", len(_sq) == 2,
+_shared = AG.split("def spread_exit_reason(")[1]
+_shared = _shared[:_shared.index("\ndef ")]
+check("the shared spread exit squares off on the gate, not the data feed",
+      "if not market_is_open:" in _shared
+      and "fno_session_open" not in _shared,
+      "the data gate runs LATER than the trading gate — using it here "
+      "would hold spreads past the broker's square-off")
+_mon = AG.split("    def _monitor_spreads(self")[1]
+_mon = _mon[:_mon.index("\n    def ")]
+check("and the LIVE call site passes market_open()",
+      "market_open()" in _mon,
+      "the parameter exists so replay can pass a historical value — "
+      "live must still pass the real trading gate")
+_bt = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "backtester.py")).read()
+check("the replay passes its own frame-based gate, not market_open()",
+      "market_is_open=" in _bt and "market_open()" not in _bt,
+      "a replay calling the live clock would square off every historical "
+      "spread the moment the test runs after 15:23")
+check("the single-leg square-off branch still uses the trading gate", len(_sq) == 1,
       f"{len(_sq)} found — spreads and single-leg positions")
 check("data path uses the session gate", "fno_session_open()" in AG)
 

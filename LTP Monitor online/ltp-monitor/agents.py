@@ -358,6 +358,92 @@ def symbol_paused(symbol, cfg=None):
     return str(symbol).upper() in {str(x).upper() for x in paused}
 
 
+def spread_exit_reason(sp, pnl_ps, spot, cfg, now_ts, market_is_open,
+                       log=lambda m: None, alert=lambda *a: None):
+    """The spread exit decision — ONE definition, used live AND in replay.
+
+    2026-08-06. `backtester.replay_spreads` modelled four exits (profit
+    target, loss limit, strike breach, EOD) while the live monitor also
+    ran the defense zone, the per-share profit-lock ratchet,
+    `rupee_profit_floor` and the time stop. `rupee_profit_floor` was
+    referenced 8 times in agents.py and ZERO times in backtester.py.
+
+    The two therefore measured DIFFERENT STRATEGIES, and the numbers
+    said so on the same days' data:
+
+        FINNIFTY bull_put   backtest n=15  -3,081  47% win
+                            LIVE     n=17  +4,702  82% win
+
+    Every promotion decision, auto-tuner sweep and "the backtest says
+    this works" claim for spreads inherited that. A backtest that cannot
+    reproduce live behaviour is not evidence about live behaviour.
+
+    MUTATES `sp` — the defense tighten, the profit-lock ratchet and
+    rupee_profit_floor all ratchet state forward, and they must advance
+    exactly once per evaluation. That is why this is one function called
+    once rather than a set of predicates called ad hoc.
+
+    `now_ts` and `market_is_open` are parameters rather than
+    time.time()/market_open() calls precisely so a replay can drive
+    historical timestamps through the identical code.
+    """
+    # --- defense zone: act BEFORE a full breach, not only at it -------
+    if cfg.get("spread_defense_enabled", True) and spot and not sp.get("defended"):
+        short_leg = sp["legs"][0]["leg"]
+        dist = (spot - sp["short_strike"] if short_leg == "PE"
+                else sp["short_strike"] - spot)
+        zone = sp["width"] * cfg.get("spread_defense_zone_pct", 30) / 100
+        if 0 < dist <= zone:
+            old_limit = sp["loss_limit"]
+            sp["loss_limit"] = round(
+                old_limit * cfg.get("spread_defense_tighten_pct", 50) / 100, 2)
+            sp["defended"] = True
+            log(f"🛡 {sp['symbol']} {sp['strategy']} defense triggered — "
+                f"spot {spot:.0f} within {dist:.0f}pts of short strike "
+                f"{sp['short_strike']:.0f}, loss limit tightened "
+                f"₹{old_limit:.1f} → ₹{sp['loss_limit']:.1f}")
+            alert("medium", sp["symbol"],
+                  f"{sp['strategy']} defense: short strike approached, "
+                  f"stop tightened to ₹{sp['loss_limit']:.1f}")
+
+    # Evaluated ONCE — it advances a ratchet, so calling it twice inside
+    # the chain below would double-advance it.
+    _rpf_spread = rupee_profit_floor(sp, pnl_ps * sp["qty"], cfg, "spread")
+
+    lock_trigger = sp["profit_target"] * cfg.get("spread_profit_lock_trigger_pct", 80) / 100
+    if pnl_ps >= lock_trigger:
+        candidate_floor = round(pnl_ps * cfg.get("spread_profit_lock_pct", 75) / 100, 2)
+        if candidate_floor > sp.get("profit_floor", 0):
+            sp["profit_floor"] = candidate_floor
+
+    if pnl_ps >= sp["profit_target"]:
+        return f"captured ₹{pnl_ps:.1f} of ₹{sp['credit']} credit"
+    if sp.get("profit_floor", 0) > 0 and pnl_ps <= sp["profit_floor"]             and (sp["profit_floor"] * sp["qty"]) >= cfg.get(
+                "spread_profit_lock_min_rupees", 250):
+        # Absolute-₹ guard: the floor must be worth exiting for. Without
+        # it the ratchet fired on ₹0.1-2/share peaks where fees exceeded
+        # the entire gain — 26 such exits netted ₹62 total across the
+        # 2026-07-16..23 live data.
+        return (f"profit lock: gave back to floor ₹{sp['profit_floor']:.1f}/sh "
+                f"(₹{sp['profit_floor'] * sp['qty']:.0f}) "
+                f"after peaking near ₹{sp.get('mfe', 0) / sp['qty']:.1f}/sh")
+    if _rpf_spread:
+        return _rpf_spread
+    if pnl_ps <= -sp["loss_limit"]:
+        return f"loss limit (₹{pnl_ps:.1f} vs -₹{sp['loss_limit']})"
+    if spot and ((sp["legs"][0]["leg"] == "PE" and spot < sp["short_strike"]) or
+                 (sp["legs"][0]["leg"] == "CE" and spot > sp["short_strike"])):
+        return f"short strike breached (spot {spot:.0f})"
+    if cfg.get("time_stop_minutes", 0) and sp.get("opened_ts") and \
+            (now_ts - sp["opened_ts"]) / 60 >= cfg["time_stop_minutes"]:
+        elapsed = (now_ts - sp["opened_ts"]) / 60
+        return (f"time stop ({elapsed:.0f}m ≥ {cfg['time_stop_minutes']}m) "
+                f"— forcing a decision rather than waiting indefinitely")
+    if not market_is_open:
+        return "market closing — squaring off spread"
+    return None
+
+
 def instant_exit_reason(pos, ltp, spot):
     """The exit conditions that can already be TRUE at the moment of
     entry — evaluated against LIVE data, returning a reason or None.
@@ -5065,78 +5151,13 @@ class ExecutionAgent(Agent):
             sp["mfe"] = max(sp.get("mfe", 0), sp["pnl"])
             sp["mae"] = min(sp.get("mae", 0), sp["pnl"])
             spot = chain.get("spot")
-            reason = None
-            # Defense zone: act BEFORE a full breach, not only at it. If
-            # spot is within defense_zone_pct of the width from the short
-            # strike but hasn't crossed it yet, tighten the loss limit so
-            # a continued adverse move exits sooner with a smaller loss
-            # than waiting for the full defined-risk cap.
-            if cfg.get("spread_defense_enabled", True) and spot and not sp.get("defended"):
-                short_leg = sp["legs"][0]["leg"]
-                dist = (spot - sp["short_strike"] if short_leg == "PE"
-                        else sp["short_strike"] - spot)
-                zone = sp["width"] * cfg.get("spread_defense_zone_pct", 30) / 100
-                if 0 < dist <= zone:
-                    old_limit = sp["loss_limit"]
-                    sp["loss_limit"] = round(
-                        old_limit * cfg.get("spread_defense_tighten_pct", 50) / 100, 2)
-                    sp["defended"] = True
-                    self.bus.log(self.name,
-                                 f"🛡 {sp['symbol']} {sp['strategy']} defense triggered — "
-                                 f"spot {spot:.0f} within {dist:.0f}pts of short strike "
-                                 f"{sp['short_strike']:.0f}, loss limit tightened "
-                                 f"₹{old_limit:.1f} → ₹{sp['loss_limit']:.1f}")
-                    self.bus.alert("medium", self.name, sp["symbol"],
-                                   f"{sp['strategy']} defense: short strike approached, "
-                                   f"stop tightened to ₹{sp['loss_limit']:.1f}")
-            # Profit lock-in ratchet: once P&L reaches a fraction of the
-            # profit target, start protecting a share of that gain
-            # instead of requiring the FULL target (often unrealistic
-            # intraday) or letting it fully round-trip to breakeven/loss
-            # by end-of-day square-off. Found 2026-07-22: order history
-            # showed exactly this pattern — MFE often 2-3x the final P&L
-            # on spreads that rode to "market closing" square-off, while
-            # the only two spreads exited manually captured profit close
-            # to their peak. This ratchets a floor the same way the
-            # single-leg trailing SL already does, rising as new peaks
-            # are made, never falling back down.
-            _rpf_spread = rupee_profit_floor(sp, pnl_ps * sp["qty"], cfg, "spread")
-            lock_trigger = sp["profit_target"] * cfg.get("spread_profit_lock_trigger_pct", 80) / 100
-            if pnl_ps >= lock_trigger:
-                candidate_floor = round(pnl_ps * cfg.get("spread_profit_lock_pct", 75) / 100, 2)
-                if candidate_floor > sp.get("profit_floor", 0):
-                    sp["profit_floor"] = candidate_floor
-            if pnl_ps >= sp["profit_target"]:
-                reason = f"captured ₹{pnl_ps:.1f} of ₹{sp['credit']} credit"
-            elif sp.get("profit_floor", 0) > 0 and pnl_ps <= sp["profit_floor"] \
-                    and (sp["profit_floor"] * sp["qty"]) >= cfg.get(
-                        "spread_profit_lock_min_rupees", 250):
-                # Absolute-₹ guard: the floor must be worth exiting for.
-                # Without this the ratchet fired on ₹0.1-2/share peaks
-                # where fees exceeded the entire gain — 26 such exits
-                # netted ₹62 total across the 2026-07-16..23 live data.
-                reason = (f"profit lock: gave back to floor ₹{sp['profit_floor']:.1f}/sh "
-                         f"(₹{sp['profit_floor'] * sp['qty']:.0f}) "
-                         f"after peaking near ₹{sp.get('mfe', 0) / sp['qty']:.1f}/sh")
-            elif _rpf_spread:
-                # Rupee ratchet on the spread's TOTAL P&L rather than
-                # per-share. The per-share lock above arms at 80% of
-                # target and armed on 2 of 11 spreads today; this one
-                # arms on absolute rupees and catches the other 9.
-                reason = _rpf_spread
-            elif pnl_ps <= -sp["loss_limit"]:
-                reason = f"loss limit (₹{pnl_ps:.1f} vs -₹{sp['loss_limit']})"
-            elif spot and (
-                (sp["legs"][0]["leg"] == "PE" and spot < sp["short_strike"]) or
-                (sp["legs"][0]["leg"] == "CE" and spot > sp["short_strike"])):
-                reason = f"short strike breached (spot {spot:.0f})"
-            elif cfg.get("time_stop_minutes", 0) and sp.get("opened_ts") and \
-                    (time.time() - sp["opened_ts"]) / 60 >= cfg["time_stop_minutes"]:
-                elapsed = (time.time() - sp["opened_ts"]) / 60
-                reason = (f"time stop ({elapsed:.0f}m ≥ {cfg['time_stop_minutes']}m) "
-                         f"— forcing a decision rather than waiting indefinitely")
-            elif not market_open():
-                reason = "market closing — squaring off spread"
+            # ONE definition, shared with backtester.replay_spreads —
+            # see spread_exit_reason()'s docstring for why the two
+            # drifting apart made every spread backtest meaningless.
+            reason = spread_exit_reason(
+                sp, pnl_ps, spot, cfg, time.time(), market_open(),
+                log=lambda m: self.bus.log(self.name, m),
+                alert=lambda lvl, sym, msg: self.bus.alert(lvl, self.name, sym, msg))
             spreads[sid] = sp
             self.bus.set("spreads", spreads)
             # v59.0 Phase D — SHADOW ONLY. Observes what a delta hedge

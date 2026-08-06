@@ -178,10 +178,29 @@ i_fut = src.index("_rpf_fut:")
 i_eod = src.index('self.exit_future(sym, "EOD square-off (15:15)")')
 check("futures floor is checked BEFORE the EOD square-off", i_fut < i_eod,
       "EOD closed every profitable futures position today")
-i_sp = src.index("elif _rpf_spread:")
-i_ts = src.index('reason = (f"time stop ({elapsed:.0f}m')
+# 2026-08-06 — the spread exit chain moved OUT of _monitor_spreads into
+# the shared agents.spread_exit_reason(), so backtester.replay_spreads
+# could run the IDENTICAL logic (it previously modelled four exits and
+# omitted this floor entirely, which is why spread backtests disagreed
+# with live). The chain became early-returns rather than elif, so the
+# old "elif _rpf_spread:" anchor no longer exists. The INVARIANT is
+# unchanged and still worth pinning: the floor is consulted BEFORE the
+# time stop.
+_sx = src.split("def spread_exit_reason(")[1]
+_sx = _sx[:_sx.index("\ndef ")]
+i_sp = _sx.index("_rpf_spread:")
+i_ts = _sx.index('f"time stop (')
 check("spread floor is checked BEFORE the time stop", i_sp < i_ts,
       "the time stop closed a ₹3,705-peak spread for ₹830")
+check("and the shared function is what LIVE uses",
+      "spread_exit_reason(" in src.split("def _monitor_spreads(self")[1][:2000],
+      "if the live monitor stops calling it, replay silently diverges again")
+import os as _os
+_bt = open(_os.path.join(_os.path.dirname(_os.path.abspath(__file__)),
+                         "backtester.py")).read()
+check("and the BACKTESTER uses the same function",
+      "spread_exit_reason(" in _bt,
+      "a replay that models different exits is not evidence about live")
 
 print("\n6) AI advisory logging")
 check("advisory logger exists", "_log_ai_advisory" in src)

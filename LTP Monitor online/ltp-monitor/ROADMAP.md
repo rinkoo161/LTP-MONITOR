@@ -4,6 +4,96 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.36 — the backtester was testing a different strategy (2026-08-06)
+
+PHASE 1 of the "why is this losing money" work. The finding that
+motivated it:
+
+    FINNIFTY bull_put_spread   replay n=15  -3,081  47% win
+                               LIVE   n=17  +4,702  82% win
+
+Same days, same archived chain, opposite conclusions.
+
+### Cause
+
+`backtester.replay_spreads` modelled FOUR exits — profit target, loss
+limit, strike breach, EOD. The live `_monitor_spreads` also ran the
+defense zone, the per-share profit-lock ratchet, `rupee_profit_floor`
+and the time stop.
+
+    rupee_profit_floor:  8 references in agents.py,  0 in backtester.py
+
+The profit floor is what produces the live wins — "profit lock: gave
+back to floor ₹4.7/sh after peaking near ₹6.3/sh" is the exit on most
+of the profitable spreads. The replay could not produce that exit at
+all.
+
+So every spread promotion decision, every auto-tuner sweep and every
+"the backtest says this works" claim inherited the error. A replay that
+models different exits is not evidence about live behaviour.
+
+### Fix: ONE definition, not a copy
+
+`agents.spread_exit_reason(sp, pnl_ps, spot, cfg, now_ts,
+market_is_open, log, alert)` — the whole decision, extracted from
+`_monitor_spreads` and called by BOTH it and `replay_spreads`.
+
+Copying the logic into the backtester would have been faster and wrong:
+two near-identical implementations silently drift at the margins, which
+this codebase has already had with the market-session check, the news
+sentiment regexes and the OI quadrant classifier.
+
+`now_ts` and `market_is_open` are PARAMETERS rather than `time.time()`
+/ `market_open()` calls, precisely so a replay can drive historical
+timestamps through identical code. The live call site passes the real
+gate; the replay passes a frame-based one.
+
+The replay's spread dict is now shaped with the LIVE field names
+(`short_strike`, `width`, `qty`, `profit_target`, `loss_limit`,
+`opened_ts`, `mfe`) because the shared function reads them by name.
+Reproducing the SHAPE of a structure instead of its MEANING has
+silently zeroed out whole strategies here before.
+
+### Verified by what the replay now emits
+
+    38  market closing — squaring off spread
+     5  profit lock: gave back to floor ...
+     7  short strike breached (spot ...)
+     2  captured ₹X of ₹Y credit
+
+Those are the LIVE exit strings. Before this change the replay could
+only ever emit "profit target" / "loss limit" / "strike breach" / "EOD".
+
+### HONEST RESULT: this did NOT reconcile the numbers
+
+    FINNIFTY bull_put   replay n=17  -3,477  41% win   (was -3,081)
+                        LIVE   n=17  +4,702  82% win
+
+The exit logic is now shared and provably running. The gap persists,
+and the remaining causes are structural, NOT data:
+
+  * frame density is NOT the problem — ~384 frames/day, full 1-minute
+    resolution, measured.
+  * ENTRY CADENCE: the replay evaluates entries every 900s
+    (`if ts - last_eval < 900: continue`); live evaluates every cycle.
+    Different spreads get taken.
+  * CONCURRENCY: the replay holds ONE spread at a time (`open_sp` is a
+    single slot); live ran two and three simultaneously today.
+
+So the backtester still cannot validate the live spread strategy. This
+phase removed the largest and most clearly wrong divergence; it did not
+remove all of them. Claiming otherwise would repeat exactly the mistake
+this entry is about.
+
+### Two guards re-pointed, not relaxed
+
+`test_rupee_profit_floor` anchored on `elif _rpf_spread:` and
+`test_session_boundaries` on counting `elif not market_open():` — both
+broke because the code MOVED. The invariants are unchanged and both
+tests now assert them at the new location, plus new checks that the
+live monitor and the backtester BOTH call the shared function, so a
+future divergence fails a test rather than silently returning fiction.
+
 ## v59.35 — two orders, one tracked position (2026-08-06)
 
 Two dashboard clicks, five seconds apart:
