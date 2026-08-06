@@ -4018,6 +4018,12 @@ class ExecutionAgent(Agent):
         super().__init__(bus, ctx)
         self._queue = deque()
         bus.subscribe("approved", self._queue.append)
+        # 2026-08-06 — see place()'s docstring. Symbols with an entry
+        # IN FLIGHT but not yet registered in bus["positions"].
+        # manual_trade() runs on the HTTP thread while cycle() runs on
+        # the agent thread, so this genuinely needs a lock.
+        self._entering = set()
+        self._entry_lock = threading.Lock()
 
     def cycle(self):
         self._check_portfolio_kill_switch()
@@ -5502,7 +5508,52 @@ class ExecutionAgent(Agent):
         only ever REDUCE order flow — a refused order is not becoming an
         accepted one because of this.
         """
-        res = self._place(job, manual=manual)
+        # ATOMICALLY CLAIM THE SYMBOL BEFORE ANY SLOW WORK.
+        #
+        # 2026-08-06 14:11, observed live:
+        #
+        #   14:11:18  PAPER BUY 65 x NIFTY 24650 CE @ 150.9   order A
+        #   14:11:23  PAPER BUY 65 x NIFTY 24650 CE @ 151.3   order B
+        #   14:11:31  B registers into positions["NIFTY"]
+        #   14:11:35  A registers — OVERWRITING B
+        #
+        # 130 qty bought, 65 tracked. The untracked half had no stop, no
+        # exit monitoring, and was invisible to concurrent-position
+        # counts, deployed_capital and the portfolio kill-switch. No
+        # error was logged: `positions` is keyed by SYMBOL, so the
+        # second write silently replaced the first.
+        #
+        # The risk gate's "no open position on X" check is not enough —
+        # it is a CHECK-THEN-ACT race. The position does not exist until
+        # _place finishes, and that took 13-17 SECONDS that afternoon
+        # because the AI probability call was blocking on an Ollama
+        # timeout. Normal is ~1s. The window widens exactly when the UI
+        # looks dead and a user is most likely to click again, which is
+        # what happened.
+        #
+        # This applies to MANUAL clicks too, deliberately. The re-entry
+        # cooldown is a throttle and exempts manual; "one tracked
+        # position per symbol" is a CORRECTNESS invariant, and an
+        # operator double-clicking a slow button is precisely the case
+        # that broke it.
+        _sym = job.get("symbol")
+        _dsig = (job.get("signal") or {}).get("signal")
+        _claimed = False
+        if _dsig in ("BUY_CE", "BUY_PE") and _sym:
+            with self._entry_lock:
+                if _sym in (self.bus.get("positions", {}) or {}):
+                    return {"error": f"position already open on {_sym}"}
+                if _sym in self._entering:
+                    return {"error": f"entry already in progress for {_sym} "
+                                     f"— duplicate submission ignored"}
+                self._entering.add(_sym)
+                _claimed = True
+        try:
+            res = self._place(job, manual=manual)
+        finally:
+            if _claimed:
+                with self._entry_lock:
+                    self._entering.discard(_sym)
         try:
             sig = job.get("signal") or {}
             err = str((res or {}).get("error") or "") if isinstance(res, dict) else ""
@@ -5739,6 +5790,19 @@ class ExecutionAgent(Agent):
         except Exception:
             pass
         positions = self.bus.get("positions", {}) or {}
+        # Defence in depth behind place()'s claim: if a position for this
+        # symbol appeared while this entry was in flight, REFUSE rather
+        # than replace. A silent overwrite is how 65 qty went untracked
+        # on 2026-08-06; an error is recoverable, a phantom position is
+        # not.
+        if sym in positions:
+            self.bus.log(self.name,
+                         f"⚠ {label}: entry ABANDONED — a position on {sym} "
+                         f"already exists (opened {positions[sym].get('opened')}). "
+                         f"Refusing to overwrite it.")
+            self.bus.alert("high", self.name, sym,
+                           f"duplicate entry abandoned — {sym} already open")
+            return {"error": f"position already open on {sym} — not overwritten"}
         positions[sym] = pos
         self.bus.set("positions", positions)
         self.bus.set("position", pos)   # legacy single-position mirror (most-recent)

@@ -4,6 +4,75 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.35 — two orders, one tracked position (2026-08-06)
+
+Two dashboard clicks, five seconds apart:
+
+    14:11:18  PAPER BUY 65 x NIFTY 24650 CE @ 150.9   order A
+    14:11:23  PAPER BUY 65 x NIFTY 24650 CE @ 151.3   order B
+    14:11:31  B registers into positions["NIFTY"]
+    14:11:35  A registers — OVERWRITING B
+
+130 qty bought, 65 tracked. The untracked half had NO stop, NO exit
+monitoring, and was invisible to concurrent-position counts,
+`deployed_capital` and the portfolio kill-switch. Nothing was logged:
+`positions` is keyed by SYMBOL, so the second write silently replaced
+the first. The risk gate went on reporting "concurrent positions 1/10".
+
+In paper mode that costs bookkeeping accuracy. The identical path in
+live mode leaves a real unmanaged position on the exchange.
+
+### Why the existing gate could not catch it
+
+`check(job["symbol"] not in positions, ...)` is a CHECK-THEN-ACT race.
+The position does not exist until `_place()` finishes.
+
+That afternoon it took 13-17 SECONDS, because the AI probability call
+blocked on an Ollama timeout before falling back to the rule engine
+(`setup: "rule-engine (AI unavailable: Ollama error: timed out)"`).
+Measured on a healthy entry the same hour: ~1 second. So the race
+window widens by more than 10x exactly when the UI looks dead and the
+operator is most likely to click again — which is what happened. A
+prior manual order had already been REJECTED at 14:10:39, so the button
+had given no feedback twice.
+
+### The fix
+
+A claim taken in `place()` BEFORE any slow work, under a lock, released
+in a `finally`. `manual_trade()` runs on the HTTP thread while
+`cycle()` runs on the agent thread, so the lock is load-bearing rather
+than decorative.
+
+It applies to MANUAL clicks too, deliberately. The re-entry cooldown is
+a throttle and exempts manual; "one tracked position per symbol" is a
+CORRECTNESS invariant, and an operator double-clicking a slow button is
+exactly the case that broke it.
+
+Defence in depth at registration: if a position for the symbol appeared
+while this entry was in flight, REFUSE and alert rather than replace.
+An error is recoverable; a phantom position is not.
+
+### The test had to be genuinely concurrent
+
+A sequential "call place() twice" test passes against the OLD code
+too — the second call sees the first position and the risk gate stops
+it. It would have proved nothing. `test_duplicate_entry` fires two
+calls through a `threading.Barrier` so both are in flight at once, and
+asserts exactly ONE opens. Against the old code that assertion fails
+with 2 opened and 1 tracked, which is the bug.
+
+It also pins that the claim is RELEASED on the error path: a leak there
+would wedge the symbol until restart, turning a data bug into an
+outage.
+
+### Not addressed here
+
+- The 65 qty from that afternoon remains untracked in the running
+  book. Left alone deliberately — it is paper, and rewriting live state
+  to paper over a bug is worse than a known-wrong journal entry.
+- Time-boxing the AI call inside the order path. Separate change: this
+  fix makes the race harmless, it does not make the UI responsive.
+
 ## v59.34 — the hold's gate label said the opposite of what it meant (2026-08-06)
 
 Caught live, minutes after v59.33 shipped, on an APPROVED order:
