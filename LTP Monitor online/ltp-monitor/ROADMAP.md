@@ -22,13 +22,46 @@ Seen live at 10:24, paper mode, five round trips in 38 seconds:
 21 log lines in one minute. `trades_today` read 0/3 throughout, so
 nothing in the daily cap counted these either.
 
-App was stopped at 10:24:43 to end it. Damage was SMALLER than claimed
-while stopping it: the churn lived in the bus's in-memory
-`closed_trades` and died with the process. journal.json held 22 records
-and 0 from that day; shadow_signals.jsonl had 21 lines of which 2
-mentioned the strike. The claim that it was "writing fake trades into
-the journal every 8 seconds" was wrong — journal.json is written at
-EOD, not per fill.
+App was stopped at 10:24:43 to end it.
+
+### The damage assessment was wrong TWICE, in opposite directions
+
+First claim, while stopping it: "writing fake trades into the journal
+every 8 seconds". Wrong — `journal.json` is written at EOD, not per
+fill.
+
+Second claim, retracting the first: "the churn lived in the bus's
+in-memory closed_trades and died with the process; journal.json held 22
+records and 0 from that day". ALSO WRONG, and worse, because it
+retracted a true warning. `_append_trade` writes to
+`~/.ltp-monitor/trades.jsonl` — a DIFFERENT FILE — immediately, per
+fill. Checking `journal.json`, finding nothing, and generalising to
+"nothing persisted" was the error.
+
+All five churn trades DID persist:
+
+    entry 358.85  ltp 363.00  pnl  46  10:24:05 -> 10:24:06  target-2
+    entry 358.85  ltp 363.00  pnl  46  10:24:13 -> 10:24:13  target-2
+    entry 358.85  ltp 363.40  pnl  62  10:24:21 -> 10:24:23  target-2
+    entry 358.85  ltp 363.90  pnl  82  10:24:32 -> 10:24:33  target-2
+    entry 358.85  ltp 366.05  pnl 168  10:24:43 -> 10:24:43  target-2
+                                            fabricated P&L  Rs 404
+
+Confirmed by the restart itself: "restored 294 historical trades (7
+today, Rs 678 realized today)" — 5 of those 7 were fabricated, Rs 404 of
+that Rs 678. They feed `ai_probability_engine`, which counts win rate
+over this system's own past trades: five invented WINS with one-second
+holds, in the bucket that is supposed to estimate whether a setup works.
+
+Purged with a deliberately narrow filter — exact instrument, exact
+frozen entry price, hold <= 2s, target-2 reason — that refuses to write
+unless EXACTLY five match, so it cannot quietly take real trades with
+it. Backup at `~/.ltp-monitor/trades.pre-purge.jsonl`. Restarted after,
+because the in-memory `closed_trades` still held them; the app now
+reports "restored 289 historical trades (2 today, Rs 274 realized
+today)", which is the two real FINNIFTY spreads and nothing else.
+
+Stopping the app quickly DID matter. The retraction was the mistake.
 
 ### Three independent defects, each sufficient on its own
 
