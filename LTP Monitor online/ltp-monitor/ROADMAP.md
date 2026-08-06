@@ -4,6 +4,75 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.31 — refuse a position that is already over (2026-08-06)
+
+11:43:02, in the same second:
+
+    BUY  20 x SENSEX 78800 CE @ Rs 331.4
+    SELL 20 x SENSEX 78800 CE @ Rs 331.4
+         spot invalidation (78756 vs 78791.6)   P&L Rs 0
+
+Live spot was ALREADY past the signal's own invalidation level before
+the position existed. The level came from the 60s analysis pack; the
+exit check reads the 3s chain.
+
+v59.30's backstop worked exactly as designed — ONE round trip, not
+five, and two cooldown refusals afterwards. But the cause was the
+fourth instance of one family:
+
+    v59.29  target2 unvalidated       -> `ltp >= target2` on 1st check
+    v59.29  option_ltp from the pack  -> stale fill vs a live exit
+    v59.31  spot_invalidation from it -> breached BEFORE entry
+
+v59.29 made the FILL PRICE live. It did not make the signal's ENTRY
+CONDITIONS live. Patching spot_invalidation specifically would have
+been the fifth special case.
+
+### The general guard
+
+`instant_exit_reason(pos, ltp, spot)` — the exit conditions that can
+already be TRUE at the moment of entry, evaluated against live data.
+`ExecutionAgent._place()` runs it against the same live chain the fill
+is priced from and REFUSES the entry if any fires. A position that
+would exit on its first monitor cycle is never opened.
+
+ONE definition, not two: `_monitor_one()` now delegates its three
+price-level branches to the same function. Two near-identical copies is
+the failure this codebase has already had with the market-session
+check, the news sentiment regexes and the OI quadrant classifier.
+
+### What is deliberately NOT in it
+
+Only the pure price-level predicates. The rest of `_monitor_one`'s
+chain CANNOT fire at entry, and their exclusion is reasoned rather than
+convenient:
+
+    transaction stop/target, step-trail, profit floor   pnl == 0
+    time stop                                           elapsed == 0
+    EOD square-off                                      not an entry cond
+    gave-back-after-T1                                  t1_hit is False
+
+`dynamic_exit_reason()` is excluded for a different reason: it MUTATES
+ratchet state, so evaluating it at entry would double-advance it.
+
+### A label that would have been wrong
+
+The first version passed `entry`/`initial_sl` into the probe. Those
+exist only to label a stop hit as a TRAIL, so a refusal read "trailing
+stop in profit ... locked above entry Rs 200.0" — nonsense for a
+position that never opened, and exactly the kind of dishonest exit
+label the 2026-08-03 work existed to remove. The probe now omits them
+and the test pins the plain label.
+
+### The test drives both sides on the same inputs
+
+Asserting two implementations "look alike" is what lets them drift.
+`test_option_churn_loop` runs six cases (CE and PE, breached and
+healthy, stop / target-2 / invalidation) through `instant_exit_reason`
+directly AND through the real `place()`, and checks a healthy entry
+still opens — a guard that blocks everything is a shutdown, not a
+guard.
+
 ## v59.30 — the same bug a third time, so fix the SHAPE (2026-08-06)
 
 At 11:18 the risk gate APPROVED four orders in 19 seconds that

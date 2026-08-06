@@ -332,6 +332,67 @@ def claude(prompt, api_key, max_tokens=500):
 
 # ================================================================== bus
 
+def instant_exit_reason(pos, ltp, spot):
+    """The exit conditions that can already be TRUE at the moment of
+    entry — evaluated against LIVE data, returning a reason or None.
+
+    2026-08-06, fourth instance of one family in a single session. Each
+    time, the ENTRY used stale context from the 60s analysis pack while
+    the EXIT checked live data at 3s:
+
+        target2 unvalidated        -> `ltp >= target2` on the 1st check
+        option_ltp from the pack   -> fill stale vs a live exit check
+        spot_invalidation from it  -> SENSEX 78800 CE, 11:43:02, opened
+                                      and closed in the SAME SECOND at
+                                      78756 vs an invalidation of
+                                      78791.6 — already breached BEFORE
+                                      the position existed
+
+    A position that would exit on its first monitor cycle should never
+    be opened. This is the general guard rather than a third special
+    case.
+
+    ONLY the pure price-level predicates live here. The others in
+    _monitor_one's chain CANNOT fire at entry and their exclusion is
+    deliberate, not an oversight:
+
+        transaction stop/target, step-trail, profit floor  pnl == 0
+        time stop                                          elapsed == 0
+        EOD square-off                                     not an entry
+                                                           condition
+        gave-back-after-T1                                 t1_hit False
+
+    dynamic_exit_reason() is excluded for a different reason: it MUTATES
+    ratchet state, so calling it here would double-advance it.
+
+    _monitor_one() delegates its three price-level branches to this
+    function, so there is ONE definition rather than two that drift —
+    the failure this codebase has already had with the market-session
+    check, the news regexes and the OI quadrant classifier.
+    """
+    if ltp is None:
+        return None
+    sl = pos.get("stoploss")
+    if sl is not None and ltp <= sl:
+        init = pos.get("initial_sl")
+        entry = pos.get("entry")
+        if entry is not None and sl > entry:
+            return (f"trailing stop in profit (₹{ltp} ≤ ₹{sl}, "
+                    f"locked above entry ₹{entry})")
+        if init is not None and sl > init:
+            return f"trailing stop (₹{ltp} ≤ ₹{sl}, raised from ₹{init})"
+        return f"stoploss (₹{ltp} ≤ ₹{sl})"
+    t2 = pos.get("target2")
+    if t2 is not None and ltp >= t2:
+        return f"target-2 (₹{ltp})"
+    inv = pos.get("spot_invalidation")
+    if inv and spot:
+        leg = pos.get("leg")
+        if (leg == "CE" and spot < inv) or (leg == "PE" and spot > inv):
+            return f"spot invalidation ({spot:.0f} vs {inv})"
+    return None
+
+
 class Bus:
     """Blackboard + pub/sub. Agents write state and publish events."""
 
@@ -5526,6 +5587,38 @@ class ExecutionAgent(Agent):
                              f"priced ₹{sig['option_ltp']} ({100*_drift:.1f}% "
                              f"stale from the {TechnicalAgent.interval}s "
                              f"analysis pack)")
+        # REFUSE A POSITION THAT WOULD EXIT ON ITS FIRST MONITOR CYCLE.
+        #
+        # 2026-08-06, fourth instance of one family today. SENSEX 78800
+        # CE opened and closed in the SAME SECOND at 11:43:02 on "spot
+        # invalidation (78756 vs 78791.6)" — live spot was already past
+        # the signal's own invalidation level BEFORE the position
+        # existed, because that level came from the 60s analysis pack
+        # while the exit check reads the 3s chain.
+        #
+        # Same shared predicate _monitor_one uses, against the same live
+        # chain the fill above is priced from, so entry and exit cannot
+        # disagree about whether the trade is already over.
+        # `entry`/`initial_sl` are deliberately LEFT OUT of the probe.
+        # They exist only to label a stop hit as a TRAIL ("locked above
+        # entry"), and at entry time there is no trail — a stop above
+        # the fill is a degenerate signal, not a banked profit. Passing
+        # them made a refusal read "trailing stop in profit ... locked
+        # above entry ₹200.0", which is nonsense for a position that
+        # never opened. Omitting them yields the honest plain label.
+        _probe = {"ltp": fill, "leg": leg,
+                  "stoploss": sig["stoploss"], "target2": sig["target2"],
+                  "t1_hit": False,
+                  "spot_invalidation": sig.get("spot_invalidation")}
+        _already = instant_exit_reason(
+            _probe, fill, (_chain or {}).get("spot"))
+        if _already:
+            self.bus.log(self.name,
+                         f"{label}: entry REFUSED — would exit immediately: "
+                         f"{_already}")
+            self.bus.alert("medium", self.name, sym,
+                           f"entry refused — already at exit: {_already}")
+            return {"error": f"would exit immediately: {_already}"}
         if cfg["paper_mode"]:
             order_id = f"PAPER-{int(time.time())}"
             self.bus.log(self.name, f"📄 PAPER BUY {qty} x {label} @ ₹{fill}")
@@ -5786,32 +5879,23 @@ class ExecutionAgent(Agent):
             # not a risk backstop, so it must not pre-empt the ones that
             # protect capital.
             reason = _dyn_exit
-        elif ltp <= p["stoploss"]:
-            # 2026-08-03 — this said "stoploss" whatever the stop had
-            # become. The trail and the breakeven lock RATCHET
-            # p["stoploss"] upward, so once it sits above entry, hitting
-            # it is a PROFIT being banked, not a loss being cut. 8 of 34
-            # "stoploss" exits in the journal were profitable, which
-            # makes any analysis that buckets by exit reason wrong —
-            # profitable trail exits counted as stopped-out losers.
-            # The exit behaviour is unchanged; only the label is honest.
-            _init = p.get("initial_sl")
-            if p["stoploss"] > p["entry"]:
-                reason = (f"trailing stop in profit (₹{ltp} ≤ ₹{p['stoploss']}, "
-                          f"locked above entry ₹{p['entry']})")
-            elif _init is not None and p["stoploss"] > _init:
-                reason = (f"trailing stop (₹{ltp} ≤ ₹{p['stoploss']}, "
-                          f"raised from ₹{_init})")
-            else:
-                reason = f"stoploss (₹{ltp} ≤ ₹{p['stoploss']})"
-        elif ltp >= p["target2"]:
-            reason = f"target-2 (₹{ltp})"
+        # 2026-08-03 — the stop label: the trail and the breakeven lock
+        # RATCHET p["stoploss"] upward, so once it sits above entry,
+        # hitting it is a PROFIT being banked, not a loss being cut. 8
+        # of 34 "stoploss" exits in the journal were profitable, which
+        # makes any analysis bucketed by exit reason wrong. Behaviour
+        # unchanged; only the label is honest.
+        #
+        # 2026-08-06 — the three PRICE-LEVEL branches (stop, target-2,
+        # spot invalidation) now live in instant_exit_reason() because
+        # the ENTRY path has to evaluate the identical conditions to
+        # refuse a position that would exit on its first cycle. Two
+        # copies would drift; see that function's docstring. The
+        # t1_hit branch stays here — it is not an entry condition.
+        elif (_instant := instant_exit_reason(p, ltp, spot)):
+            reason = _instant
         elif p["t1_hit"] and ltp <= p["entry"]:
             reason = "gave back gains after T1"
-        elif p.get("spot_invalidation") and spot:
-            inv = p["spot_invalidation"]
-            if (p["leg"] == "CE" and spot < inv) or (p["leg"] == "PE" and spot > inv):
-                reason = f"spot invalidation ({spot:.0f} vs {inv})"
         elif cfg.get("time_stop_minutes", 0) and p.get("opened_ts") and \
                 (time.time() - p["opened_ts"]) / 60 >= cfg["time_stop_minutes"]:
             elapsed = (time.time() - p["opened_ts"]) / 60

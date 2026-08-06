@@ -214,6 +214,98 @@ check("a cooldown refusal does NOT refresh its own stamp", _t0 == _t1,
 cfg_tight["option_risk_per_trade_rupees"] = 15000
 config.save(cfg_tight)
 
+print("\n3c) an entry already AT an exit condition is refused")
+# 2026-08-06 11:43:02 — SENSEX 78800 CE opened and closed in the SAME
+# second on "spot invalidation (78756 vs 78791.6)". Live spot was past
+# the signal's own invalidation level BEFORE the position existed: the
+# level came from the 60s analysis pack, the exit check reads the 3s
+# chain. Fourth instance of the stale-entry/live-exit family.
+import config as _c
+_cfg4 = _c.load(); _cfg4["option_reentry_cooldown_sec"] = 0; _c.save(_cfg4)
+
+
+def _bus_ex(spot=78700.0, ltp=363.0):
+    b = agents.Bus()
+    b.set("symbols", ["SENSEX"])
+    ch = _chain(ltp)
+    ch["spot"] = spot
+    b.set("chain:SENSEX", ch)
+    return b, agents.ExecutionAgent(b, {"orders_factory": lambda: None,
+                                        "get_chain": lambda s: None})
+
+
+# (a) spot invalidation already breached — the observed case
+b4, ex4 = _bus_ex(spot=78756.0)
+j4 = _job()
+j4["signal"]["spot_invalidation"] = 78791.6      # CE, spot BELOW it
+r4 = ex4.place(j4)
+check("a CE entry below its spot_invalidation is REFUSED",
+      isinstance(r4, dict) and "exit immediately" in str(r4.get("error", "")),
+      str(r4)[:130])
+check("and no position was opened",
+      not (b4.get("positions") or {}).get("SENSEX"),
+      str(b4.get("positions")))
+
+# (b) target2 already satisfied by the live price
+b5, ex5 = _bus_ex(ltp=700.0)
+j5 = _job()
+j5["signal"]["target2"] = 646.3                   # live 700 >= 646.3
+r5 = ex5.place(j5)
+check("an entry already at target-2 is REFUSED",
+      isinstance(r5, dict) and "exit immediately" in str(r5.get("error", "")),
+      str(r5)[:130])
+
+# (c) stop already breached
+b6, ex6 = _bus_ex(ltp=200.0)
+j6 = _job()
+j6["signal"]["stoploss"] = 251.19                 # live 200 <= 251.19
+r6 = ex6.place(j6)
+check("an entry already at its stop is REFUSED",
+      isinstance(r6, dict) and "exit immediately" in str(r6.get("error", "")),
+      str(r6)[:130])
+# The LABEL matters: at entry there is no trail, so a stop above the
+# fill is a degenerate signal, not a banked profit. The probe therefore
+# omits entry/initial_sl. Without that the refusal read "trailing stop
+# in profit ... locked above entry", which is nonsense for a position
+# that never opened.
+check("and it is labelled a stop, not a 'trailing stop in profit'",
+      "trailing stop" not in str(r6.get("error", "")),
+      str(r6.get("error", ""))[:120])
+
+# (d) a HEALTHY entry still goes through — a guard that blocks
+# everything is a shutdown, not a guard.
+b7, ex7 = _bus_ex(spot=78700.0, ltp=363.0)
+j7 = _job()
+j7["signal"]["spot_invalidation"] = 78600.0       # CE, spot ABOVE it
+r7 = ex7.place(j7)
+check("a healthy entry is still allowed",
+      (b7.get("positions") or {}).get("SENSEX") is not None,
+      f"{str(r7)[:110]} — blocking every entry would be a shutdown")
+
+print("\n3d) ONE definition — the entry guard and the exit check agree")
+# The failure this codebase has already had with the market-session
+# check, the news regexes and the OI quadrant classifier: two
+# near-identical implementations that drift. Drive BOTH on the same
+# inputs rather than asserting they look alike.
+_cases = [
+    # (leg, ltp, spot, stoploss, target2, spot_invalidation, should_exit)
+    ("CE", 363.0, 78756.0, 251.19, 646.3, 78791.6, True),   # inv breached
+    ("CE", 700.0, 78700.0, 251.19, 646.3, None,     True),   # target-2
+    ("CE", 200.0, 78700.0, 251.19, 646.3, None,     True),   # stop
+    ("CE", 363.0, 78700.0, 251.19, 646.3, 78600.0, False),  # healthy
+    ("PE", 363.0, 78900.0, 251.19, 646.3, 78800.0, True),   # PE inv above
+    ("PE", 363.0, 78700.0, 251.19, 646.3, 78800.0, False),  # PE healthy
+]
+for leg, ltp, spot, sl, t2, inv, want in _cases:
+    pos = {"entry": 363.0, "ltp": ltp, "leg": leg, "stoploss": sl,
+           "target2": t2, "initial_sl": sl, "t1_hit": False,
+           "spot_invalidation": inv}
+    got = agents.instant_exit_reason(pos, ltp, spot)
+    check(f"{leg} ltp={ltp} spot={spot} inv={inv} -> "
+          f"{'exit' if want else 'hold'}", bool(got) == want, str(got))
+
+_cfg4["option_reentry_cooldown_sec"] = 180; _c.save(_cfg4)
+
 print("\n4) the whole loop, end to end — the observed scenario")
 # Stale signal at 358.85, live chain at 363.0, and a target2 that the
 # OLD code would have accepted at 363.0. All three fixes must combine
