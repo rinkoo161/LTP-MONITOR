@@ -180,6 +180,40 @@ if pos:
           "option_reentry_cooldown_sec" in config.DEFAULTS,
           "config.save() silently drops unregistered keys")
 
+print("\n3b) a REFUSAL also stamps the cooldown — the approve/refuse loop")
+# 2026-08-06, third occurrence of one pattern in a session: S10 zero-lot
+# re-fired every 5s, the SENSEX churn opened/closed 5x in 38s, and the
+# risk gate APPROVED four BANKNIFTY/FINNIFTY orders in 19s that the
+# per-trade rupee cap then refused. All three: the signal-handled
+# bookkeeping only ran on a SUCCESSFUL FILL, so refusal paths re-fired
+# forever. Stamping on refusal closes all three with one mechanism.
+bus3 = agents.Bus()
+bus3.set("symbols", ["SENSEX"])
+bus3.set("chain:SENSEX", _chain(363.0))
+ex3 = agents.ExecutionAgent(bus3, {"orders_factory": lambda: None,
+                                   "get_chain": lambda s: None})
+cfg_tight = config.load()
+cfg_tight["option_risk_per_trade_rupees"] = 100      # forces a refusal
+config.save(cfg_tight)
+r1 = ex3.place(_job())
+check("the order is refused by the rupee cap",
+      isinstance(r1, dict) and "error" in r1, str(r1)[:110])
+check("the refusal STAMPED the re-entry block",
+      bool(bus3.get("option_reentry_block")),
+      "without this the same signal re-approves every ~5s forever")
+r2 = ex3.place(_job())
+check("an immediate retry is now refused by the COOLDOWN",
+      isinstance(r2, dict) and "cooldown" in str(r2.get("error", "")),
+      str(r2)[:120])
+# A cooldown refusal must NOT refresh its own stamp, or it never expires.
+_t0 = (bus3.get("option_reentry_block") or {}).get("SENSEX:78700.0:CE")
+ex3.place(_job())
+_t1 = (bus3.get("option_reentry_block") or {}).get("SENSEX:78700.0:CE")
+check("a cooldown refusal does NOT refresh its own stamp", _t0 == _t1,
+      f"{_t0} -> {_t1} — refreshing would make the cooldown permanent")
+cfg_tight["option_risk_per_trade_rupees"] = 15000
+config.save(cfg_tight)
+
 print("\n4) the whole loop, end to end — the observed scenario")
 # Stale signal at 358.85, live chain at 363.0, and a target2 that the
 # OLD code would have accepted at 363.0. All three fixes must combine

@@ -4,6 +4,97 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.30 — the same bug a third time, so fix the SHAPE (2026-08-06)
+
+At 11:18 the risk gate APPROVED four orders in 19 seconds that
+execution then refused:
+
+    11:18:05 BANKNIFTY 1 lot risks Rs 3,445 > cap Rs 2,000 (115pt x 30)
+    11:18:11 FINNIFTY  1 lot risks Rs 3,531 > cap Rs 2,000 ( 59pt x 60)
+    11:18:15 FINNIFTY  ... same
+    11:18:22 FINNIFTY  ... same
+
+No fills. Approve -> refuse -> re-approve, every ~5s, each pass costing
+a full AI probability evaluation and a MEDIUM alert.
+
+### Third instance of ONE pattern in a single session
+
+    S10 zero-lot     sizing returned 0 lots, re-fired every 5s
+    SENSEX churn     opened and closed 5x in 38s
+    approve/refuse   APPROVED then blocked by the rupee cap, 4x in 19s
+
+All three are the same bug: **the signal-handled bookkeeping only ever
+ran on a SUCCESSFUL FILL**, so every downstream refusal path re-fired
+for as long as the signal stayed valid. v59.29 fixed the churn's three
+causes but its cooldown stamped only in `exit()` — which cannot help a
+signal that never opens a position. Fixing instances one at a time was
+the mistake; this fixes the shape.
+
+`ExecutionAgent.place()` is now a thin wrapper that stamps the re-entry
+cooldown on ANY refusal, delegating to `_place()`. It can only ever
+REDUCE order flow — a refused order does not become an accepted one
+because of this. It deliberately does NOT re-stamp when the refusal IS
+the cooldown, which would refresh it forever and make it permanent;
+that case is pinned by a test.
+
+### The cap moved to the risk gate — WHERE, not WHAT
+
+`RiskAgent.evaluate()` now evaluates `cap_by_rupee_risk` with the same
+`option_risk_per_trade_rupees` key, via the SAME shared helper. So a
+trade that cannot be placed is REJECTED with a reason instead of being
+approved and then silently refused.
+
+The cap itself is NOT changed and NOT loosened. `config.py:152` states
+the invariant as `cap == risk_pct x capital`; `sizing.risk_coherence()`
+returns [] — 1.0% x Rs 200,000 = Rs 2,000, coherent. An exception while
+evaluating the cap REJECTS rather than passing.
+
+### What this does NOT fix, stated plainly
+
+At `lots_per_trade=1` there is nothing to size down to, so the cap can
+only block (place()'s own comment already said this). At current lot
+sizes and stop widths:
+
+    BANKNIFTY  lot 30  needs stop <=  67pt to fit Rs 2,000  (saw 115pt)
+    FINNIFTY   lot 60  needs stop <=  33pt                  (saw  59pt)
+    NIFTY      lot 65  needs stop <=  31pt
+    SENSEX     lot 20  needs stop <= 100pt
+
+BANKNIFTY and FINNIFTY option buys are therefore effectively closed at
+these stop widths regardless of signal quality. That is a CALIBRATION
+question about stop widths versus lot sizes and is left open on purpose
+— moving where a check runs must not quietly become a decision to widen
+it.
+
+### A fifth ambiguous-anchor slip, caught by its own test
+
+`test_option_risk_cap` split on the FIRST occurrence of
+`key="option_risk_per_trade_rupees"`. Adding the risk-gate site made
+that anchor retarget silently, and three checks failed against code
+that works. Now scoped to `_place`'s body explicitly, with an assert
+that the cap is still THERE (check 7's ordering logic depends on it),
+plus a new section asserting the risk-gate site reuses the shared
+helper and rejects on evaluation failure.
+
+Ambiguous anchors this session: `"_age = "`, a non-unique
+`def option_chain`, `"function loadWatchPage"`, `"watch_symbols"`
+inside `_maybe_snapshot_watch_symbols`, and now this.
+
+### Also noted, not changed
+
+`max_trades_per_day` went 3 -> 100 and `max_concurrent_positions`
+1 -> 10 at 10:23:10, 55 seconds before the churn began. NOTHING in the
+codebase writes either key — both are read-only everywhere — so it came
+from a Settings save. Operator's call; left as is on explicit
+instruction. Worth recording only because it silently reversed values
+restored 90 minutes earlier, and because at 100 the daily cap is no
+longer a second line of defence.
+
+`test_dashboard_8_4_split` failed once in a full-suite run and passed
+standalone 23/23 immediately after, then passed in the next full run.
+It drives a real browser; treat it as contention-flaky rather than
+clean.
+
 ## v59.29 — the SENSEX 78700 CE runaway: three defects, not one (2026-08-06)
 
 Seen live at 10:24, paper mode, five round trips in 38 seconds:

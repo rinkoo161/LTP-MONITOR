@@ -181,15 +181,42 @@ check("cap 0 disables rather than blocking everything",
       "0 must mean off, not 'block every trade'")
 
 print("\n6) a refusal is LOUD")
-blk = AG.split('key="option_risk_per_trade_rupees"')[1][:900]
+# 2026-08-06 — this split on the FIRST occurrence of the cap key. The
+# cap is now evaluated in TWO places: RiskAgent.evaluate() (so a trade
+# that cannot be placed is REJECTED with a reason rather than approved
+# and then refused a fraction of a second later) and, unchanged,
+# ExecutionAgent._place(). The bare split silently retargeted to the new
+# risk-gate site and three checks failed against working code — fifth
+# ambiguous-anchor slip of this work. Scope to the EXECUTION body
+# explicitly, and assert the risk-gate site separately below.
+_exec_body = AG.split("    def _place(self, job, manual=False):")[1]
+assert 'key="option_risk_per_trade_rupees"' in _exec_body, \
+    "the cap left ExecutionAgent._place — check 7's ordering assumes it is there"
+blk = _exec_body.split('key="option_risk_per_trade_rupees"')[1][:900]
 check("the cap logs when it bites", "bus.log" in blk)
 check("a refusal raises an alert, not a silent return", "bus.alert" in blk,
       "a silently-skipped trade is indistinguishable from no signal")
 check("the refusal reason reaches the caller", 'error' in blk)
 
+print("\n6b) and it is ALSO evaluated at the risk gate, before approval")
+_risk_body = AG.split("    def evaluate(self, job):")[1]
+_risk_body = _risk_body[:_risk_body.index("\n    def ")]
+check("RiskAgent.evaluate() applies the same cap",
+      'key="option_risk_per_trade_rupees"' in _risk_body,
+      "APPROVED for an order the rupee cap will refuse is a misleading "
+      "gate line — observed 4 times in 19s on 2026-08-06")
+check("it reuses the SHARED helper, not a second implementation",
+      "cap_by_rupee_risk" in _risk_body,
+      "a per-trade cap that drifts from sizing.py's is the two-copies "
+      "failure this codebase keeps re-learning")
+check("a failure to EVALUATE the cap does not silently approve",
+      "could not be evaluated" in _risk_body,
+      "an exception here must reject, not pass")
+
 print("\n7) it sits AFTER sizing and BEFORE the order")
 i_size = AG.find("sizing.size_option_buy")
-i_cap = AG.find('key="option_risk_per_trade_rupees"')
+i_cap = _exec_body.find('key="option_risk_per_trade_rupees"') + AG.find(
+    "    def _place(self, job, manual=False):")
 i_order = AG.find("PAPER BUY", i_cap)
 check("cap applied after the sizing call", 0 < i_size < i_cap)
 check("cap applied before the order is built", i_cap < i_order, f"{i_cap} < {i_order}")

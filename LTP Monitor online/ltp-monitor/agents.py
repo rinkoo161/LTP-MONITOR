@@ -3419,6 +3419,46 @@ class RiskAgent(Agent):
               f"concurrent positions {len(positions)}/{max_pos}")
         check(trades < cfg["max_trades_per_day"],
               f"trades {trades}/{cfg['max_trades_per_day']}")
+        # PER-TRADE RUPEE CAP, EVALUATED HERE RATHER THAN AT EXECUTION.
+        #
+        # 2026-08-06. This ceiling already existed, but only inside
+        # ExecutionAgent.place() — AFTER approval. The visible result
+        # was a signal being APPROVED and then refused by the risk cap
+        # a fraction of a second later, four times in 19 seconds:
+        #
+        #   11:18:05 BANKNIFTY 1 lot risks Rs 3,445 > cap Rs 2,000
+        #   11:18:11 FINNIFTY  1 lot risks Rs 3,531 > cap Rs 2,000
+        #   11:18:15 FINNIFTY  ... same
+        #   11:18:22 FINNIFTY  ... same
+        #
+        # "APPROVED" for an order that was never placeable is a
+        # misleading gate line, and each pass cost a full AI probability
+        # evaluation plus a MEDIUM alert. The cap is NOT changed here
+        # and is NOT loosened — config.py:152 states the invariant as
+        # cap == risk_pct x capital and sizing.risk_coherence() confirms
+        # it holds. This only moves WHERE it is evaluated, so a trade
+        # that cannot be placed is rejected with a reason instead of
+        # approved and then silently refused.
+        #
+        # NOTE, because it is a real consequence and not a side note: at
+        # lots_per_trade=1 there is nothing to size down TO, so this can
+        # only ever block (see place()'s own comment). At current lot
+        # sizes and stop widths that closes BANKNIFTY and FINNIFTY
+        # option buys entirely. That is a CALIBRATION question about
+        # stop widths versus lot sizes, deliberately left open here —
+        # moving the check must not quietly become a decision to widen
+        # the cap.
+        try:
+            import sizing as _sz
+            _cap_lots, _cap_why = _sz.cap_by_rupee_risk(
+                cfg, job["symbol"], sig.get("entry"), sig.get("stoploss"),
+                cfg.get("lots_per_trade", 1),
+                key="option_risk_per_trade_rupees")
+            check(_cap_lots >= 1, _cap_why or "per-trade rupee cap")
+        except Exception as _e:
+            # A failure to EVALUATE the cap must not silently approve.
+            check(False, f"per-trade rupee cap could not be evaluated "
+                         f"({type(_e).__name__})")
         # AI Decision Engine (Feature #8) — audit finding: Institutional
         # Activity (Feature #5) and Technical Confirmation (Feature #7)
         # were both fully built, tested, and displayed on the dashboard,
@@ -5340,6 +5380,45 @@ class ExecutionAgent(Agent):
         self.place(job)
 
     def place(self, job, manual=False):
+        """Wrapper: stamp the re-entry cooldown on ANY refusal, not only
+        on a completed exit.
+
+        2026-08-06, third occurrence of one pattern in a single session:
+
+          S10 zero-lot   sizing returned 0 lots, re-fired every 5s
+          SENSEX churn   opened and closed 5x in 38s
+          approve/refuse APPROVED then blocked by the rupee cap, 4x/19s
+
+        All three are the same bug: the signal-handled bookkeeping only
+        ever happened on a SUCCESSFUL FILL, so every downstream refusal
+        path re-fired for as long as the signal stayed valid. Each pass
+        costs a full AI probability evaluation and writes an alert.
+
+        Stamping on refusal closes all three with one mechanism. It can
+        only ever REDUCE order flow — a refused order is not becoming an
+        accepted one because of this.
+        """
+        res = self._place(job, manual=manual)
+        try:
+            sig = job.get("signal") or {}
+            err = str((res or {}).get("error") or "") if isinstance(res, dict) else ""
+            # Do NOT re-stamp when the refusal IS the cooldown, or it
+            # would refresh itself forever and never expire.
+            if err and "re-entry cooldown" not in err and \
+                    sig.get("signal") in ("BUY_CE", "BUY_PE"):
+                _leg = "CE" if sig["signal"] == "BUY_CE" else "PE"
+                _key = f"{job.get('symbol')}:{sig.get('strike')}:{_leg}"
+                _cd = self.bus.get("option_reentry_block") or {}
+                _cd[_key] = time.time()
+                self.bus.set("option_reentry_block", _cd)
+        except Exception:
+            # Bookkeeping must never be able to break order placement.
+            # (Not a bare swallow of the order path — `res` is already
+            # computed and is returned regardless.)
+            pass
+        return res
+
+    def _place(self, job, manual=False):
         cfg = config.load()
         sig, analysis, sym = job["signal"], job["analysis"], job["symbol"]
         # See the stamp in exit(). Blocks re-entry into the SAME
