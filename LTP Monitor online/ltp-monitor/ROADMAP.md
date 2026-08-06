@@ -4,6 +4,64 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.50 — the book restated, and 61% of it had been charged NOTHING (2026-08-06)
+
+Historical fees recomputed under the notional/premium-aware model.
+`pnl = gross_pnl - new_fees`; no price or outcome was re-derived. 281
+of 307 restated, 7 skipped for having no `gross_pnl`/`fees` (inventing
+a gross for them would be fabricating history), and every restated row
+carries `fees_restated` plus `fees_flat_original`, so the change is
+auditable from the file itself rather than only from the backup.
+
+### The dry run did not match the samples, and that mattered
+
+Three sampled spreads showed deltas of +76, -19 and -21 while the
+aggregate said +318 average. Chasing that discrepancy found the real
+cause, and it is NOT the flat-vs-notional gap this work started from:
+
+    300 restatable
+      184 (61%) charged ZERO fees   -> +Rs 67,400   86% of the correction
+      116        charged a flat fee -> +Rs 10,496   14%
+
+    zero-fee dates: 07-22 (11), 07-23 (33), 07-24 (47),
+                    07-27 (47), 07-28 (16), 07-29 (30)
+
+That is the `fee_per_lot = 0` bug this codebase already warns about in
+`warn_zero_fees` — "Every P&L figure today is overstated". A week of
+trades recorded no cost at all. The claim in v59.49 that prior P&L was
+"overstated by Rs 21-101 per lot per round trip" was true only for the
+116 flat-fee records; for the other 184 it was overstated by the ENTIRE
+cost.
+
+Had the dry run's aggregate been accepted without checking it against
+individual records, this would have shipped described as a
+flat-vs-notional correction, which it mostly is not.
+
+### The result
+
+    book P&L   -Rs 78,806  ->  -Rs 156,702
+
+    strategy                   n      net  Sharpe    MaxDD  Recov  win%
+    momentum_confluence        8     +797    0.16    -1,122  0.71    62
+    orb                        4     +651    0.08    -3,396  0.19    50
+    rule-engine (AI invalid)   7     +486    0.18      -508  0.96    57
+    bear_call_spread         101  -16,401   -0.08   -35,324 -0.46    33
+    bull_put_spread           88  -24,051   -0.53   -25,440 -0.95    26
+    (future, unattributed)    59  -99,858   -0.44  -101,758 -0.98    24
+    ALL                      307 -156,702   -0.23  -156,702 -1.00    31
+
+`bear_call_spread` — the one strategy that looked like an edge all day,
++Rs 21,721 — is **-Rs 16,401** once its trades are charged what they
+cost. Most of them fell inside the zero-fee window. Win rates dropped
+too (53% -> 33%) because trades that netted a few rupees now net less
+than their costs.
+
+NOTHING in the book is profitable on more than 8 trades. The three
+positive lines have n=8, n=4 and n=7.
+
+This does not mean the strategies got worse today. It means the record
+was measuring something that had never happened: trading without costs.
+
 ## v59.49 — the live P&L used a cost model already known to be wrong (2026-08-06)
 
 The Futures Research page had ALREADY measured this, on the same 325
