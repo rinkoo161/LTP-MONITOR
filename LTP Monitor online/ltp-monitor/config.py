@@ -926,6 +926,27 @@ def _warn_dropped_keys(dropped):
         pass
 
 
+# Values below which a setting stops describing reality. Currently one
+# entry, and it earned its place: fee_per_lot = 0 means "trading costs
+# nothing", which is never true, and it silently overstated 184 trades
+# across six sessions before anyone noticed.
+FLOORS = {"fee_per_lot": 1}
+
+
+def _warn_floored(floored):
+    """Say loudly that a saved value was raised to its floor."""
+    for k, was, lo in floored or []:
+        msg = (f"config: {k}={was} is below the floor {lo} and was saved as "
+               f"{lo}. A zero or near-zero fee makes every P&L figure, "
+               f"every Quality breakdown and every backtest that "
+               f"is_live_enabled() reads overstate profit.")
+        try:
+            import agents
+            agents.pilot.bus.log("config", "⚠ " + msg)
+        except Exception:
+            print("[config] " + msg)
+
+
 def save(updates: dict) -> dict:
     with _lock:
         cfg = dict(DEFAULTS)
@@ -934,15 +955,31 @@ def save(updates: dict) -> dict:
                 cfg.update(json.load(open(PATH)))
             except Exception:
                 pass
-        dropped = set()
+        dropped, floored = set(), []
         for k, v in updates.items():
             if k not in DEFAULTS:
                 dropped.add(k)
                 continue
             if v is not None:
+                # 2026-08-06 — FLOORS. A value that makes trading look
+                # FREE is never a legitimate operator choice, and a
+                # warning was not enough: `warn_zero_fees` already
+                # existed, already said "Every P&L figure today is
+                # overstated", and a full week (07-22..07-29, 184
+                # trades) still recorded zero cost. Warnings are read
+                # after the fact; a floor is not skippable.
+                lo = FLOORS.get(k)
+                if lo is not None:
+                    try:
+                        if float(v) < lo:
+                            floored.append((k, v, lo))
+                            v = lo
+                    except (TypeError, ValueError):
+                        pass
                 cfg[k] = v
         json.dump(cfg, open(PATH, "w"), indent=2)
     _warn_dropped_keys(dropped)   # outside _lock — file I/O, not config state
+    _warn_floored(floored)
     return cfg
 
 

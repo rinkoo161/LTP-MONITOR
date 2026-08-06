@@ -4,6 +4,51 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.51 — a FLOOR under fee_per_lot, because the warning was not enough (2026-08-06)
+
+184 of 300 journal records were charged ZERO fees across six sessions
+(07-22 through 07-29). `fee_per_lot` had been saved as 0 from Settings;
+nothing in the codebase writes that key.
+
+`warn_zero_fees` ALREADY EXISTED and already said exactly the right
+thing — "fee_per_lot is 0. Every P&L figure today is overstated,
+including the backtest numbers is_live_enabled() reads." It fired once
+a day. The zero-cost trades ran for a week anyway.
+
+A warning is read after the fact. This adds a floor, which is not
+skippable:
+
+  * `config.FLOORS = {"fee_per_lot": 1}` — `save()` clamps and says
+    loudly what it did. A value that makes trading look FREE is never
+    a legitimate operator choice; a LOW value still is, so 25 is
+    preserved and only 0 and negatives are lifted. A negative fee would
+    pay you to trade.
+  * `realistic_fees()`'s fallback can no longer be cheaper than the
+    SHIPPED DEFAULT. That path runs precisely when the real cost model
+    could not be computed — the worst moment to understate. Erring high
+    is recoverable; erring to zero is what produced the 184 trades.
+
+`warn_zero_fees` is deliberately kept: the floor closes the config
+route, and a zero arriving any other way should still be shouted about.
+
+### An unattributed test failure, stated rather than buried
+
+`test_authoritative_prev_close` fails (3 of its 12 checks, all in the
+candle-reconstruction fallback: the stub has no `.intraday`). It passed
+in full-suite runs earlier today. I could not attribute it:
+
+    agents.py @ v59.48 (pre cost-model)   still fails
+    app.py    @ v59.48                    still fails
+    config.py @ HEAD (no FLOORS)          still fails
+    all uncommitted changes stashed       still fails
+    run ALONE in the harness              still fails — not order-dependence
+    git log -S intraday on app.py         last touched in an EARLIER session
+
+So it is not the fee floor and not today's cost work, and it is not
+shared-state pollution from the three tests added today. Beyond that I
+do not know, and the suite is NOT green: 129/132, 1 failed. Recorded
+here rather than reported as passing.
+
 ## v59.50 — the book restated, and 61% of it had been charged NOTHING (2026-08-06)
 
 Historical fees recomputed under the notional/premium-aware model.

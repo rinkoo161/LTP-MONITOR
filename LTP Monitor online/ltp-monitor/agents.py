@@ -516,7 +516,16 @@ def realistic_fees(kind, symbol, lots, premium_in, premium_out, cfg,
             log(f"cost model unavailable for {symbol} ({type(e).__name__}) "
                 f"- falling back to the flat fee_per_lot model, which "
                 f"UNDERSTATES the real cost")
-    return round(cfg.get("fee_per_lot", 40) * lots * 2 * max(1, legs), 0)
+    # The fallback must never be CHEAPER than the shipped default. An
+    # operator can legitimately tune fee_per_lot down; they cannot
+    # legitimately make a trade free, and this path runs precisely when
+    # the real model could not be computed — the worst moment to
+    # understate. Erring high is recoverable; erring to zero is what
+    # produced 184 zero-cost trades.
+    import config as _cfg
+    flat = max(float(cfg.get("fee_per_lot") or 0),
+               float(_cfg.DEFAULTS.get("fee_per_lot", 40)))
+    return round(flat * lots * 2 * max(1, legs), 0)
 
 
 def instant_exit_reason(pos, ltp, spot):
