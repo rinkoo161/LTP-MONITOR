@@ -4,6 +4,28 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.47 — the login card had a border and it was invisible (2026-08-06)
+
+Reported: "everything is white now, no boundary of login panel."
+
+The border was there. `--line` #E6E8EC sits **17 RGB units** from the
+white card and 11 from the #F7F8FA page wash, so a 1px hairline
+disappeared. Measured with getComputedStyle rather than judged from a
+screenshot — the screenshot is exactly what made it look fine to me.
+
+Two of my own changes compounded it. v59.46 removed the border from
+`form` after I saw a "box within a box" — but `.card` is the container
+and `form` sits inside it, so the inner box I removed was the real
+edge's companion, leaving only the invisible hairline. Then
+`box-shadow:none` removed the last cue that the card had an edge at
+all.
+
+Fixed by giving the card a stronger edge than the in-app table
+hairlines, because it floats on a wash rather than sitting inside a
+panel: page #F0F2F5, card #FFF, edge #D7DCE3 — a 40-unit step from the
+card and 25 from the page — plus a soft two-layer shadow. Verified
+numerically, not visually.
+
 ## v59.46 — login page matched, chart indicators default OFF (2026-08-06)
 
 ### Login page

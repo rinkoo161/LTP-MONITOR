@@ -47,9 +47,16 @@
 
 /* QC-reference login: a faint page wash so the white card has an edge,
    and a hairline border instead of a shadow. */
-body{background:var(--panel2);}
-.card,.panel{background:var(--panel);border:1px solid var(--line);
-     box-shadow:none;border-radius:10px;}
+/* 2026-08-06 — the card had a border and it was INVISIBLE: --line
+   #E6E8EC sits 17 RGB units from the white card and 11 from the page
+   wash, so a 1px hairline vanished. Reported as "no boundary of login
+   panel". The card needs its own slightly stronger edge than the
+   in-app table hairlines do, because it floats on a wash rather than
+   sitting inside a panel. Measured, not guessed: card #FFF, page
+   #F0F2F5, edge #D7DCE3 — a 40-unit step from the card. */
+body{background:#F0F2F5;}
+.card{background:var(--panel);border:1px solid #D7DCE3;border-radius:12px;
+      box-shadow:0 1px 3px rgba(16,24,40,.06),0 1px 2px rgba(16,24,40,.04);}
 form{background:none;border:none;}
 input{background:var(--panel);border:1px solid var(--line);color:var(--text);}
 input:focus{outline:none;border-color:var(--accent);}
