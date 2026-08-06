@@ -1306,7 +1306,8 @@ def ai_signal(analysis: dict, api_key: str | None = None,
         "Indian index options. Output ONE trade decision as JSON only:\n"
         '{"signal":"BUY_CE|BUY_PE|WAIT","strike":<n>,"entry":<premium>,'
         '"stoploss":<premium>,"target1":<premium>,"target2":<premium>,'
-        '"spot_invalidation":<spot>,"confidence":<0-100>,'
+        '"spot_invalidation":<index level that invalidates this trade, '
+        'well away from the current spot>,"confidence":<0-100>,'
         '"reasons":[<=3 short],"risk_note":<short>}\n'
         "Rules: momentum is live price; if it conflicts with OI bias, follow "
         "momentum or WAIT. ATM/ITM strikes only, never OTM. Min 1:2 RR "
@@ -1552,6 +1553,58 @@ def enforce_signal_invariants(sig, analysis, cfg=None, log=lambda m: None):
         sig["stoploss"] = _sl
         sig["target1"] = round(entry * 1.60, 1)
         sig["target2"] = round(entry * 2.05, 1)
+
+    # --- spot_invalidation must sit OUTSIDE normal noise ---------------
+    #
+    # 2026-08-06. Measured over every option trade that carried one:
+    #
+    #   strike     inv        distance    outcome
+    #   78800   78604.0      196 pts     trailing stop      -523
+    #   24650   24541.8      108 pts     stoploss          -1714
+    #   78800   78752.6       47 pts     profit floor       +366
+    #   78900   78859.8       40 pts     AI advisory         -68
+    #   78800   78791.6        8 pts     SPOT INVALIDATION   -60  (same second)
+    #   24650   24650.0        0 pts     SPOT INVALIDATION  -226  (AT the strike)
+    #   24650   24648.05       2 pts     SPOT INVALIDATION   -79  (1-second hold)
+    #
+    #   all-time: 12 closes on spot invalidation, -Rs 2,368, median hold 82s
+    #
+    # Every trade that DIED on this exit came from the tight group;
+    # every one with a sensible distance lived long enough to be judged
+    # on direction. A level set at or within a couple of points of spot
+    # is not an invalidation condition — it is a coin flip on the next
+    # tick.
+    #
+    # Two causes, both structural. `_rule_signal` takes the NEAREST OI
+    # wall below/above spot with no minimum distance, and OI concentrates
+    # AT the money, so the nearest wall is routinely the ATM strike
+    # itself. And the LLM prompt's placeholder literally read
+    # "spot_invalidation":<spot>, which reads as an instruction to emit
+    # the spot price.
+    #
+    # The floor is ONE ATR, not a number fitted to the losers above.
+    # config.py:147 records why that distinction matters: picking a risk
+    # limit by back-fitted outcomes is the thing this engagement exists
+    # to refuse. ATR is the measure of normal per-bar movement, so
+    # "inside one ATR" means "one ordinary bar invalidates it" — a
+    # reason, not a curve fit. `atr_pct` is already computed and already
+    # feeds option_stop_geometry.
+    _inv = sig.get("spot_invalidation")
+    _spot = (analysis or {}).get("spot")
+    if _inv and _spot and sig.get("signal") in ("BUY_CE", "BUY_PE"):
+        _atr_pct = (analysis or {}).get("atr_pct")
+        _floor_pct = cfg.get("signal_invalidation_min_pct", 0.15)
+        _min_pct = max(_atr_pct or 0.0, _floor_pct)
+        _min_dist = _spot * _min_pct / 100.0
+        _dist = (_spot - _inv) if sig["signal"] == "BUY_CE" else (_inv - _spot)
+        if _dist < _min_dist:
+            _new = (round(_spot - _min_dist, 2) if sig["signal"] == "BUY_CE"
+                    else round(_spot + _min_dist, 2))
+            repairs.append(
+                f"spot_invalidation {_inv} -> {_new} ({_dist:.1f}pts from spot "
+                f"{_spot:.0f} is inside {'ATR' if (_atr_pct or 0) >= _floor_pct else 'the floor'} "
+                f"{_min_pct:.2f}% = {_min_dist:.1f}pts)")
+            sig["spot_invalidation"] = _new
 
     # --- the ENTRY PRICE must belong to the instrument being named -----
     #

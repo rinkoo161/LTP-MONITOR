@@ -688,6 +688,38 @@ def _log_ai_advisory(agent, sym, kind, verdict, confidence, threshold, cfg, pnl,
                   f"[{state}] · P&L ₹{pnl:.0f} · {verdict.get('why', '')}{extra}")
 
 
+def ai_exit_contradicts_position(leg, market_dir):
+    """True when an AI EXIT verdict cites a move that FAVOURS the trade.
+
+    2026-08-06. Every AI auto-exit this system has ever taken — five,
+    across three sessions and both directions — closed a position
+    because of a trend that helped it:
+
+        08-04 NIFTY    PE  hold   4s  +73   "Market trending down..."
+        08-04 NIFTY    PE  hold  23s  -229  "Market trending down..."
+        08-05 NIFTY    PE  hold 100s  +171  "Market trending down..."
+        08-06 SENSEX   CE  hold 828s   -68  "Market trending up..."
+        08-06 FINNIFTY CE  hold   1s   -60  "Market trending up..."
+
+    Every PE closed because the market was falling — which is what a put
+    wants. Every CE closed because it was rising. Five for five.
+
+    The prompt never stated the relationship, so the model treated any
+    trend as a reason to exit. The prompt now says it AND returns
+    `market_dir` as a field, so this check is structural rather than a
+    regex over prose — a regex would have to guess at negation,
+    hedging and phrasing the model has never been constrained to.
+
+    Advisory alerts are unaffected: this only blocks the AUTOMATIC
+    exit. A human reading "market trending up, consider exiting your
+    call" can weigh it; an automatic exit acting on it cannot.
+    """
+    d = str(market_dir or "").strip().upper()
+    if d not in ("UP", "DOWN"):
+        return False                      # FLAT/absent -> no opinion
+    return (leg == "CE" and d == "UP") or (leg == "PE" and d == "DOWN")
+
+
 def ai_advisory_due(state, cfg, pnl, risk_rupees=None, near_stop=False):
     """Should an AI exit advisory run for this position RIGHT NOW?
 
@@ -6108,8 +6140,22 @@ class ExecutionAgent(Agent):
             market_ctx = self._market_move_context(sym)
             prompt = (
                 "You monitor an open Indian index option BUY position "
-                "(long call or put). Reply ONLY JSON: "
+                "(long call or put).\n"
+                # 2026-08-06 — the prompt never stated the directional
+                # relationship, so the model treated ANY trend as a
+                # reason to exit. All five auto-exits ever taken cited a
+                # trend that FAVOURED the position: every PE closed
+                # because the market was "trending down", every CE
+                # because it was "trending up". Say it explicitly, and
+                # ask for the direction as a FIELD so the guard below
+                # can check it structurally instead of regexing prose.
+                "A CALL (CE) GAINS when the index RISES and loses when "
+                "it falls. A PUT (PE) GAINS when the index FALLS and "
+                "loses when it rises. A trend in the position's favour "
+                "is a reason to HOLD, not to exit.\n"
+                "Reply ONLY JSON: "
                 "{\"advice\":\"HOLD|EXIT\",\"confidence\":0-100,"
+                "\"market_dir\":\"UP|DOWN|FLAT\","
                 "\"why\":\"<15 words\"}.\n"
                 f"{sym} {p.get('strike')} {p.get('leg')}, entry "
                 f"\u20b9{p.get('entry')}, current LTP \u20b9{ltp}, stop "
@@ -6136,7 +6182,27 @@ class ExecutionAgent(Agent):
                     self.bus.alert("medium", "execution", sym,
                                    f"AI suggests exiting {sym} {p.get('strike')} "
                                    f"{p.get('leg')}: {why}")
-                    if cfg.get("option_ai_auto_exit_enabled", False):
+                    _contra = ai_exit_contradicts_position(
+                        p.get("leg"), j.get("market_dir"))
+                    _held = (time.time() - (p.get("opened_ts") or 0))
+                    _min_hold = cfg.get("option_ai_min_hold_sec", 120)
+                    if _contra:
+                        # See ai_exit_contradicts_position(): 5 of 5
+                        # auto-exits ever taken were of this shape.
+                        self.bus.log(self.name,
+                                     f"AI auto-exit BLOCKED for {sym} "
+                                     f"{p.get('strike')} {p.get('leg')} — the "
+                                     f"stated move ({j.get('market_dir')}) "
+                                     f"FAVOURS this position: {why}")
+                    elif p.get("opened_ts") and _held < _min_hold:
+                        # "shows no profit" one second after entry is
+                        # vacuous — no position shows profit one second
+                        # in. FINNIFTY 26900 CE, 15:01:33 -> 15:01:34.
+                        self.bus.log(self.name,
+                                     f"AI auto-exit DEFERRED for {sym} "
+                                     f"{p.get('strike')} {p.get('leg')} — held "
+                                     f"{_held:.0f}s < {_min_hold}s minimum: {why}")
+                    elif cfg.get("option_ai_auto_exit_enabled", False):
                         self.bus.log(self.name,
                                      f"AI auto-exit ENABLED — closing {sym} "
                                      f"{p.get('strike')} {p.get('leg')} on AI "

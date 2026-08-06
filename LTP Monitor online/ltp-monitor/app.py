@@ -25,7 +25,7 @@ from agents import Orchestrator, compute_momentum
 import agents
 
 BASE = os.path.dirname(os.path.abspath(__file__))
-APP_VERSION = "v59.39"   # maintained per explicit request; last delivered was v49
+APP_VERSION = "v59.40"   # maintained per explicit request; last delivered was v49
 
 app = FastAPI(title="LTP Option Chain Monitor")
 
@@ -873,6 +873,8 @@ class SettingsIn(BaseModel):
     signal_entry_tolerance_pct: float | None = None
     signal_entry_rescale_max_pct: float | None = None
     paused_symbols: list | None = None
+    option_ai_min_hold_sec: int | None = None
+    signal_invalidation_min_pct: float | None = None
     chart_history_days_1m: int | None = None
     chart_history_days_5m: int | None = None
     chart_history_days_15m: int | None = None

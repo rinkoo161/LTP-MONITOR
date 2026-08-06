@@ -94,6 +94,14 @@ DEFAULTS = {
     # instruction: -Rs 40,781 at 28% win over 292 trades, and 0-for-3
     # since the per-trade caps — the worst symbol in both regimes.
     "paused_symbols": [],
+    # 2026-08-06 — an AI auto-exit fired ONE SECOND after entry citing
+    # "current position shows no profit", which is vacuous that early.
+    # Advisory alerts are unaffected; only the AUTOMATIC exit waits.
+    "option_ai_min_hold_sec": 120,
+    # 2026-08-06 — floor used only when ATR is unavailable. 12 closes on
+    # spot invalidation cost Rs 2,368 with a median hold of 82s; every
+    # one came from a level set 0-8 points from spot on a 24,650 index.
+    "signal_invalidation_min_pct": 0.15,
     "market_data_feed": "rest",  # "rest" (default, proven) or "websocket"
                                  # (dhan_ws.py — run test_dhan_ws.py against
                                  # a live account first, see its docstring)

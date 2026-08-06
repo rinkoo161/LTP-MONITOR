@@ -4,6 +4,89 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.40 — phase 2: the two mechanism defects (2026-08-06)
+
+Between them these cost 78% of the directional-option loss since the
+per-trade caps (-Rs 1,541 of -Rs 1,982 over 27 positions). The trades
+that exited on real stops and targets ran at roughly break-even
+(-Rs 441 over 17), so this is plumbing, not strategy.
+
+### DEFECT 1 — spot_invalidation set inside tick noise
+
+    strike     inv        distance    outcome
+    78800   78604.0      196 pts     trailing stop      -523
+    24650   24541.8      108 pts     stoploss          -1714
+    78800   78752.6       47 pts     profit floor       +366
+    78900   78859.8       40 pts     AI advisory         -68
+    78800   78791.6        8 pts     SPOT INVALIDATION   -60  (same second)
+    24650   24650.0        0 pts     SPOT INVALIDATION  -226  (AT the strike)
+    24650   24648.05       2 pts     SPOT INVALIDATION   -79  (1-second hold)
+
+    all-time: 12 closes on this exit, -Rs 2,368, median hold 82s, 0 wins
+
+Every trade that DIED on it came from the tight group; every one with a
+sensible distance lived long enough to be judged on direction.
+
+Two causes, both structural. `_rule_signal` takes the NEAREST OI wall
+below/above spot with no minimum distance — and OI concentrates AT the
+money, so the nearest wall is routinely the ATM strike itself. And the
+LLM prompt's placeholder literally read `"spot_invalidation":<spot>`,
+which reads as an instruction to emit the spot price. Every other
+placeholder in that prompt describes its value (`<premium>`, `<n>`,
+`<0-100>`); this one named the wrong quantity.
+
+FLOOR IS ONE ATR, not a number fitted to the losers above. `config.py:147`
+records why that distinction matters: picking a risk limit by
+back-fitted outcomes is the thing this engagement exists to refuse. ATR
+measures normal per-bar movement, so "inside one ATR" means "one
+ordinary bar invalidates it" — a reason, not a curve fit. A
+configurable floor applies only when ATR is unavailable. The level is
+WIDENED rather than dropped: dropping would remove a protection.
+
+### DEFECT 2 — the AI auto-exit closed positions on trends that HELPED them
+
+    08-04 NIFTY    PE  hold   4s  +73   "Market trending down..."
+    08-04 NIFTY    PE  hold  23s  -229  "Market trending down..."
+    08-05 NIFTY    PE  hold 100s  +171  "Market trending down..."
+    08-06 SENSEX   CE  hold 828s   -68  "Market trending up..."
+    08-06 FINNIFTY CE  hold   1s   -60  "Market trending up..."
+
+Five for five, three sessions, both directions. Every PE closed because
+the market was FALLING — what a put wants. Every CE because it was
+RISING.
+
+The prompt never stated the relationship, so the model treated any
+trend as a reason to exit. It now says so explicitly AND returns
+`market_dir` as a FIELD, so `ai_exit_contradicts_position(leg, dir)` is
+structural rather than a regex over prose — a regex would have to guess
+at negation, hedging and phrasing the model was never constrained on.
+FLAT or absent means no opinion and blocks nothing; silently blocking
+every exit would be a different outage.
+
+The ADVISORY alert still fires first and is unchanged. Only the
+AUTOMATIC exit is blocked. A human can weigh "market trending up,
+consider exiting your call"; an automatic exit acting on it cannot.
+
+Plus a minimum hold (`option_ai_min_hold_sec`, 120s) before an
+automatic exit: FINNIFTY 26900 CE opened 15:01:33 and closed 15:01:34
+on "current position shows no profit", which is vacuous one second in.
+
+### A comment-matching slip, for the second time today
+
+The prompt check greped the whole source for the old placeholder and
+matched the explanatory COMMENT quoting it — failing against a prompt
+that was already fixed. Same shape as `test_symbol_hold`'s gate-label
+check this morning. Both now scan CODE lines only.
+
+### What this does NOT claim
+
+No backtest supports these. The evidence is 12 spot-invalidation closes
+and 5 AI auto-exits from live trading, which is thin. What justifies
+shipping is that both are LOGIC errors — a level inside noise, and an
+exit citing a move in the position's favour — not threshold choices.
+Neither can be validated by the replay work of v59.36-39, because the
+replay covers spreads and these are single-leg option paths.
+
 ## v59.39 — phase 1d: the tuner was tuning parameters live never reads (2026-08-06)
 
 Two changes, one of which is a much bigger finding than the phase was
