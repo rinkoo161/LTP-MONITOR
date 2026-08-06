@@ -382,7 +382,11 @@ def replay_spreads(symbol, name, params=None, days=None, log=lambda m: None):
             if stop_n and consec >= stop_n:
                 continue
             # inject tunable params into the real evaluator
-            slib_ev = _eval_with_params(name, analysis, p)
+            slib_ev = _eval_with_params(
+                name, analysis, p,
+                regime=historical_regime(symbol, ts),
+                candles=history.candles_before(
+                    f"{symbol}_SPOT_5m", ts, limit=400) or None)
             if slib_ev and slib_ev.get("eligible"):
                 # Shape it the way the LIVE spread dict is shaped, because
                 # spread_exit_reason reads these by name. Reproducing the
@@ -411,13 +415,74 @@ def replay_spreads(symbol, name, params=None, days=None, log=lambda m: None):
                                            - slib_ev["legs"][1]["strike"]),
                            "symbol": symbol, "strategy": name,
                            "qty": lot,
-                           "profit_target": _credit * p["profit_capture"],
-                           "loss_limit": min(_credit * p["loss_mult"],
-                                             slib_ev["max_loss"]),
+                        # 2026-08-06 phase 1d — LIVE reads
+                        # spread_profit_target_pct (18%) and
+                        # spread_loss_limit_multiple (1.0). The tuner's
+                        # profit_capture (60%) / loss_mult (1.5) appear
+                        # ONLY in backtester.py and strategy_docs.py —
+                        # agents.py reads NEITHER. Using them here made
+                        # the replay demand 3.3x more profit than live
+                        # before taking it, so replay spreads rode to
+                        # "market closing" holding slots while live's
+                        # turned over in minutes ("captured ₹6.5 of
+                        # ₹33.45" = 19%). Read what LIVE reads.
+                           "profit_target": round(_credit * cfg.get(
+                               "spread_profit_target_pct", 30) / 100.0, 2),
+                           "loss_limit": round(min(
+                               _credit * cfg.get("spread_loss_limit_multiple", 1.0),
+                               slib_ev["max_loss"]), 2),
                            "opened_ts": ts, "mfe": 0.0, "mae": 0.0,
                            "entry_ts": ts, "entry_spot": chain["spot"]})
         log(f"  {day}: cumulative trades {len(trades)}")
     return trades
+
+
+def historical_regime(sym, as_of_ts, _cache={}):
+    """The regime as the LIVE classifier would have seen it at `as_of_ts`.
+
+    2026-08-06, phase 1d. `_eval_with_params` called
+    `slib.evaluate(name, analysis, {"regime": "rangebound"})` — a
+    HARDCODED permissive regime with no candles — while live passes the
+    real regime and `regime_candles:{sym}`. Eligibility was therefore
+    decided on different inputs, which is why the portfolio replay took
+    2.9 spreads/day against live's 7.0 and no conclusion could be drawn
+    about either.
+
+    This does NOT reimplement the classifier. `RegimeAgent._classify`
+    reaches the market only through `self._fetch_candles(d, sym, tf)`,
+    so feeding that method archived bars runs the ENTIRE live
+    classification — ADX, ATR, opening-range expansion, multi-timeframe
+    alignment, the warm-up rules — over history. A second
+    implementation would drift, which is the failure this codebase has
+    already had with the market-session check, the news regexes and the
+    OI quadrant classifier.
+
+    Bars are truncated at `as_of_ts`, so the replay cannot see candles
+    that had not printed yet. Cached per (symbol, 5-minute bucket)
+    because `_classify` is not cheap and the regime does not change
+    within a bar.
+    """
+    bucket = int(as_of_ts // 300)
+    ck = (sym, bucket)
+    if ck in _cache:
+        return _cache[ck]
+
+    class _ArchiveRegime(_ag.RegimeAgent):
+        def _fetch_candles(self, d, sym_, tf):
+            # The SAME reader RegimeAgent's own market-closed fallback
+            # uses — history.candles_before(f"{sym}_SPOT_{tf}m", ...) —
+            # so the replay reads the identical rows the live agent
+            # would have read, truncated at as_of_ts.
+            return history.candles_before(
+                f"{sym_}_SPOT_{tf}m", as_of_ts, limit=400) or []
+
+    try:
+        agent = _ArchiveRegime(_ag.Bus(), {})
+        r = agent._classify(sym, None)
+    except Exception as e:                       # pragma: no cover
+        r = {"regime": "unknown", "error": f"{type(e).__name__}: {e}"}
+    _cache[ck] = r
+    return r
 
 
 def replay_portfolio(symbols=None, names=None, days=None, log=lambda m: None):
@@ -535,7 +600,11 @@ def replay_portfolio(symbols=None, names=None, days=None, log=lambda m: None):
                         skipped["capital_concentration"] += 1
                         continue
                     pp = get_params(name, sym)
-                    ev = _eval_with_params(name, analysis, pp)
+                    ev = _eval_with_params(
+                        name, analysis, pp,
+                        regime=historical_regime(sym, ts),
+                        candles=history.candles_before(
+                            f"{sym}_SPOT_5m", ts, limit=400) or None)
                     if not (ev and ev.get("eligible")):
                         continue
                     lot = cfg["lot_sizes"].get(sym, 75)
@@ -547,18 +616,37 @@ def replay_portfolio(symbols=None, names=None, days=None, log=lambda m: None):
                         "width": ev.get("width") or abs(ev["legs"][0]["strike"]
                                                         - ev["legs"][1]["strike"]),
                         "symbol": sym, "strategy": name, "qty": lot, "lots": 1,
-                        "profit_target": credit * pp["profit_capture"],
-                        "loss_limit": min(credit * pp["loss_mult"], ev["max_loss"]),
+                        # See the note in replay_spreads: LIVE reads
+                        # spread_profit_target_pct / spread_loss_limit_multiple.
+                        "profit_target": round(credit * cfg.get(
+                            "spread_profit_target_pct", 30) / 100.0, 2),
+                        "loss_limit": round(min(
+                            credit * cfg.get("spread_loss_limit_multiple", 1.0),
+                            ev["max_loss"]), 2),
                         "opened_ts": ts, "mfe": 0.0, "mae": 0.0})
                     cd[k] = ts        # live stamps on ENTRY, not on exit
         log(f"  {day}: cumulative {len(trades)}")
     return {"trades": trades, "skipped": dict(skipped), "days": all_days}
 
 
-def _eval_with_params(name, analysis, p):
-    """Call strategies.evaluate with a permissive regime, then re-apply the
-    tunable entry filters from params (wall gap, credit fraction)."""
-    ev = slib.evaluate(name, analysis, {"regime": "rangebound"})
+def _eval_with_params(name, analysis, p, regime=None, candles=None):
+    """Call strategies.evaluate, then re-apply the tunable entry filters
+    from params (wall gap, credit fraction).
+
+    2026-08-06, phase 1d — `regime` used to be HARDCODED to
+    {"regime": "rangebound"} with no candles, while live passes the real
+    regime and `regime_candles:{sym}`. Eligibility was decided on
+    different inputs from live, which is why the portfolio replay took
+    2.9 spreads/day against live's 7.0 and neither number could be
+    trusted against the other. Callers now pass what
+    backtester.historical_regime() reconstructs from archived candles
+    through the LIVE classifier.
+
+    The permissive default remains ONLY for callers that genuinely have
+    no timestamp context; it is no longer what the replays use.
+    """
+    ev = slib.evaluate(name, analysis, regime or {"regime": "rangebound"},
+                       candles=candles)
     if not ev or not ev.get("eligible"):
         return ev
     strikes = sorted(s["strike"] for s in analysis["strikes"])

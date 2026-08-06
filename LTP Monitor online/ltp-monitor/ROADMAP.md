@@ -4,6 +4,84 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.39 — phase 1d: the tuner was tuning parameters live never reads (2026-08-06)
+
+Two changes, one of which is a much bigger finding than the phase was
+scoped for.
+
+### 1. Historical regime, via the LIVE classifier
+
+`_eval_with_params` hardcoded `{"regime": "rangebound"}` with no
+candles while live passed the real regime and `regime_candles:{sym}`.
+
+`backtester.historical_regime(sym, as_of_ts)` does NOT reimplement the
+classifier. `RegimeAgent._classify` reaches the market only through
+`self._fetch_candles(d, sym, tf)`, so subclassing it to read
+`history.candles_before(f"{sym}_SPOT_{tf}m", as_of_ts)` — the same
+reader the agent's own market-closed fallback uses — runs the ENTIRE
+live classification (ADX, ATR, opening-range, MTF alignment, warm-up
+rules) over history, truncated so it cannot see bars that had not
+printed. Verified on 2026-08-05 13:00: NIFTY trending-down/mixed-bear
+adx 81.1, BANKNIFTY rangebound/no-alignment adx 54.0.
+
+Effect on its own: almost none. -1,009 vs -1,321, same n=32, still
+2.9 spreads/day. `capital_concentration` refused 21,712 entries, so
+CAPITAL was the binding constraint, not eligibility.
+
+### 2. THE FINDING: the auto-tuner optimises inert parameters
+
+    grep profit_capture / loss_mult:
+      backtester.py      yes
+      strategy_docs.py   yes  (documents them as the strategy's params)
+      agents.py          NO — count is ZERO
+
+    LIVE   spread_profit_target_pct    = 18%
+           spread_loss_limit_multiple  = 1.0
+    TUNER  profit_capture              = 0.60  (60%)
+           loss_mult                   = 1.5
+
+The replay demanded **3.3x more profit than live** before taking it.
+That is why replay spreads rode to "market closing" holding slots while
+live's turned over in minutes ("captured ₹6.5 of ₹33.45" = 19%).
+
+Every auto-tuner sweep of `profit_capture`/`loss_mult`, and every
+promotion decision resting on one, changed BACKTEST numbers only. Live
+behaviour could not move, because live never reads those keys.
+`strategy_docs.py` describes them to the operator as the strategy's
+real parameters.
+
+The replays now read the LIVE keys. NOT fixed here: the tuner still
+sweeps the inert ones. Reconnecting it is a design decision about which
+parameters should be tunable at all, and is deliberately left for a
+separate call rather than bundled into a measurement fix.
+
+### Result: trade count now matches exactly
+
+    same 3 days      replay n    replay Rs      live n   live Rs
+    2026-08-03              5       -1,018           7      +460
+    2026-08-04              7         +981           5    +1,430
+    2026-08-05              7         -862           7      +530
+    TOTAL                  19         -899          19    +2,420
+
+Nineteen trades against nineteen. Entry admission, exit logic, regime
+and profit targets are now the same on both sides.
+
+The P&L still differs, and the remaining candidates are narrower than
+before: live fills off a 3-second feed while the replay uses 1-minute
+archived frames (different entry prices, possibly different strikes),
+and the replay ignores `is_live_enabled(name, sym)`.
+
+### Where the capacity hypothesis stands
+
+Still open, and no longer for the same reason. Trade COUNT now matches,
+so live is not simply taking more setups. The difference is in WHICH
+spreads get taken or at WHAT price — which points at feed granularity
+rather than capacity. That is a materially different (and cheaper)
+question than the one this phase started with.
+
+NOTHING has been tuned, promoted or disabled on the strength of any
+number here.
+
 ## v59.38 — phase 1c: a portfolio replay, and the hypothesis it tests (2026-08-06)
 
     v59.36  exits shared      FINNIFTY replay -3,477  vs LIVE +4,702

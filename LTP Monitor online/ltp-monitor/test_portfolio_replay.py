@@ -112,13 +112,45 @@ else:
           all(t.get("symbol") and t.get("strategy") for t in tr),
           "without both, a portfolio result cannot be attributed")
 
-print("\n6) the KNOWN remaining divergence is documented, not hidden")
+print("\n6) phase 1d — eligibility and targets now match LIVE")
 ev_body = BT.split("def _eval_with_params(")[1]
 ev_body = ev_body[:ev_body.index("\ndef ")]
-check("eligibility still uses a hardcoded permissive regime",
-      '{"regime": "rangebound"}' in ev_body,
-      "live passes the REAL regime plus candles — this is the next gap, "
-      "and this check exists so it is not mistaken for fidelity")
+check("the evaluator takes a regime argument, not a hardcoded one",
+      "regime=None" in ev_body and "regime or {" in ev_body,
+      "it used to hardcode {\"regime\": \"rangebound\"} with no candles "
+      "while live passed the real regime")
+check("both replays pass a RECONSTRUCTED regime",
+      BT.count("regime=historical_regime(") == 2,
+      "per-pair and portfolio replays must agree, or they cannot be "
+      "compared with each other")
+hr = BT.split("def historical_regime(")[1]
+hr = hr[:hr.index("\ndef ")]
+check("the regime is reconstructed by the LIVE classifier, not a copy",
+      "_ag.RegimeAgent" in hr and "_classify(" in hr,
+      "reimplementing ADX/ATR/opening-range here would drift from the "
+      "agent — the failure this codebase has had three times")
+check("and it cannot see bars that had not printed yet",
+      "as_of_ts" in hr and "candles_before(" in hr,
+      "a replay that reads future bars is not a backtest")
+
+print("\n7) the replay reads the SAME profit/loss keys LIVE reads")
+# 2026-08-06 — profit_capture (0.60) and loss_mult (1.5) appear ONLY in
+# backtester.py and strategy_docs.py; agents.py reads NEITHER. Live uses
+# spread_profit_target_pct (18%) and spread_loss_limit_multiple (1.0).
+# The replay demanding 3.3x more profit than live before taking it is
+# why replay spreads rode to "market closing" holding slots while live's
+# turned over in minutes.
+AG_SRC = open(os.path.join(HERE, "agents.py")).read()
+check("agents.py genuinely does not read profit_capture/loss_mult",
+      "profit_capture" not in AG_SRC and '"loss_mult"' not in AG_SRC,
+      "if live starts reading them, this test's premise changes")
+for k in ("spread_profit_target_pct", "spread_loss_limit_multiple"):
+    check(f"the replay reads {k}", k in BT,
+          "reading a key live ignores makes every replay number fiction")
+check("and no longer sizes the target off profit_capture",
+      'p["profit_capture"]' not in BT and 'pp["profit_capture"]' not in BT,
+      "60% of credit vs live's 18% — a 3.3x difference in when a spread "
+      "takes profit")
 
 print()
 if FAILED:
