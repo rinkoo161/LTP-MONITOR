@@ -471,6 +471,54 @@ def paper_order_id():
     return f"PAPER-{int(time.time())}-{uuid.uuid4().hex[:8]}"
 
 
+def realistic_fees(kind, symbol, lots, premium_in, premium_out, cfg,
+                   legs=1, log=None):
+    """Round-trip cost in rupees, notional/premium-aware.
+
+    2026-08-06. Every live P&L figure charged `fee_per_lot * lots * N` —
+    a flat per-lot amount that ignores what was actually traded. The
+    Futures Research page had already measured what that costs:
+
+        S11 momentum, NIFTY, 325 trades, SAME signals and exits
+          flat fee_per_lot=40   +Rs 63,531   "would have been deployed"
+          notional-aware model  -Rs 31,000   "no edge above costs"
+
+    and the cost readout puts the OPTION understatement at Rs 26-47 per
+    round trip per symbol, because the flat model omits the bid-ask
+    spread entirely — the single largest component for an ATM index
+    option.
+
+    The correct models ALREADY EXISTED (`options_costs.py`,
+    `futures_costs.py`) and were used by the promotion gate and the
+    research page, but NOT by the live P&L or the backtester. This wires
+    the live path to them rather than adding a third implementation.
+
+    Falls back to the flat model if the real one cannot be computed —
+    a missing premium must not make a trade look free.
+    """
+    lots = max(1, int(lots or 1))
+    lot = (cfg.get("lot_sizes") or {}).get(symbol, 75)
+    try:
+        if kind == "future":
+            import futures_costs
+            r = futures_costs.cost_round_trip(
+                float(premium_in), float(premium_out), lot, cfg=cfg)
+        else:
+            import options_costs
+            r = options_costs.cost_round_trip(
+                float(premium_in), float(premium_out), lot,
+                legs=legs, cfg=cfg)
+        total = float(r["total"]) * lots
+        if total > 0:
+            return round(total, 0)
+    except Exception as e:
+        if log:
+            log(f"cost model unavailable for {symbol} ({type(e).__name__}) "
+                f"- falling back to the flat fee_per_lot model, which "
+                f"UNDERSTATES the real cost")
+    return round(cfg.get("fee_per_lot", 40) * lots * 2 * max(1, legs), 0)
+
+
 def instant_exit_reason(pos, ltp, spot):
     """The exit conditions that can already be TRUE at the moment of
     entry — evaluated against LIVE data, returning a reason or None.
@@ -4808,7 +4856,9 @@ class ExecutionAgent(Agent):
             else:
                 reason = f"{reason} [no broker/security_id for live close " \
                          f"— verify position at the broker manually]"
-        fees = round(cfg.get("fee_per_lot", 40) * p["lots"] * 2, 0)
+        fees = realistic_fees("future", symbol, p["lots"],
+                              p.get("entry"), p.get("ltp") or p.get("entry"),
+                              cfg, log=lambda m: self.bus.log(self.name, m))
         warn_zero_fees(self.bus, self.name, "position", p.get("lots"), fees)
         gross = p.get("pnl", 0)
         now = now_ist()
@@ -5497,7 +5547,10 @@ class ExecutionAgent(Agent):
             return {"error": "spread not found"}
         cfg = config.load()
         # fees: per lot per transaction; 2 legs x 2 transactions = 4
-        fees = round(cfg.get("fee_per_lot", 40) * sp["lots"] * 4, 0)
+        fees = realistic_fees("option", sp.get("symbol"), sp.get("lots"),
+                              sp.get("credit"), sp.get("pnl_per_share", 0),
+                              cfg, legs=2,
+                              log=lambda m: self.bus.log(self.name, m))
         warn_zero_fees(self.bus, self.name, "spread", sp.get("lots"), fees)
         gross = sp.get("pnl", 0)
         now = now_ist()
@@ -6309,7 +6362,10 @@ class ExecutionAgent(Agent):
         # fees: ₹fee_per_lot per lot per transaction; entry + exit = 2
         cfg = config.load()
         lots = p.get("lots") or max(1, round(p["qty"] / cfg["lot_sizes"].get(p["symbol"], 75)))
-        fees = round(cfg.get("fee_per_lot", 40) * lots * 2, 0)
+        fees = realistic_fees("option", p.get("symbol"), lots,
+                              p.get("entry"), p.get("ltp") or p.get("entry"),
+                              cfg, legs=1,
+                              log=lambda m: self.bus.log(self.name, m))
         gross = p.get("pnl", 0)
         closed = dict(p,
                       closed=now.strftime("%H:%M:%S"),

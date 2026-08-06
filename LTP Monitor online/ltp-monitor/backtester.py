@@ -365,8 +365,16 @@ def replay_spreads(symbol, name, params=None, days=None, log=lambda m: None):
                         open_sp, pnl_ps, chain.get("spot"), cfg,
                         now_ts=ts, market_is_open=(ts != frames[-1][0]))
                     if reason:
+                        # 2026-08-06 — premium-aware, matching the LIVE
+                        # path. The flat model understates an options
+                        # round trip by Rs 26-47/symbol because it omits
+                        # the bid-ask spread entirely, and a 2-leg
+                        # spread crosses that spread FOUR times.
+                        _fee = _ag.realistic_fees(
+                            "option", symbol, 1, open_sp["credit"],
+                            max(0.0, open_sp["credit"] - pnl_ps), cfg, legs=2)
                         trades.append({"day": day, "strategy": name,
-                                       "pnl": round(pnl_ps * lot - fee, 0),
+                                       "pnl": round(pnl_ps * lot - _fee, 0),
                                        "risk": open_sp["max_loss"] * lot,
                                        "reason": reason,
                                        # 2026-07-26 (v55) — added for the
@@ -581,7 +589,10 @@ def replay_portfolio(symbols=None, names=None, days=None, log=lambda m: None):
                     sp, pnl_ps, chain.get("spot"), cfg,
                     now_ts=ts, market_is_open=(ts != stamps[-1]))
                 if reason:
-                    pnl = round(tot - fee_per, 0)
+                    _fee = _ag.realistic_fees(
+                        "option", sp["symbol"], 1, sp["credit"],
+                        max(0.0, sp["credit"] - pnl_ps), cfg, legs=2)
+                    pnl = round(tot - _fee, 0)
                     trades.append({"day": day, "symbol": sp["symbol"],
                                    "strategy": sp["strategy"], "pnl": pnl,
                                    "reason": reason, "entry_ts": sp["opened_ts"],

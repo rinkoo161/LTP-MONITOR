@@ -4,6 +4,61 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.49 — the live P&L used a cost model already known to be wrong (2026-08-06)
+
+The Futures Research page had ALREADY measured this, on the same 325
+trades with the same signals and exits:
+
+    flat fee_per_lot=40    +Rs 63,531   "PROFITABLE — would have deployed"
+    notional-aware model   -Rs 31,000   "FAIL — no edge above costs"
+
+and its cost readout put the OPTIONS understatement at Rs 26-47 per
+round trip per symbol, because the flat model omits the BID-ASK SPREAD
+entirely — the largest single component for an ATM index option.
+
+`options_costs.py` and `futures_costs.py` already existed and were used
+by `promotion_gate.py` and that research page. They were NOT used by
+the live P&L or the backtester. So the system knew its own cost model
+was wrong, wrote the finding to a page, and carried on charging the
+wrong number to every trade it recorded.
+
+### Wired, not rewritten
+
+`agents.realistic_fees()` dispatches to the EXISTING modules — no third
+implementation, and the test asserts no statutory rate is re-declared
+in it. A second copy of the tax table would drift, which is the failure
+this codebase has had with the market-session check, the news regexes
+and the OI quadrant classifier.
+
+Three live exit paths now use it — single-leg options, spreads (legs=2,
+because every leg is opened AND closed, so a spread crosses the bid-ask
+FOUR times) and futures. Both spread replays use the same helper, so
+the backtester and live agree on the one dimension that decides
+profitability.
+
+    round trip, 1 lot     flat      real    understated
+    NIFTY                 Rs 60   Rs 135      Rs 75
+    BANKNIFTY             Rs 60   Rs 131      Rs 71
+    FINNIFTY              Rs 60   Rs 161      Rs 101
+    SENSEX                Rs 60   Rs  81      Rs 21
+
+It FALLS BACK to the flat model when a premium is missing rather than
+returning zero: a cost model that charges nothing on bad input makes
+every such trade look profitable.
+
+### What this does to the numbers
+
+The portfolio replay over the same three days moved from -Rs 899 to
+-Rs 2,289 on identical trades. Nothing changed except that the costs
+are now real.
+
+HISTORICAL RECORDS ARE NOT RESTATED. Trades already in the journal keep
+the fees they were charged, so figures before and after this change are
+not directly comparable — every pre-2026-08-06 P&L in the book is
+overstated by roughly Rs 21-101 per lot per round trip. Restating them
+would mean rewriting the trade history, which is a bigger decision than
+a cost fix.
+
 ## v59.48 — the theme toggle was broken by the restyle (2026-08-06)
 
 Reported: "no dark skin, it is showing white on toggle."
