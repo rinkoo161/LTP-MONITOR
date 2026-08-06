@@ -25,7 +25,7 @@ from agents import Orchestrator, compute_momentum
 import agents
 
 BASE = os.path.dirname(os.path.abspath(__file__))
-APP_VERSION = "v59.44"   # maintained per explicit request; last delivered was v49
+APP_VERSION = "v59.45"   # maintained per explicit request; last delivered was v49
 
 app = FastAPI(title="LTP Option Chain Monitor")
 
@@ -1850,6 +1850,19 @@ def _s8_detector_summary(detectors):
         else:
             parts.append(f"{k}: no pattern")
     return " · ".join(parts)
+
+
+@app.get("/api/strategies/performance")
+def api_strategies_performance(min_trades: int = 3, since: str = ""):
+    """Per-strategy realised performance from the trade journal.
+
+    2026-08-06. Declared BEFORE /api/strategies/{symbol} on purpose:
+    FastAPI matches in declaration order, and "performance" would
+    otherwise be captured as a symbol.
+    """
+    import strategy_stats
+    return strategy_stats.performance(min_trades=min_trades,
+                                      since=since or None)
 
 
 @app.get("/api/strategies/{symbol}")

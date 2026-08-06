@@ -77,6 +77,22 @@ body{background:var(--bg);color:var(--text);
 h1,h2,h3{font-weight:600;letter-spacing:-.01em;}
 .rail{background:var(--panel);border-right:1px solid var(--line);}
 hr{border:none;border-top:1px solid var(--line);}
+/* Utility classes used by the Strategy Performance table. Added after
+   the markup referenced .num/.chip/.muted and NONE of them existed —
+   the same failure as the `rail-label` class in the watchlist rail,
+   which rendered raw text because no rule matched. A class that does
+   not exist renders as nothing and passes every marker check. */
+.num{font-variant-numeric:tabular-nums;}
+/* An existing rule sets `table th,table td,.tbl th,.tbl td{text-align:
+   left!important}` with no comment explaining why, so it is not safe to
+   weaken — some other table may depend on it. Scoped to THIS table
+   instead: narrow enough that it cannot regress anything else, and
+   !important only because it has to outrank an !important. */
+#perfTable td.num,#perfTable th.num{text-align:right!important;}
+.muted{color:var(--muted);}
+.chip{display:inline-block;padding:2px 8px;border:1px solid var(--line);
+      border-radius:999px;font-size:11px;color:var(--dim);
+      background:var(--panel2);line-height:1.5;}
 </style>
 <style>
 
@@ -508,7 +524,7 @@ hr{border:none;border-top:1px solid var(--line);}
   <div class="dashgrid">
     <div class="dc8">
       <div class="panel" style="margin-bottom:8px">
-        <h2>&#128200; Live Chart (TradingView Lightweight Charts) <span class="badge" style="font-weight:400">v59.44</span> <span class="sub" id="lwChartStatus">connecting...</span>
+        <h2>&#128200; Live Chart (TradingView Lightweight Charts) <span class="badge" style="font-weight:400">v59.45</span> <span class="sub" id="lwChartStatus">connecting...</span>
           <select id="lwChartSymbol" style="margin-left:auto" onchange="switchLwChart(this.value)"></select></h2>
         <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;flex-wrap:wrap">
           <button class="lwIntervalBtn active" data-interval="1" onclick="switchLwInterval('1')">1m</button>
@@ -782,7 +798,22 @@ hr{border:none;border-top:1px solid var(--line);}
     <h2>&#128194; Open Spreads</h2>
     <div id="stratOpen"><div class="reasons">No open spreads.</div></div>
   </div>
-  <div class="panel full" style="margin-top:8px">
+  <div class="panel full">
+<h2>&#128200; Strategy Performance <span class="sub" id="perfInfo"></span>
+<button class="ivbtn" style="margin-left:auto" onclick="loadStrategyPerformance()">refresh</button>
+</h2>
+<div class="reasons" id="perfNote" style="margin-bottom:8px"></div>
+<div class="tablewrap"><table id="perfTable" class="tbl">
+<thead><tr>
+<th data-k="strategy">Strategy</th><th data-k="kind">Type</th>
+<th data-k="n" class="num">Trades</th><th data-k="net" class="num">Net P&amp;L</th>
+<th data-k="sharpe" class="num">Sharpe<span class="reasons" style="text-transform:none;font-weight:400"> /trade</span></th>
+<th data-k="maxdd" class="num">Max DD</th><th data-k="recovery" class="num">Recovery</th>
+<th data-k="win_pct" class="num">Win %</th><th data-k="payoff" class="num">Payoff</th>
+</tr></thead><tbody></tbody></table></div>
+<div id="perfThin" class="reasons" style="margin-top:8px"></div>
+</div>
+<div class="panel full" style="margin-top:8px">
     <h2>&#9877; Strategy Library <span class="sub" id="stratInfo"></span>
       <button class="ivbtn" style="margin-left:auto" onclick="loadStrategies()">refresh</button>
     </h2>
@@ -1496,7 +1527,7 @@ function showView(v){
   if(v==="watch")loadWatchPage();
   if(v==="futures")loadFuturesPage();
   if(v==="pnl")loadPnl();
-  if(v==="strat")loadStrategies();
+  if(v==="strat")loadStrategies();if(v==="strat")loadStrategyPerformance();
   if(v==="inst")loadInstitutionalPage();
   if(v==="bt")loadBacktest();
   if(v==="journal"){initJournalFilterDefaults();loadJournal();loadShadowJournal();}
@@ -5967,6 +5998,74 @@ setInterval(function(){if(currentView==="futures")loadFuturesPage();},5000);
 setInterval(function(){if(currentView==="bt")loadBacktest();},10000);
 pollEngine();
 pilotPoll();
+
+/* ---- Strategy Performance (QC-reference leaderboard) ----------------
+   Ranked by realised journal outcomes with DRAWDOWN alongside return,
+   deliberately not by a single score. The QuantConnect page this was
+   modelled on sorts by 3-month Sharpe, and its #2 strategy had a -4%
+   five-year CAGR while its #6 carried an 89% drawdown — three months is
+   ~60 observations, so that ranking is mostly luck. Sharpe here is
+   PER-TRADE and not annualised; the journal spans weeks. */
+var _perfRows = [], _perfThin = [], _perfSort = "net", _perfDesc = true;
+function _perfFmt(v, k){
+  if(v === null || v === undefined) return '<span class="muted">-</span>';
+  if(k === "net" || k === "maxdd"){
+    var cls = v > 0 ? "up" : (v < 0 ? "dn" : "");
+    return '<span class="'+cls+'">' + (v>0?"+":"") + Number(v).toLocaleString("en-IN") + '</span>';
+  }
+  if(k === "win_pct") return v + "%";
+  if(k === "recovery"){
+    /* below 1.0 the strategy has not earned back its own worst run */
+    return '<span class="'+(v>=1?"up":"dn")+'">' + v + '</span>';
+  }
+  if(k === "sharpe") return '<span class="'+(v>0?"up":"dn")+'">' + v + '</span>';
+  return v;
+}
+function _perfRender(){
+  var tb = document.querySelector("#perfTable tbody"); if(!tb) return;
+  var rows = _perfRows.slice().sort(function(a,b){
+    var x=a[_perfSort], y=b[_perfSort];
+    if(x===null||x===undefined) return 1;
+    if(y===null||y===undefined) return -1;
+    if(typeof x === "string") return _perfDesc ? y.localeCompare(x) : x.localeCompare(y);
+    return _perfDesc ? y-x : x-y;
+  });
+  tb.innerHTML = rows.map(function(r){
+    return "<tr><td>"+r.strategy+"</td><td><span class='chip'>"+r.kind+"</span></td>"
+      + "<td class='num'>"+r.n+"</td>"
+      + "<td class='num'>"+_perfFmt(r.net,"net")+"</td>"
+      + "<td class='num'>"+_perfFmt(r.sharpe,"sharpe")+"</td>"
+      + "<td class='num'>"+_perfFmt(r.maxdd,"maxdd")+"</td>"
+      + "<td class='num'>"+_perfFmt(r.recovery,"recovery")+"</td>"
+      + "<td class='num'>"+_perfFmt(r.win_pct,"win_pct")+"</td>"
+      + "<td class='num'>"+_perfFmt(r.payoff,"payoff")+"</td></tr>";
+  }).join("");
+  var thin = document.getElementById("perfThin");
+  if(thin) thin.innerHTML = _perfThin.length
+    ? ("Below the " + (_perfRows.length?"":"") + "minimum trade count, shown so they are not silently hidden: "
+       + _perfThin.map(function(r){ return r.strategy+" (n="+r.n+", "+(r.net>0?"+":"")+r.net+")"; }).join(" &middot; "))
+    : "";
+}
+function loadStrategyPerformance(){
+  fetch("/api/strategies/performance").then(function(r){ return r.json(); }).then(function(j){
+    if(j.error) return;
+    _perfRows = j.strategies || []; _perfThin = j.thin || [];
+    var note = document.getElementById("perfNote");
+    if(note) note.textContent = j.note || "";
+    var info = document.getElementById("perfInfo");
+    if(info && j.total) info.textContent = "- " + j.total.n + " trades, net "
+      + (j.total.net>0?"+":"") + Number(j.total.net).toLocaleString("en-IN")
+      + ", win " + j.total.win_pct + "%";
+    _perfRender();
+  }).catch(function(){});
+}
+document.addEventListener("click", function(e){
+  var th = e.target.closest ? e.target.closest("#perfTable th[data-k]") : null;
+  if(!th) return;
+  var k = th.getAttribute("data-k");
+  if(_perfSort === k) _perfDesc = !_perfDesc; else { _perfSort = k; _perfDesc = true; }
+  _perfRender();
+});
 </script>
 </body>
 </html>

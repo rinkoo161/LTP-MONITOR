@@ -4,6 +4,55 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.45 — Strategy Performance leaderboard (UI phase B) (2026-08-06)
+
+A QC-style ranking on the Strategies page — but deliberately NOT ranked
+the way that page ranks. It sorts by out-of-sample 3-month Sharpe; its
+#2 strategy had a -4.00% five-year CAGR and a -0.80 one-year Sharpe,
+and its #6 carried an 89.10% drawdown. ~60 observations is a luck
+ranking, and it hides the two things that end an account.
+
+So this shows return AND drawdown side by side, refuses to collapse
+them into one score, and its Sharpe is PER-TRADE and labelled as such.
+Annualising a journal that spans weeks would produce an impressive
+figure meaning nothing — the exact error the table exists to avoid.
+
+    strategy                  n     net  Sharpe    MaxDD  Recov  win%
+    bear_call_spread        101  +21721    0.10   -13504   1.61    53
+    rule-engine (AI invalid)  7   +2020    0.57     -379   5.33    71
+    momentum_confluence       8   +1698    0.26    -1088   1.56    62
+    AI                       12   -1357   -0.08    -5946  -0.23    42
+    bull_put_spread          88   -2095   -0.05    -6099  -0.34    51
+    (future, unattributed)   59  -96978   -0.42   -98878  -0.98    24
+
+Two things the ranking makes visible that P&L alone did not:
+bull_put_spread is NEGATIVE over 88 trades while bear_call_spread is
++21,721 over 101 — the spread book is one edge carrying a flat one; and
+the AI signal path is negative while `rule-engine (AI returned an
+invalid signal value)` — its own FALLBACK — is the best risk-adjusted
+line in the book. Small samples, uncomfortable direction.
+
+New `strategy_stats.py` (rows sorted chronologically, because maxdd
+depends on ORDER — a drawdown that changes with file order is not a
+drawdown), and `/api/strategies/performance` declared BEFORE
+`/api/strategies/{symbol}` since FastAPI matches in declaration order.
+Additive: the operational Strategy Library table is untouched.
+
+### The rail-label failure, repeated and caught
+
+The first cut referenced `.num`, `.chip` and `.muted` in markup and NONE
+of them had a CSS rule — exactly the `rail-label` bug from the
+watchlist rail, where a class with no rule rendered raw text and passed
+marker checks, `node --check` and a 200 response. Found by querying
+computed style rather than trusting the screenshot. The test now
+asserts every class the markup uses has a rule.
+
+Then the numerics still computed `text-align:left`: an existing
+`table th,table td,.tbl th,.tbl td{text-align:left!important}` outranks
+a bare `.num`. That rule carries NO comment explaining its purpose, so
+it was not safe to weaken — the override is scoped to `#perfTable`
+instead, and `#stratTable` verified still computing `left`.
+
 ## v59.44 — light surface, per the QuantConnect reference (2026-08-06)
 
 Phase A of a UI change requested from two QuantConnect screenshots:
