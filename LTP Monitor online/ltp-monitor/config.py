@@ -68,6 +68,16 @@ DEFAULTS = {
     # decision that should require evidence the instrument is tradable
     # for this system, not just that data exists.
     "watch_symbols": [],
+    # 2026-08-06 — watchlist chain snapshots run SLOWER than the index
+    # cadence (chain_snapshot_interval_sec, 60s) on purpose. The
+    # option-chain endpoint is shared with the four traded symbols and
+    # 429'd at 09:31 that morning; a name that is never traded must not
+    # spend the budget the traded ones need.
+    "watch_snapshot_interval_sec": 300,
+    # 2026-08-06 — directional options had NO re-entry cooldown while
+    # spreads, futures and news re-alerts all did. SENSEX 78700 CE
+    # opened and closed five times in 38s off one stale analysis pack.
+    "option_reentry_cooldown_sec": 180,
     "market_data_feed": "rest",  # "rest" (default, proven) or "websocket"
                                  # (dhan_ws.py — run test_dhan_ws.py against
                                  # a live account first, see its docstring)

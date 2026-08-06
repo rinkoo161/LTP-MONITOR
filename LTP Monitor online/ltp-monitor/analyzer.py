@@ -1553,6 +1553,39 @@ def enforce_signal_invariants(sig, analysis, cfg=None, log=lambda m: None):
         sig["target1"] = round(entry * 1.60, 1)
         sig["target2"] = round(entry * 2.05, 1)
 
+    # --- target2 must be a REAL number ABOVE target1 -------------------
+    # 2026-08-06. Until now the ONLY place target2 was ever corrected was
+    # inside the `rr < min_rr` branch above, so a signal whose target1
+    # already cleared the risk-reward floor kept whatever target2 it
+    # arrived with — including None. Measured on that morning's shadow
+    # journal: 9 of 21 signals carried "target2": null.
+    #
+    # This is not cosmetic. ExecutionAgent copies it straight onto the
+    # position ("target2": sig["target2"], no guard) and the exit check
+    # is `elif ltp >= p["target2"]`. A target2 at or below the entry
+    # price is satisfied by the FIRST exit check after the fill, which
+    # is how SENSEX 78700 CE opened and closed five times in 38 seconds
+    # on 2026-08-06 (₹358.85 in, "target-2" out, repeatedly).
+    #
+    # Derive from the same geometry the degenerate-stop branch uses
+    # rather than inventing a second rule.
+    _t1 = sig.get("target1")
+    _t2 = sig.get("target2")
+    if entry > 0 and isinstance(_t1, (int, float)) and _t1 > entry:
+        if not isinstance(_t2, (int, float)) or _t2 <= _t1:
+            _fixed = round(_t1 + (_t1 - entry) * 0.5, 1)
+            repairs.append(f"target2 {_t2} -> {_fixed} "
+                           f"(must exceed target1 {_t1}; entry {entry})")
+            sig["target2"] = _fixed
+    elif entry > 0 and not isinstance(_t2, (int, float)):
+        # No usable target1 either — fall back to the rule engine's own
+        # fractions, the same source the degenerate-stop branch uses.
+        _s2, _r1, _r2, _m2 = option_stop_geometry(entry)
+        repairs.append(f"target2 {_t2} -> {_r2} (no usable target1)")
+        sig["target1"] = sig.get("target1") if isinstance(
+            sig.get("target1"), (int, float)) else _r1
+        sig["target2"] = _r2
+
     if repairs:
         sig["invariant_repairs"] = repairs
         log(f"LLM signal repaired ({len(repairs)}): " + " ; ".join(repairs))

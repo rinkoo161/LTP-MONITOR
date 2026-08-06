@@ -86,9 +86,37 @@ check("watch_symbols is a SEPARATE config key from the traded list",
 # The archiver is the only consumer. If a strategy/execution path ever
 # reads watch_symbols, this fails and someone has to justify it.
 AG = open(os.path.join(HERE, "agents.py")).read()
-_readers = AG.count("watch_symbols")
-check("exactly one reader of watch_symbols in agents.py", _readers == 1,
-      f"{_readers} — it must stay archive-only")
+# 2026-08-06 — this counted the bare substring "watch_symbols" and broke
+# the moment a METHOD was named `_maybe_snapshot_watch_symbols`: the
+# name contains the key, so the count jumped 1 -> 5 with no new reader.
+# Fourth ambiguous-substring slip of this work (after "_age = ", a
+# non-unique `def option_chain`, and "function loadWatchPage").
+#
+# Counting was the wrong guard anyway. What must hold is not "one
+# reader" but "no reader inside a class that can place an order" —
+# so assert THAT, which stays true however many archive paths exist.
+import re as _re
+_reads = _re.findall(r'\.get\(\s*"watch_symbols"', AG)
+check("watch_symbols is read only via config, in a bounded number of "
+      "places", 1 <= len(_reads) <= 3, f"{len(_reads)} readers")
+_classes = _re.split(r'^class (\w+)\(', AG, flags=_re.M)
+_by_class = {_classes[i]: _classes[i + 1] for i in range(1, len(_classes) - 1, 2)}
+_TRADING_AGENTS = ("StrategyAgent", "RiskAgent", "ExecutionAgent",
+                   "PriceActionAgent", "MTFConfluenceAgent", "TAElliottAgent")
+# A misspelled class name would make the guard below silently vacuous —
+# `if c in _by_class` skips it and the check passes forever. Pin that the
+# names are real first.
+_missing = [c for c in _TRADING_AGENTS if c not in _by_class]
+check("every named trading agent actually exists", not _missing,
+      f"{_missing} — a typo here makes the next check vacuous")
+_trading = [c for c in _TRADING_AGENTS
+            if c in _by_class and '"watch_symbols"' in _by_class[c]]
+check("NO trading agent reads watch_symbols", not _trading,
+      f"{_trading} — strategy/risk/execution decide what gets ordered; a "
+      f"watch name reaching one of them would be traded")
+_archivers = [c for c, body in _by_class.items() if '"watch_symbols"' in body]
+check("only archive-side agents read it", set(_archivers) <= {
+      "BacktestAgent", "TechnicalAgent"}, str(_archivers))
 # 2026-08-05 — this check previously counted the literal
 # `cfg.get("watch_symbols"`. That string was PRESENT and the code was
 # DEAD: `cfg` is not bound in _run(), so every daily cycle raised

@@ -2484,6 +2484,7 @@ class TechnicalAgent(Agent):
                         + (f"({momentum['trend'][:2]})" if momentum else ""))
             self.bus.publish("analysis", {"symbol": sym})
         self.summary = " · ".join(done) if done else "waiting for market data"
+        self._maybe_snapshot_watch_symbols()
 
     def _compute_technical(self, sym, analysis):
         """Feature #7 (Technical Analysis Engine) — COMPLETE. All 13
@@ -2606,6 +2607,82 @@ class TechnicalAgent(Agent):
                 setattr(self, key, True)
                 self.bus.log(self.name, f"⚠ failed to persist chain "
                                         f"snapshot for {sym}: {e}")
+
+    def _maybe_snapshot_watch_symbols(self):
+        """Per-strike OI/IV/greeks archive for watchlist names.
+        ARCHIVE ONLY — these symbols are never traded.
+
+        2026-08-06. The watch loop in BacktestAgent (see its comment at
+        the `watch_symbols` block) archives option-leg and futures
+        CANDLES once a day. That is price and nothing else. Its own
+        stated purpose is that a candidate instrument accumulates
+        history so "its liquidity can be measured" before anyone
+        decides whether it is worth trading — and liquidity is OI,
+        volume and bid/ask, every one of which lives in
+        `chain_snapshots` and none of which lives in `candles`. As
+        shipped the archive could not answer the question it exists to
+        answer: on 2026-08-06 ADANIENSOL had 803 candle rows and ZERO
+        snapshot rows, while each index had ~30k.
+
+        DELIBERATELY SLOWER THAN THE INDEX CADENCE (300s vs 60s). The
+        option-chain endpoint is shared with the four traded symbols
+        and is rate-limited; it returned 429 at 09:31 on 2026-08-06.
+        A name that is never traded must not spend budget the traded
+        ones need, and if this path does cause contention the symptom
+        lands on NIFTY/BANKNIFTY analysis rather than here.
+
+        The symbol is NEVER added to the bus "symbols" list and no
+        `analysis:{sym}` key is written. Those drive strategy, risk and
+        execution; a name reaching either would be traded. This writes
+        to the archive and nothing else.
+        """
+        import config as _cfg
+        cfg = _cfg.load()
+        watch = cfg.get("watch_symbols") or []
+        if not watch or not fno_session_open():
+            return
+        interval = cfg.get("watch_snapshot_interval_sec", 300)
+        last = getattr(self, "_last_watch_snapshot_ts", None)
+        if last is None:
+            last = {}
+            self._last_watch_snapshot_ts = last
+        dc = self.ctx.get("dhan_client")
+        d = dc() if dc else None
+        if d is None:
+            return
+        import rate_limit
+        for wsym in watch:
+            now_ts = time.time()
+            if now_ts - last.get(wsym, 0) < interval:
+                continue
+            # Own resource name: a 429 here backs THIS path off without
+            # touching the traded symbols' chain fetches.
+            if rate_limit.is_limited("watch_chain"):
+                return
+            try:
+                chain = d.option_chain(wsym)
+                analysis = analyze(chain)
+                if analysis.get("error"):
+                    continue
+                import history
+                n = history.upsert_chain_snapshot(
+                    wsym, now_ts, analysis.get("strikes", []))
+                last[wsym] = now_ts
+                if not getattr(self, f"_watch_snap_ok_{wsym}", False):
+                    setattr(self, f"_watch_snap_ok_{wsym}", True)
+                    self.bus.log(self.name,
+                                 f"watch {wsym}: chain snapshots ACTIVE "
+                                 f"({n} rows/snapshot, every {interval}s) "
+                                 f"— archive only, never traded")
+            except Exception as e:
+                rate_limit.note_failure(e, "watch_chain",
+                                        on_429=300, otherwise=60)
+                last[wsym] = now_ts     # do not retry instantly
+                if not getattr(self, f"_watch_snap_failed_{wsym}", False):
+                    setattr(self, f"_watch_snap_failed_{wsym}", True)
+                    self.bus.log(self.name,
+                                 f"⚠ watch {wsym}: chain snapshot failed "
+                                 f"({type(e).__name__}: {str(e)[:120]})")
 
     def _check_iv_spike(self, sym, analysis):
         """Volatility alert: a fast rise in average IV often precedes/
@@ -5265,6 +5342,19 @@ class ExecutionAgent(Agent):
     def place(self, job, manual=False):
         cfg = config.load()
         sig, analysis, sym = job["signal"], job["analysis"], job["symbol"]
+        # See the stamp in exit(). Blocks re-entry into the SAME
+        # symbol+strike+leg for option_reentry_cooldown_sec. Manual
+        # clicks are exempt: an operator re-entering deliberately is a
+        # decision, not a loop.
+        if not manual and sig.get("signal") in ("BUY_CE", "BUY_PE"):
+            _leg = "CE" if sig["signal"] == "BUY_CE" else "PE"
+            _key = f"{sym}:{sig.get('strike')}:{_leg}"
+            _cool = cfg.get("option_reentry_cooldown_sec", 180)
+            _last = (self.bus.get("option_reentry_block") or {}).get(_key, 0)
+            _age = time.time() - _last
+            if _last and _age < _cool:
+                return {"error": f"re-entry cooldown: {_key} closed "
+                                 f"{_age:.0f}s ago, need {_cool}s"}
         lot = cfg["lot_sizes"].get(sym, 75)
         import sizing
         deployed = sizing.deployed_capital(
@@ -5325,7 +5415,38 @@ class ExecutionAgent(Agent):
         qty = lot * n_lots
         leg = "CE" if sig["signal"] == "BUY_CE" else "PE"
         label = f"{sym} {sig['strike']} {leg}"
-        fill = sig.get("option_ltp") or sig["entry"]
+        # FILL AT THE LIVE PRICE, NOT THE ANALYSIS-PACK PRICE.
+        #
+        # 2026-08-06. `sig["option_ltp"]` is copied out of
+        # analysis["strikes"] by analyzer._attach_security_id, and
+        # analysis:{sym} is written by TechnicalAgent at interval=60.
+        # The EXIT check three hundred lines below reads
+        # bus.get(f"chain:{sym}"), which MarketDataAgent refreshes every
+        # 3s. Entry and exit therefore ran off feeds 20x apart in
+        # cadence, so a fill could be priced up to a minute stale while
+        # its own first exit check was 3 seconds fresh.
+        #
+        # That is what produced the SENSEX 78700 CE loop: five entries
+        # inside one 60s analysis window all took the SAME ₹358.85 while
+        # the live chain moved 363.00 -> 366.05, and each one satisfied
+        # its target immediately. Reading the same chain both sides
+        # removes the asymmetry at the source; the target2 repair in
+        # analyzer and the re-entry cooldown below are the other two
+        # independent breaks in that loop.
+        _chain = self.bus.get(f"chain:{sym}")
+        _row = (next((r for r in _chain["rows"]
+                      if r["strike"] == sig["strike"]), None)
+                if _chain and _chain.get("rows") else None)
+        _live = (_row.get(leg.lower()) or {}).get("ltp") if _row else None
+        fill = _live or sig.get("option_ltp") or sig["entry"]
+        if _live and sig.get("option_ltp") and sig["option_ltp"] > 0:
+            _drift = abs(_live - sig["option_ltp"]) / sig["option_ltp"]
+            if _drift > 0.02:
+                self.bus.log(self.name,
+                             f"{label}: filling at LIVE ₹{_live} — signal "
+                             f"priced ₹{sig['option_ltp']} ({100*_drift:.1f}% "
+                             f"stale from the {TechnicalAgent.interval}s "
+                             f"analysis pack)")
         if cfg["paper_mode"]:
             order_id = f"PAPER-{int(time.time())}"
             self.bus.log(self.name, f"📄 PAPER BUY {qty} x {label} @ ₹{fill}")
@@ -5789,6 +5910,17 @@ class ExecutionAgent(Agent):
         trades.append(closed)
         self.bus.set("closed_trades", trades)
         _append_trade(closed)          # persist to disk immediately
+        # RE-ENTRY COOLDOWN — stamp symbol+strike+leg on the way out.
+        # 2026-08-06: spreads, futures, broker failures and news
+        # re-alerts all had cooldowns; directional options had none, so
+        # a still-valid signal re-entered the instant its predecessor
+        # closed. SENSEX 78700 CE went in and out five times in 38s.
+        # This is the BACKSTOP of the three fixes — the target2 repair
+        # and the live-price fill remove the causes; this one caps the
+        # damage of whatever causes an instant exit next.
+        _cd = self.bus.get("option_reentry_block") or {}
+        _cd[f"{p['symbol']}:{p['strike']}:{p['leg']}"] = time.time()
+        self.bus.set("option_reentry_block", _cd)
         self.bus.alert("high", "execution", p["symbol"],
                        f"Exited {p['strike']} {p['leg']} — {reason} — "
                        f"P&L ₹{p['pnl']:.0f}")

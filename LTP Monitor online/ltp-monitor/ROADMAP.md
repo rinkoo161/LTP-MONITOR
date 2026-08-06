@@ -4,6 +4,197 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.29 — the SENSEX 78700 CE runaway: three defects, not one (2026-08-06)
+
+Seen live at 10:24, paper mode, five round trips in 38 seconds:
+
+    10:24:05  BUY  40 x SENSEX 78700 CE @ Rs 358.85
+    10:24:06  SELL 40 x SENSEX 78700 CE @ Rs 363.00  target-2  +Rs 166
+    10:24:13  BUY  ...                  @ Rs 358.85     <- identical entry
+    10:24:13  SELL ...                  @ Rs 363.00  target-2  (SAME SECOND)
+    10:24:21  BUY  ...                  @ Rs 358.85
+    10:24:23  SELL ...                  @ Rs 363.40   +Rs 182
+    10:24:32  BUY  ...                  @ Rs 358.85
+    10:24:33  SELL ...                  @ Rs 363.90   +Rs 202
+    10:24:43  BUY  ...                  @ Rs 358.85
+    10:24:43  SELL ...                  @ Rs 366.05   +Rs 288
+
+21 log lines in one minute. `trades_today` read 0/3 throughout, so
+nothing in the daily cap counted these either.
+
+App was stopped at 10:24:43 to end it. Damage was SMALLER than claimed
+while stopping it: the churn lived in the bus's in-memory
+`closed_trades` and died with the process. journal.json held 22 records
+and 0 from that day; shadow_signals.jsonl had 21 lines of which 2
+mentioned the strike. The claim that it was "writing fake trades into
+the journal every 8 seconds" was wrong — journal.json is written at
+EOD, not per fill.
+
+### Three independent defects, each sufficient on its own
+
+**1. `target2` was never validated.** The ONLY place it was ever
+corrected was inside the `rr < min_rr` branch of
+`enforce_signal_invariants`, so a signal whose target1 already cleared
+the risk-reward floor kept whatever target2 it arrived with —
+INCLUDING None. That morning's shadow journal:
+
+    9 of 21 signals carried "target2": null
+
+`ExecutionAgent` copies it onto the position unguarded
+(`"target2": sig["target2"]`) and the exit test is
+`elif ltp >= p["target2"]`. A target2 at or below the fill is satisfied
+by the FIRST exit check after entry.
+
+**2. Entry and exit priced off feeds 20x apart in cadence.** The fill
+used `sig["option_ltp"]`, copied by `analyzer._attach_security_id` out
+of `analysis["strikes"]` — written by TechnicalAgent at interval=60.
+The exit read `bus.get(f"chain:{sym}")`, refreshed by MarketDataAgent
+every 3s. So a fill could be a MINUTE stale while its own first exit
+check was 3 seconds fresh.
+
+That is the frozen Rs 358.85 exactly: all five entries fell inside one
+60s analysis window and took the same price, while the live chain moved
+363.00 -> 366.05.
+
+**3. No re-entry cooldown on directional options.** Spreads, futures,
+broker failures and news re-alerts all had one. Directional options had
+none, so a still-valid signal re-entered the instant its predecessor
+closed.
+
+The loop: stale entry <= unvalidated target2 -> exit on the first check
+-> signal still valid, no cooldown -> re-enter at the same stale price.
+
+### All three fixed, deliberately
+
+Any ONE of them breaks the loop. Fixing only one would leave the system
+one regression away from the same behaviour, so all three shipped:
+
+- `analyzer.enforce_signal_invariants` now repairs target2 OUTSIDE the
+  rr branch, deriving from the same `option_stop_geometry` the
+  degenerate-stop branch already uses rather than inventing a rule.
+- `ExecutionAgent.place` fills from `chain:{sym}` and falls back to
+  `option_ltp` only if the live row is missing. It LOGS when the two
+  disagree by >2%, so the staleness is visible rather than silent.
+- `option_reentry_cooldown_sec` (180s), stamped per symbol+strike+leg
+  on exit and enforced on entry. Manual clicks are exempt — an operator
+  re-entering deliberately is a decision, not a loop.
+
+### The test asserts each fix separately, and that none over-fires
+
+`test_option_churn_loop` drives the real `enforce_signal_invariants` and
+the real `ExecutionAgent.place`, not source strings. Beyond the three
+fixes it pins the ways an over-eager fix would be just as wrong:
+
+    a VALID target2 is left alone       (a repair firing on good input)
+    a DIFFERENT strike stays tradeable  (symbol-wide block = a shutdown)
+    a MANUAL re-entry is exempt
+    the cooldown EXPIRES                (one that never lifts = a shutdown)
+
+First run FAILED on the per-trade rupee cap (108pt stop x 20 lot =
+Rs 2,153 > the Rs 2,000 default) rather than on churn. Raised the cap
+in the test's own config and said so in a comment — a check that passes
+because a DIFFERENT gate blocked it is worse than one that fails.
+
+### Not fixed, and not masked
+
+`trades_today` read 0/3 through all five round trips. Whatever the
+daily cap counts, it is not this path — the same class of hole as
+`_auto_spreads()` reaching `enter_spread()` without passing
+`RiskAgent.evaluate()`. NOT addressed here; it needs its own change.
+
+## v59.28 — the watchlist archive could not answer its own question (2026-08-06)
+
+ADANIENSOL had been archiving for a day. Checked what it actually
+collected:
+
+    candles          803 rows / 38 security_ids   (2026-08-05)
+    chain_snapshots  ZERO rows, on every date
+    (each index, same day: ~30,000 snapshot rows)
+
+The watch loop in `BacktestAgent` calls `sync_day_chain` +
+`sync_futures_candles`, which write per-leg PRICE BARS. The comment
+directly above that loop says the point is that a candidate instrument
+accumulates history so "its liquidity can be measured" before anyone
+decides whether it is worth trading.
+
+Liquidity is OI, volume and bid/ask. All three live in
+`chain_snapshots`. None of them live in `candles`. The archive was
+built to answer a question it structurally could not answer.
+
+### The fix, and why it is deliberately slow
+
+`TechnicalAgent._maybe_snapshot_watch_symbols()` fetches the watch
+symbol's chain, runs the SAME `analyzer.analyze()` the indices use, and
+calls the SAME `history.upsert_chain_snapshot()`. No new persistence
+pipeline — `history.py:516` already anticipated this.
+
+Cadence is 300s against the indices' 60s, and that gap is the point.
+The option-chain endpoint is shared with the four traded symbols and
+returned 429 at 09:31 today. A name that is NEVER TRADED must not spend
+budget the traded ones need — and if this path did cause contention,
+the symptom would land on NIFTY/BANKNIFTY analysis, not here. It also
+carries its own `rate_limit` resource ("watch_chain") so a 429 on this
+path backs off THIS path and cannot stall the traded symbols.
+
+The symbol is never added to the bus "symbols" list and no
+`analysis:{sym}` or `chain:{sym}` key is written. Those drive strategy,
+risk and execution.
+
+### The guard that broke, and why counting was the wrong guard
+
+`test_watchlist_picker` asserted `AG.count("watch_symbols") == 1`. It
+went 1 -> 5 on this change with no new reader, because the new METHOD is
+named `_maybe_snapshot_watch_symbols` and the name contains the key.
+Fourth ambiguous-substring slip of this work, after `"_age = "`, a
+non-unique `def option_chain`, and `"function loadWatchPage"`.
+
+Bumping the number to 5 would have been the wrong repair. What must
+hold is not "one reader" but "no reader inside a class that can place
+an order", so the test now asserts THAT: it splits `agents.py` by class
+and fails if any of StrategyAgent / RiskAgent / ExecutionAgent /
+PriceActionAgent / MTFConfluenceAgent / TAElliottAgent reads the key —
+plus a check that those six class names actually EXIST, because a typo
+would make the guard silently vacuous.
+
+Verified non-vacuous by injecting a read into RiskAgent and confirming
+the guard trips.
+
+### The test drives the code, it does not read it
+
+`test_watch_chain_snapshots` executes the real method against a stub
+broker and reads the database back. Twice in this project a
+source-presence check passed while the code under it raised on every
+cycle — the `cfg` NameError in this very watch feature, and the
+rail-label CSS class. A string cannot see a runtime binding error.
+
+Its first draft still got caught: the stub invented `{"strikes": [...]}`
+where the producer emits `{"rows": [...]}`, and it failed with a
+KeyError. Rewritten to build legs through `broker_adapter._leg()` — the
+producer's own function — so the shape is right by construction. This
+is the "a test that invents its own input cannot detect a mismatch with
+the producer" failure mode, caught by the test rather than in
+production, but only because the test executed the path.
+
+### Also found today, unresolved
+
+- `oi_composite.py:272` documents the long-option leg as "consistently
+  the largest at roughly 45%". Measured 82% on FINNIFTY, against a 2%
+  budget of Rs 4,000 versus Rs 29,265/lot risk — so `int(4000 // 29265)`
+  = 0 lots, every cycle, re-firing every 5s with no cooldown because
+  sizing to zero never marks the signal handled. Currently masked:
+  `futures_strategy_enabled` is back to False per standing policy. The
+  45%-vs-82% divergence is NOT explained and will resurface the moment
+  the futures path is re-enabled.
+- The log reports `futures OHLCV+OI archive ACTIVE — first bar 09:16`
+  for all four symbols, while `candles` holds ZERO rows for today for
+  every front-month future. Yesterday it wrote 385. Claims active,
+  writes nothing. Not yet run down.
+- S9 wrote 0 calibration rows today, which is NOT a regression:
+  `bb_period=20` needs 23 5m candles, so the earliest possible row is
+  11:10, and the first row landed at 11:05-11:30 on each of the last
+  three days. The v59.27 `direction`/`stall_dir` instrumentation is
+  therefore still unverified in a live session.
+
 ## v59.27 — the S9 calibration defect was the INSTRUMENT, not the signals (2026-08-05)
 
 Asked to fix "the two code defects" I had reported in the S9 calibration
