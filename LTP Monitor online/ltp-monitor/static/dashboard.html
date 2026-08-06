@@ -21,13 +21,25 @@
      it; changing only the values gives the same unified visual result
      with dramatically less risk of breaking something. */
   :root{
-    --bg:#0B0E14; --panel:#151A23; --panel2:#1B212C; --line:#2C3542;
-    --text:#E8ECF3; --dim:#97A3B8; --muted:#6C7A91;
-    --accent:#8B5CF6;
-    --up:#2FD07A; --dn:#FF5C6C;
-    --amber:#FFC107; --yellow:#FFC107; --pink:#E93D82; --blue:#3D9BFF;
-    --gauge-track:#2C3542;
-  }
+    /* 2026-08-06 — light palette, per the QuantConnect reference: white
+       page, hairline rules, ink-on-white text, colour reserved for
+       state and actions. The dark values are kept in --dark-* below so
+       the previous look is one swap away rather than lost.
+
+       Contrast was chosen against WHITE, not carried over: the old
+       --up #2FD07A and --dn #FF5C6C are legible on #0B0E14 and washed
+       out on #FFF, so both were darkened. Badges keep white text
+       because their background is still a saturated fill. */
+    --bg:#FFFFFF; --panel:#FFFFFF; --panel2:#F7F8FA; --line:#E6E8EC;
+    --text:#16181D; --dim:#5B6472; --muted:#8A93A2;
+    --accent:#2563EB;
+    --up:#0E9F6E; --dn:#D92D20;
+    --amber:#B45309; --yellow:#B45309; --pink:#BE185D; --blue:#2563EB;
+    --gauge-track:#E6E8EC;
+    /* previous dark theme, retained for a one-line revert */
+    --dark-bg:#0B0E14; --dark-panel:#151A23; --dark-panel2:#1B212C;
+    --dark-line:#2C3542; --dark-text:#E8ECF3; --dark-dim:#97A3B8;
+}
   [data-theme="light"]{
     --bg:#E9ECF2; --panel:#FFFFFF; --panel2:#F6F8FB; --line:#CBD3DF;
     --text:#1C273C; --dim:#596882; --muted:#8896AB;
@@ -41,6 +53,30 @@
   body{background:var(--bg);color:var(--text);font-family:'Roboto','Segoe UI',system-ui,sans-serif;font-size:13px;font-weight:400;letter-spacing:-0.005em}
   .mono{font-family:'Roboto Mono',monospace}
   b,strong{font-weight:600}
+
+/* ---- QC-reference surface: whitespace-led, hairline, thin type ----
+   Structural CSS only. No markup or JS was changed, so all 12 views
+   and 180 functions keep working; this restyles what they already
+   render. */
+body{background:var(--bg);color:var(--text);
+     -webkit-font-smoothing:antialiased;}
+.panel,.card,.box{background:var(--panel);border:1px solid var(--line);
+     border-radius:8px;box-shadow:none;}
+/* DATA tables only. The first cut styled bare `table/th/td`, which
+   also hit the 14 unclassed tables used for LAYOUT — drawing hairlines
+   straight across the empty chart area. Scoped to the three data-table
+   classes actually in use (tbl, postable, stratfont). */
+.tbl,.postable{border-collapse:collapse;width:100%;}
+.tbl th,.postable th{font-weight:500;font-size:11px;letter-spacing:.04em;
+   text-transform:uppercase;color:var(--muted);
+   border-bottom:1px solid var(--line);padding:10px 12px;text-align:left;}
+.tbl td,.postable td{border-bottom:1px solid var(--line);padding:11px 12px;
+   font-variant-numeric:tabular-nums;}
+.tbl tr:last-child td,.postable tr:last-child td{border-bottom:none;}
+.tbl tbody tr:hover,.postable tbody tr:hover{background:var(--panel2);}
+h1,h2,h3{font-weight:600;letter-spacing:-.01em;}
+.rail{background:var(--panel);border-right:1px solid var(--line);}
+hr{border:none;border-top:1px solid var(--line);}
 </style>
 <style>
 
@@ -210,7 +246,7 @@
   .tablewrap-scroll{overflow-y:auto;overflow-x:auto}
   .tablewrap-scroll thead th{position:sticky;top:0;background:var(--panel);z-index:1}
   table{width:100%;border-collapse:collapse;font-family:'JetBrains Mono',monospace;font-size:11.5px;white-space:nowrap}
-  th,td{padding:6px 10px;text-align:left;border-bottom:1px solid var(--line);font-family:'Inter','Segoe UI',system-ui,sans-serif}
+  th,td{padding:6px 10px;text-align:left;font-family:'Inter','Segoe UI',system-ui,sans-serif}
     table th,table td,.tbl th,.tbl td{text-align:left!important}
     td code,th code,.mono{font-family:'JetBrains Mono',monospace}
   th{color:var(--dim);font-weight:500;position:sticky;top:0;background:var(--panel);font-family:'Inter',sans-serif;text-transform:uppercase;font-size:10px;letter-spacing:.04em}
@@ -472,7 +508,7 @@
   <div class="dashgrid">
     <div class="dc8">
       <div class="panel" style="margin-bottom:8px">
-        <h2>&#128200; Live Chart (TradingView Lightweight Charts) <span class="badge" style="font-weight:400">v59.43</span> <span class="sub" id="lwChartStatus">connecting...</span>
+        <h2>&#128200; Live Chart (TradingView Lightweight Charts) <span class="badge" style="font-weight:400">v59.44</span> <span class="sub" id="lwChartStatus">connecting...</span>
           <select id="lwChartSymbol" style="margin-left:auto" onchange="switchLwChart(this.value)"></select></h2>
         <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;flex-wrap:wrap">
           <button class="lwIntervalBtn active" data-interval="1" onclick="switchLwInterval('1')">1m</button>

@@ -4,6 +4,65 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.44 — light surface, per the QuantConnect reference (2026-08-06)
+
+Phase A of a UI change requested from two QuantConnect screenshots:
+white page, hairline rules, thin type, colour reserved for state and
+actions.
+
+The CSS turned out to be fully tokenised — 14 variables in `:root` —
+so most of the look is a palette swap rather than a rewrite. That
+matters given the file is 360 KB / 5,936 lines / 12 views / 180
+functions, and is the ONLY UI: a structural rewrite would risk
+everything to change a colour scheme.
+
+    --bg      #0B0E14 -> #FFFFFF
+    --panel   #151A23 -> #FFFFFF
+    --line    #2C3542 -> #E6E8EC
+    --text    #E8ECF3 -> #16181D
+    --accent  #8B5CF6 -> #2563EB
+
+Contrast was re-chosen against WHITE rather than carried over: --up
+#2FD07A and --dn #FF5C6C are legible on near-black and washed out on
+white, so both were darkened (#0E9F6E / #D92D20). The dark values are
+kept as --dark-* so the previous look is one swap away.
+
+Checked before swapping: all 15 hardcoded `#fff` uses are white text on
+SATURATED badge fills (var(--up)/(--dn)/(--accent)), which stay correct
+on a light page. No markup and no JS changed.
+
+### Three wrong diagnoses of a problem that did not exist
+
+The file-render screenshot showed hairlines across the empty chart
+area. I attributed them to my new blanket `td` rule and scoped it; they
+remained. I then found a PRE-EXISTING `th,td{...border-bottom...}` rule
+in git HEAD, called that the cause, and moved its border to data tables
+only; they remained.
+
+They are the borders of `lwMacdContainer`, `lwRsiContainer`,
+`lwStochContainer` and `lwAtrContainer` — the MACD/RSI/Stochastic/ATR
+indicator panes, EMPTY because the file was rendered standalone with no
+chart data. In the running app they hold the indicator charts. Not a
+defect; an artifact of the verification method.
+
+Recorded because the pattern is the point: rendering the page and
+looking at it was right, but the thing I was looking at was a
+consequence of HOW I rendered it. Both "fixes" were aimed at something
+that was never broken. Neither is harmful — scoping the row-line to
+data tables is defensible on its own, and 0 unclassed tables have more
+than 2 rows, so nothing lost a line it needed — but neither did what I
+said it did.
+
+### Not verified
+
+The screenshots are of the file served directly. The LIVE dashboard is
+behind `auth_enabled`, and the login page has its OWN styling that this
+change does not touch — it is still dark with the purple button. So
+this has NOT been seen with real data in the running app.
+
+Phases B (Strategies page as a QC-style sortable metrics table) and C
+(dashboard layout) are not started.
+
 ## v59.43 — order_id was not unique, and a purge nearly acted on that (2026-08-06)
 
 `order_id = f"PAPER-{int(time.time())}"` — SECOND resolution. Any two
