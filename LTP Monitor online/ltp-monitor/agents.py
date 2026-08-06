@@ -332,6 +332,32 @@ def claude(prompt, api_key, max_tokens=500):
 
 # ================================================================== bus
 
+def symbol_paused(symbol, cfg=None):
+    """True when `symbol` is on hold: DATA continues, ENTRIES stop.
+
+    2026-08-06. Measured across 292 closed trades, BANKNIFTY was the
+    worst symbol in BOTH regimes — -Rs 40,781 at a 28% win rate all
+    time, and 0-for-3 for -Rs 768 since the per-trade caps came in. Held
+    on explicit instruction.
+
+    A hold is deliberately NOT "remove it from the bus symbols list".
+    That list drives market data, analysis, regime, chain snapshots and
+    the archive as well as trading, so dropping a name there would stop
+    collecting the very evidence needed to decide whether the hold was
+    right. Signals are still generated and logged; only the ORDER is
+    refused, and the shadow record keeps accruing.
+
+    EXITS ARE NEVER BLOCKED. This is checked on entry paths only — a
+    pause that could strand an open position would be a far worse bug
+    than the losses it is meant to prevent.
+    """
+    if not symbol:
+        return False
+    c = cfg if cfg is not None else config.load()
+    paused = c.get("paused_symbols") or []
+    return str(symbol).upper() in {str(x).upper() for x in paused}
+
+
 def instant_exit_reason(pos, ltp, spot):
     """The exit conditions that can already be TRUE at the moment of
     entry — evaluated against LIVE data, returning a reason or None.
@@ -3480,6 +3506,8 @@ class RiskAgent(Agent):
               f"concurrent positions {len(positions)}/{max_pos}")
         check(trades < cfg["max_trades_per_day"],
               f"trades {trades}/{cfg['max_trades_per_day']}")
+        check(not symbol_paused(job["symbol"], cfg),
+              f"{job['symbol']} is on hold (paused_symbols)")
         # PER-TRADE RUPEE CAP, EVALUATED HERE RATHER THAN AT EXECUTION.
         #
         # 2026-08-06. This ceiling already existed, but only inside
@@ -4030,6 +4058,8 @@ class ExecutionAgent(Agent):
         side = str(side).upper()
         if side not in ("LONG", "SHORT"):
             return {"error": f"side must be LONG or SHORT, got {side!r}"}
+        if symbol_paused(symbol, cfg):
+            return {"error": f"{symbol} is on hold (paused_symbols)"}
         live = not cfg.get("paper_mode", True)
         if live and not cfg.get("futures_live_enabled", False):
             return {"error": "live futures trading needs BOTH paper_mode "
@@ -4886,6 +4916,12 @@ class ExecutionAgent(Agent):
             return {"error": "Spreads are paper-mode only in this version. "
                              "Enable Paper mode in Settings to use them."}
         sym = spread["symbol"]
+        # Spreads reach here via _auto_spreads() -> enter_spread(), which
+        # does NOT pass through RiskAgent.evaluate() (documented hole).
+        # The hold therefore has to be enforced here too, or holding a
+        # symbol would stop its options and leave its spreads trading.
+        if symbol_paused(sym, cfg):
+            return {"error": f"{sym} is on hold (paused_symbols)"}
         spreads = self.bus.get("spreads", {}) or {}
         sid = f"{sym}:{spread['name']}:{spread['short_strike']:.0f}"
         if sid in spreads:

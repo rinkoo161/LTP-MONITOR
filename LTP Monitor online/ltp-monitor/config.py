@@ -87,6 +87,13 @@ DEFAULTS = {
     # laundered into a plausible-looking trade.
     "signal_entry_tolerance_pct": 10.0,
     "signal_entry_rescale_max_pct": 40.0,
+    # 2026-08-06 — per-symbol HOLD. Data, analysis, regime, chain
+    # snapshots and the archive all continue; only ENTRIES are refused,
+    # so the evidence needed to decide whether to resume keeps
+    # accruing. EXITS are never blocked. BANKNIFTY held on explicit
+    # instruction: -Rs 40,781 at 28% win over 292 trades, and 0-for-3
+    # since the per-trade caps — the worst symbol in both regimes.
+    "paused_symbols": [],
     "market_data_feed": "rest",  # "rest" (default, proven) or "websocket"
                                  # (dhan_ws.py — run test_dhan_ws.py against
                                  # a live account first, see its docstring)

@@ -4,6 +4,96 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.33 — BANKNIFTY held, and the P&L breakdown behind it (2026-08-06)
+
+The question asked was why the tool is "only stuck to 1000 to 2000"
+when it exists to find frequent opportunities and profit. The data says
+that framing is inverted.
+
+    day          trades   P&L
+    2026-07-27      47   -13,464
+    2026-07-28      16    -7,046
+    2026-07-29      31   +24,429
+    2026-07-30      32   -74,523      <-- one day
+    2026-07-31       3    -1,879
+    2026-08-03      10    +1,899
+    2026-08-04      11    +1,044
+    2026-08-05      14    +1,649
+    2026-08-06       4      +502
+
+The Rs 1,000-2,000 days are not a ceiling. They are the ONLY stretch
+where this system has made money. Everything before 2026-08-01 swings
+in five figures and is net negative.
+
+    292 trades   win 46%   avg win +768   avg loss -1,244
+                 payoff 0.62   expectancy -260/trade
+
+### Where the money went: futures, and nothing else
+
+    by instrument     n     total     mean   win%     worst
+    future           59   -96,978   -1,644    24%   -18,240
+    option           50    +2,117      +42    50%
+    spread          183   +19,059     +104    51%
+
+Options and spreads together made +Rs 21,176. The entire -Rs 75,802 is
+futures. A 24% win rate over 59 trades is not variance. (The 109
+"unattributed" records are the same trades — futures carry no
+`strategy` field. Kept as their own bucket rather than dropped.)
+
+    by exit reason           n     total   win%
+    portfolio kill-switch   27   -55,317     4%
+    stoploss                16   -45,102    38%     worst -18,240
+    spread expiry/capture   62   +57,287   100%
+
+The kill-switch firing 27 times at a 4% win rate is the portfolio
+backstop acting as the de-facto stop — precisely the failure
+`sizing.py:179` documents for futures.
+
+Removing the 10 worst trades turns -Rs 75,802 into +Rs 10,484. This is
+not a system that bleeds; it is one that works and then has a
+catastrophe.
+
+### Since the caps: positive, and small on purpose
+
+    40 trades   +4,571   expectancy +114   win 58%   payoff 1.35
+    ZERO futures trades (futures_strategy_enabled stays False)
+
+The caps and the futures shutdown are what turned -Rs 74,523 swings
+into +-Rs 2,000 ones. Loosening them to chase larger wins would not
+scale +Rs 114/trade — it would scale whatever the true expectancy is,
+and over 292 trades that number is negative. NOTHING was loosened.
+
+### BANKNIFTY held
+
+    BANKNIFTY   all time  61 trades  -40,781  win 28%
+                since caps  3 trades     -768  win  0%
+
+Worst symbol in BOTH regimes. Held on explicit instruction.
+
+The MECHANISM matters as much as the decision. A hold is deliberately
+NOT "remove it from the bus symbols list" — that list drives market
+data, analysis, regime, chain snapshots and the archive as well as
+trading, so dropping a name there would stop collecting the very
+evidence needed to decide whether to resume. Signals still generate and
+log; only the ORDER is refused.
+
+`paused_symbols` is enforced on ALL THREE entry paths, because guarding
+only the risk gate would stop BANKNIFTY options while leaving its
+spreads trading: `_auto_spreads()` calls `enter_spread()` directly
+without passing through `RiskAgent.evaluate()`, the documented hole in
+this codebase. `enter_future()` is guarded for the same reason.
+
+EXITS ARE NEVER BLOCKED, and the test asserts that `exit()` and
+`_monitor_one()` do NOT consult the hold. A pause that could strand an
+open position would be worse than the losses it prevents.
+
+### Caveats stated rather than buried
+
+40 post-cap trades is thin. The per-symbol splits are 3-13 trades each.
+Paper fills assume the touched price is obtainable. None of this is
+settled; the hold is reversible by emptying one list, and the test
+pins that releasing it restores trading.
+
 ## v59.32 — the entry price must belong to the instrument named (2026-08-06)
 
 Reported from the dashboard: "entry refused — already at exit: target-2
