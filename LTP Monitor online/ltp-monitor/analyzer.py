@@ -1553,6 +1553,82 @@ def enforce_signal_invariants(sig, analysis, cfg=None, log=lambda m: None):
         sig["target1"] = round(entry * 1.60, 1)
         sig["target2"] = round(entry * 2.05, 1)
 
+    # --- the ENTRY PRICE must belong to the instrument being named -----
+    #
+    # 2026-08-06. Every other invariant here checks the signal against
+    # ITSELF — stop vs entry, target vs entry, risk-reward. All of that
+    # is internally consistent arithmetic on a number nothing verified.
+    #
+    # Live, at 12:01:03:
+    #
+    #   SENSEX BUY_CE strike 78800  entry 123.45  sl 96.5  t1 180  t2 240
+    #   actual SENSEX 78800 CE at that moment:   Rs 363.60
+    #   actual SENSEX 79400 CE at that moment:   Rs 123.75   <-- this one
+    #
+    # The model named one strike and priced a DIFFERENT one, then
+    # derived the whole geometry from the wrong instrument. The same
+    # bogus 123.45 appeared in three consecutive signals, including a
+    # BUY_PE -> BUY_CE direction flip with the price levels unchanged.
+    # Every existing check passed it: 123.45/96.5/180 is a perfectly
+    # well-formed 2:1 trade — of some other option.
+    #
+    # THREE BANDS, because "stale" and "wrong instrument" need different
+    # answers and one threshold cannot give both:
+    #
+    #   <= tol_ok     leave alone. Normal staleness — the pack is 60s
+    #                 old and the option moved. A vwap_pullback signal
+    #                 the same minute read 330.4 against a live 363.6
+    #                 (9%), which is a real signal, not a broken one.
+    #   <= tol_scale  RESCALE. Same instrument, materially moved. Keep
+    #                 the intended risk-reward exactly and scale the
+    #                 stop/target DISTANCES by the same ratio, so the
+    #                 trade the strategy meant is the trade that gets
+    #                 placed.
+    #   >  tol_scale  REJECT. This price does not belong to this
+    #                 instrument. Rescaling here would launder a
+    #                 malformed signal into a plausible-looking trade,
+    #                 which is worse than dropping it.
+    _live_ltp = None
+    if sig.get("strike") is not None and sig.get("signal") in ("BUY_CE", "BUY_PE"):
+        _leg = "ce" if sig["signal"] == "BUY_CE" else "pe"
+        _row = next((r for r in (analysis or {}).get("strikes", [])
+                     if r.get("strike") == sig["strike"]), None)
+        if _row:
+            _live_ltp = (_row.get(_leg) or {}).get("ltp")
+    if _live_ltp and entry > 0:
+        _tol_ok = cfg.get("signal_entry_tolerance_pct", 10.0) / 100.0
+        _tol_scale = cfg.get("signal_entry_rescale_max_pct", 40.0) / 100.0
+        # Denominator is the LIVE price, not the model's claim. Using
+        # the claim inflates the figure and makes the bands asymmetric:
+        # the 123.45-vs-363.60 case reads 195% against the claim but 66%
+        # against reality, and a 330.40 signal against a live 363.60 —
+        # ordinary 60s staleness — reads 10.05% against the claim and
+        # trips a 10% band it has no business tripping. The live price
+        # is what the trade will actually be filled at, so it is the
+        # reference.
+        _dev = abs(_live_ltp - entry) / _live_ltp
+        if _dev > _tol_scale:
+            sig["signal"] = "NO_TRADE"
+            sig["invariant_repairs"] = repairs + [
+                f"REJECTED: entry {entry} is {100*_dev:.0f}% from the live "
+                f"price {_live_ltp} of {sig.get('strike')} {_leg.upper()} — "
+                f"this price does not belong to this instrument"]
+            log(f"signal REJECTED: entry {entry} vs live {_live_ltp} "
+                f"({100*_dev:.0f}% off) for {sig.get('strike')} {_leg.upper()}")
+            return sig, sig["invariant_repairs"]
+        if _dev > _tol_ok:
+            _ratio = _live_ltp / entry
+            _old = entry
+            for _k in ("stoploss", "target1", "target2"):
+                _v = sig.get(_k)
+                if isinstance(_v, (int, float)):
+                    sig[_k] = round(_live_ltp + (_v - _old) * _ratio, 1)
+            sig["entry"] = entry = _live_ltp
+            sl = sig["stoploss"]
+            repairs.append(
+                f"entry {_old} -> {_live_ltp} ({100*_dev:.0f}% stale); "
+                f"stop/targets rescaled x{_ratio:.2f}, risk-reward preserved")
+
     # --- target2 must be a REAL number ABOVE target1 -------------------
     # 2026-08-06. Until now the ONLY place target2 was ever corrected was
     # inside the `rr < min_rr` branch above, so a signal whose target1

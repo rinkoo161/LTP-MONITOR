@@ -55,8 +55,25 @@ bad = {"signal": "BUY_CE", "strike": 24200, "entry": 100.0,
        "stoploss": 120.0, "target1": 130.0}   # stop ABOVE entry
 out3, rep3 = analyzer.enforce_signal_invariants(dict(bad), AN, CFG)
 check("stop above entry is caught", any("invalid" in r for r in rep3), str(rep3))
+# 2026-08-06 — this asserted the ABSOLUTE 70.0/160.0, which assumed the
+# signal's claimed entry of 100.0 was kept. It no longer is: the 24200
+# CE in AN trades at 150.0, so entry 100.0 is 33% off the live price and
+# the entry-price band rescales it (see test_signal_entry_price.py).
+# The rule-engine fractions are UNCHANGED and still what gets applied —
+# 105/150 = 0.70 and 240/150 = 1.60 — they are simply applied to the
+# instrument's real price instead of a wrong one. Assert the FRACTIONS,
+# which is what "the rule-engine's own 30%/60%" actually means, so this
+# check stops depending on which entry price survives upstream repairs.
+_e3 = out3["entry"]
 check("reset to the rule-engine's own 30%/60%",
-      out3["stoploss"] == 70.0 and out3["target1"] == 160.0)
+      abs(out3["stoploss"] / _e3 - 0.70) < 0.01
+      and abs(out3["target1"] / _e3 - 1.60) < 0.01,
+      f"entry {_e3}, sl {out3['stoploss']} ({out3['stoploss']/_e3:.2f}x), "
+      f"t1 {out3['target1']} ({out3['target1']/_e3:.2f}x)")
+check("and the entry it used is the instrument's REAL price",
+      out3["entry"] == 150.0,
+      "100.0 was not the price of the 24200 CE — pricing a contract we "
+      "are not buying is the same error as the wrong strike")
 rr3 = (out3["target1"] - out3["entry"]) / (out3["entry"] - out3["stoploss"])
 check("and that fallback itself satisfies the gate", rr3 >= 1.95, f"rr={rr3:.2f}")
 

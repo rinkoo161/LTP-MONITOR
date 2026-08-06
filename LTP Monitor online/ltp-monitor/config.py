@@ -78,6 +78,15 @@ DEFAULTS = {
     # spreads, futures and news re-alerts all did. SENSEX 78700 CE
     # opened and closed five times in 38s off one stale analysis pack.
     "option_reentry_cooldown_sec": 180,
+    # 2026-08-06 — nothing checked that a signal's entry price belonged
+    # to the strike/leg it named. An AI signal priced SENSEX 78800 CE at
+    # Rs 123.45 (the 79400 CE) while it traded at Rs 363.60. Below the
+    # first figure the signal is left alone (normal 60s staleness);
+    # between them stop/targets are rescaled with the risk-reward
+    # preserved; above the second the signal is REJECTED rather than
+    # laundered into a plausible-looking trade.
+    "signal_entry_tolerance_pct": 10.0,
+    "signal_entry_rescale_max_pct": 40.0,
     "market_data_feed": "rest",  # "rest" (default, proven) or "websocket"
                                  # (dhan_ws.py — run test_dhan_ws.py against
                                  # a live account first, see its docstring)

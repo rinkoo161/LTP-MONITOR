@@ -4,6 +4,81 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.32 — the entry price must belong to the instrument named (2026-08-06)
+
+Reported from the dashboard: "entry refused — already at exit: target-2
+(Rs 365.55) and not allowing any new trade."
+
+The guard was right. The SIGNAL was broken. At 12:01:03:
+
+    SENSEX BUY_CE strike 78800  entry 123.45  sl 96.5  t1 180  t2 240
+    actual SENSEX 78800 CE:  Rs 363.60
+    actual SENSEX 79400 CE:  Rs 123.75   <-- the price it actually used
+
+The model named one strike and priced a DIFFERENT one, then derived the
+whole geometry from the wrong instrument. Every existing invariant
+passed it, because 123.45 / 96.5 / 180 is a perfectly well-formed 2:1
+trade — of some other option. The same bogus 123.45 appeared in THREE
+consecutive signals, including a BUY_PE -> BUY_CE flip with the price
+levels unchanged. A fourth logged "AI returned an invalid signal value:
+None".
+
+Downstream, the fill happens at the LIVE price (v59.29) while the
+targets stay bogus, so the position is past target2 the moment it
+opens. That is the churn loop's entry condition, and it is what v59.31
+had been refusing all afternoon — correctly.
+
+### Every other invariant checks the signal against ITSELF
+
+Stop vs entry, target vs entry, risk-reward, strike vs ATM: all
+internally consistent arithmetic on a number nothing ever verified
+against the market. This adds the missing one.
+
+### Three bands, because one threshold cannot do this job
+
+    <= 10%   LEAVE ALONE. Ordinary 60s staleness. A real vwap_pullback
+             signal the same minute read 330.4 against a live 363.6.
+    <= 40%   RESCALE. Same instrument, materially moved. Entry becomes
+             the live price and stop/target DISTANCES scale by the same
+             ratio, so the risk-reward the strategy intended is exactly
+             the risk-reward that gets placed.
+    >  40%   REJECT as NO_TRADE. This price does not belong to this
+             instrument. Rescaling here would launder a malformed
+             signal into a plausible-looking trade, which is worse than
+             dropping it.
+
+Absent chain, or a strike not in it, leaves the signal untouched — an
+unavailable price must never become a reason to reject everything.
+
+### The metric was wrong first, and the test caught it
+
+Deviation was computed against the MODEL'S CLAIM. That inflates it and
+makes the bands asymmetric: the live case read 195% instead of 66%, and
+a 330.40 signal against a live 363.60 — ordinary staleness — read
+10.05% and tripped a 10% band it had no business tripping. The
+denominator is now the LIVE price, which is what the trade actually
+fills at.
+
+### A stale expectation in test_signal_invariants, repaired honestly
+
+Its degenerate-stop case asserted the ABSOLUTE 70.0/160.0, which
+assumed the signal's claimed entry of 100.0 survived. It no longer
+does: the fixture's 24200 CE trades at 150.0, so 100.0 is 33% off and
+gets rescaled. The rule-engine FRACTIONS are unchanged — 105/150 = 0.70
+and 240/150 = 1.60, exactly 30%/60% — they are simply applied to the
+instrument's real price instead of a wrong one. The check now asserts
+the fractions, which is what "the rule-engine's own 30%/60%" means, and
+adds one that the entry used is the real price. Updating a test to
+match changed behaviour is only legitimate when the new behaviour is
+the more correct one; it is here, and the reasoning is recorded rather
+than assumed.
+
+### Trading was never globally blocked
+
+Three refusals all afternoon, all the same malformed signal. NIFTY
+24650 CE filled at 12:05:38 and SENSEX 78800 CE at 12:12:45, both
+sized down by the rupee cap rather than refused ("capped 5->1 lot(s)").
+
 ## v59.31 — refuse a position that is already over (2026-08-06)
 
 11:43:02, in the same second:
