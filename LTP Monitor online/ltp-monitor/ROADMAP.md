@@ -4,6 +4,67 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.37 — phase 1b: the entries were the difference, and one cap cannot be modelled (2026-08-06)
+
+v59.36 shared the EXIT decision and the replay still disagreed with live
+(+4,702 vs -3,477 on FINNIFTY). So the exits were no longer the
+difference. The entries were.
+
+`_auto_spreads` gates every live entry on FIVE rules. The replay had
+NONE of them:
+
+    60s evaluation gate              replay used 900s
+    max_concurrent_spreads           replay held ONE at a time
+    per-(sym,name) 15min cooldown    replay had none
+    consecutive-loss halt            replay had none
+    max_spread_capital_pct (60%)     replay had none
+
+Four of the five are now mirrored, reading the SAME config keys the
+live agent reads so a Settings change moves both together.
+
+### A mistake worth recording, caught by a data tell
+
+The first cut stamped the re-entry cooldown on EXIT. Live stamps it on
+successful ENTRY:
+
+    r = self.enter_spread(ev)
+    if r.get("ok"): self._spread_cd[cd_key] = time.time()
+
+With it on exit, the replay opened TEN clones of the same spread
+back-to-back before any closed. The tell was in the output, not in the
+code: "short strike breached (spot 56995)" repeating EXACTLY ten times,
+once per clone. Reading the numbers caught what reading the diff did
+not.
+
+### The honest result: a per-strategy replay CANNOT model a portfolio
+
+    LIVE      7.0 spreads/day across the WHOLE book (4 symbols x 2 names)
+    REPLAY   ~17/day for FINNIFTY bull_put ALONE
+
+`max_concurrent_spreads` and `max_spread_capital_pct` are PORTFOLIO
+caps — 10 slots and 60% of capital shared across all eight
+(symbol, strategy) pairs. `replay_spreads(symbol, name)` walks ONE pair
+in isolation, so it can only apply a portfolio cap as if that pair owned
+the entire book. It therefore takes roughly ten times as many setups as
+live ever could.
+
+This is not a tuning gap; it is the wrong shape of function. Closing it
+needs a PORTFOLIO replay that walks all symbols and strategies together
+against one shared slot count and one shared capital pool — a different
+entry point, not a parameter on this one.
+
+### And an observation that may matter more than the fix
+
+The replay's extra trades are net NEGATIVE. Live takes roughly the
+first two setups per pair per day and stops because its slots and
+capital are full; the replay takes everything and loses.
+
+That raises a hypothesis this work cannot yet test: live's profitability
+may depend on being CAPACITY CONSTRAINED rather than on setup quality —
+the caps acting as an accidental filter. If true, "trade more" would be
+actively harmful, and the portfolio replay above is how to find out.
+Recorded as a hypothesis, NOT a conclusion: n=28 live spreads.
+
 ## v59.36 — the backtester was testing a different strategy (2026-08-06)
 
 PHASE 1 of the "why is this losing money" work. The finding that

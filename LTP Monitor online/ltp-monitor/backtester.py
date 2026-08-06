@@ -282,14 +282,33 @@ def replay_spreads(symbol, name, params=None, days=None, log=lambda m: None):
     lot = cfg["lot_sizes"].get(symbol, 75)
     fee = cfg.get("fee_per_lot", 40) * 4
     trades = []
+    # 2026-08-06, PHASE 1b — mirror the LIVE entry admission rules.
+    # v59.36 made the EXIT decision shared, and the replay still
+    # disagreed with live (+4,702 vs -3,477 on FINNIFTY). The exits were
+    # no longer the difference; the ENTRIES were. `_auto_spreads` gates
+    # every entry on five rules and this replay had NONE of them:
+    #
+    #   60s evaluation gate         replay used 900s -> 15x fewer entries
+    #   max_concurrent_spreads      replay held ONE at a time
+    #   per-(sym,name) cooldown     replay had none
+    #   consecutive-loss halt       replay had none
+    #   max_spread_capital_pct      see the caveat below
+    #
+    # Read from the SAME config keys the live agent reads, so a change
+    # in Settings moves both together instead of only one.
+    eval_gap = 60
+    max_open = int(cfg.get("max_concurrent_spreads", 2))
+    cooldown = cfg.get("spread_reentry_cooldown_min", 15) * 60
+    stop_n = cfg.get("spread_stop_after_consecutive_losses", 2)
     for day in (days or _completed_days(history.chain_days(symbol))):
         frames = history.day_chain_frames(symbol, day)
         if len(frames) < 30:
             continue
-        open_sp, last_eval = None, 0
+        open_list, last_eval = [], 0
+        cd_until, consec = 0, 0
         for ts, chain in frames:
             analysis = _an.analyze(chain)
-            if open_sp:
+            for open_sp in list(open_list):
                 pnl_ps = 0
                 ok = True
                 for leg in open_sp["legs"]:
@@ -343,11 +362,24 @@ def replay_spreads(symbol, name, params=None, days=None, log=lambda m: None):
                                        "exit_ts": ts,
                                        "entry_spot": open_sp["entry_spot"],
                                        "exit_spot": chain["spot"]})
-                        open_sp = None
-                continue
-            if ts - last_eval < 900:
+                        open_list.remove(open_sp)
+                        # Consecutive-loss halt and the re-entry
+                        # cooldown are LIVE gates; a replay without them
+                        # keeps re-entering a losing setup all day and
+                        # reports a drawdown live could never have taken.
+                        if (trades[-1]["pnl"] or 0) < 0:
+                            consec += 1
+                        else:
+                            consec = 0
+            if ts - last_eval < eval_gap:
                 continue
             last_eval = ts
+            if len(open_list) >= max_open:
+                continue
+            if ts < cd_until:
+                continue
+            if stop_n and consec >= stop_n:
+                continue
             # inject tunable params into the real evaluator
             slib_ev = _eval_with_params(name, analysis, p)
             if slib_ev and slib_ev.get("eligible"):
@@ -357,7 +389,17 @@ def replay_spreads(symbol, name, params=None, days=None, log=lambda m: None):
                 # zeroed out whole strategies in this codebase before, so
                 # these are the live field names, not replay-local ones.
                 _credit = slib_ev["credit"]
-                open_sp = {"legs": [dict(l, entry=l["ltp"])
+                # LIVE stamps the cooldown on successful ENTRY:
+                #     r = self.enter_spread(ev)
+                #     if r.get("ok"): self._spread_cd[cd_key] = time.time()
+                # The first cut of this stamped it on EXIT instead, which
+                # let the replay open TEN clones of the same spread
+                # back-to-back before any closed — visible as the same
+                # "short strike breached (spot NNNNN)" reason repeating
+                # exactly 10 times. Entry-stamped is what live does and
+                # it is what naturally limits concurrency per pair.
+                cd_until = ts + cooldown
+                open_list.append({"legs": [dict(l, entry=l["ltp"])
                                     for l in slib_ev["legs"]],
                            "credit": _credit,
                            "max_loss": slib_ev["max_loss"],
@@ -372,7 +414,7 @@ def replay_spreads(symbol, name, params=None, days=None, log=lambda m: None):
                            "loss_limit": min(_credit * p["loss_mult"],
                                              slib_ev["max_loss"]),
                            "opened_ts": ts, "mfe": 0.0, "mae": 0.0,
-                           "entry_ts": ts, "entry_spot": chain["spot"]}
+                           "entry_ts": ts, "entry_spot": chain["spot"]})
         log(f"  {day}: cumulative trades {len(trades)}")
     return trades
 
