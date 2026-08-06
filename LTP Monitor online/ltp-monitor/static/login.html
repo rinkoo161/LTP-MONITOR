@@ -6,10 +6,15 @@
 <title>LTP Monitor — sign in</title>
 <style>
   :root{
-    --bg:#0B0E14; --panel:#151A23; --panel2:#1B212C; --line:#2C3542;
-    --text:#E8ECF3; --dim:#97A3B8; --muted:#6C7A91; --accent:#8B5CF6;
-    --up:#2FD07A; --dn:#FF5C6C;
-  }
+    /* 2026-08-06 — matched to the dashboard's light surface. The login
+       page carries its OWN copy of these tokens, which is why the
+       dashboard restyle left it dark and produced a jarring
+       dark-login -> light-app transition. Same values, kept in sync by
+       hand because the two files do not share a stylesheet. */
+    --bg:#FFFFFF; --panel:#FFFFFF; --panel2:#F7F8FA; --line:#E6E8EC;
+    --text:#16181D; --dim:#5B6472; --muted:#8A93A2; --accent:#2563EB;
+    --up:#0E9F6E; --dn:#D92D20;
+}
   *{box-sizing:border-box}
   body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
        background:var(--bg);color:var(--text);
@@ -39,6 +44,16 @@
   .qr{display:none;margin:12px auto 6px;background:#fff;padding:10px;border-radius:8px;
       width:max-content;line-height:0}
   .qr svg{display:block;width:min(230px,60vw);height:auto}
+
+/* QC-reference login: a faint page wash so the white card has an edge,
+   and a hairline border instead of a shadow. */
+body{background:var(--panel2);}
+.card,.panel{background:var(--panel);border:1px solid var(--line);
+     box-shadow:none;border-radius:10px;}
+form{background:none;border:none;}
+input{background:var(--panel);border:1px solid var(--line);color:var(--text);}
+input:focus{outline:none;border-color:var(--accent);}
+button{border-radius:8px;}
 </style>
 </head>
 <body>

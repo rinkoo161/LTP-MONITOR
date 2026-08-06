@@ -524,7 +524,7 @@ hr{border:none;border-top:1px solid var(--line);}
   <div class="dashgrid">
     <div class="dc8">
       <div class="panel" style="margin-bottom:8px">
-        <h2>&#128200; Live Chart (TradingView Lightweight Charts) <span class="badge" style="font-weight:400">v59.45</span> <span class="sub" id="lwChartStatus">connecting...</span>
+        <h2>&#128200; Live Chart (TradingView Lightweight Charts) <span class="badge" style="font-weight:400">v59.46</span> <span class="sub" id="lwChartStatus">connecting...</span>
           <select id="lwChartSymbol" style="margin-left:auto" onchange="switchLwChart(this.value)"></select></h2>
         <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;flex-wrap:wrap">
           <button class="lwIntervalBtn active" data-interval="1" onclick="switchLwInterval('1')">1m</button>
@@ -548,23 +548,23 @@ hr{border:none;border-top:1px solid var(--line);}
         <div id="lwStochContainer" style="height:110px;margin-top:2px;border-top:1px solid var(--line)"></div>
         <div id="lwAtrContainer" style="height:90px;margin-top:2px;border-top:1px solid var(--line)"></div>
         <div class="legend" style="margin-top:2px">
-          <label class="reasons" style="display:inline-flex;align-items:center;gap:3px;cursor:pointer"><input type="checkbox" checked onchange="toggleLwPane('macd',this.checked)"><b style="color:#58a6ff">■</b> MACD</label>
-          <label class="reasons" style="display:inline-flex;align-items:center;gap:3px;cursor:pointer"><input type="checkbox" checked onchange="toggleLwPane('rsi',this.checked)"><b style="color:#a371f7">■</b> RSI (70/30)</label>
-          <label class="reasons" style="display:inline-flex;align-items:center;gap:3px;cursor:pointer"><input type="checkbox" checked onchange="toggleLwPane('stoch',this.checked)"><b style="color:#58a6ff">■</b> Stoch %K <b style="color:#d29922">■</b> %D (80/20)</label>
-          <label class="reasons" style="display:inline-flex;align-items:center;gap:3px;cursor:pointer"><input type="checkbox" checked onchange="toggleLwPane('atr',this.checked)"><b style="color:#f85149">■</b> ATR</label>
+          <label class="reasons" style="display:inline-flex;align-items:center;gap:3px;cursor:pointer"><input type="checkbox" onchange="toggleLwPane('macd',this.checked)"><b style="color:#58a6ff">■</b> MACD</label>
+          <label class="reasons" style="display:inline-flex;align-items:center;gap:3px;cursor:pointer"><input type="checkbox" onchange="toggleLwPane('rsi',this.checked)"><b style="color:#a371f7">■</b> RSI (70/30)</label>
+          <label class="reasons" style="display:inline-flex;align-items:center;gap:3px;cursor:pointer"><input type="checkbox" onchange="toggleLwPane('stoch',this.checked)"><b style="color:#58a6ff">■</b> Stoch %K <b style="color:#d29922">■</b> %D (80/20)</label>
+          <label class="reasons" style="display:inline-flex;align-items:center;gap:3px;cursor:pointer"><input type="checkbox" onchange="toggleLwPane('atr',this.checked)"><b style="color:#f85149">■</b> ATR</label>
           <span class="reasons" style="margin-left:auto">panes synced — zoom/scroll/crosshair track together</span>
         </div>
         <div class="legend" style="margin-top:6px">
-          <label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" checked onchange="toggleLwVolume(this.checked)"><i style="background:#58a6ff88"></i>Futures Volume</label>
-          <label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" checked onchange="toggleLwOverlay('ema20',this.checked)"><i style="background:#58a6ff"></i>EMA 20</label>
-          <label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" checked onchange="toggleLwOverlay('ema50',this.checked)"><i style="background:#d29922"></i>EMA 50</label>
-          <label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" checked onchange="toggleLwOverlay('supertrend',this.checked)"><i style="background:#a371f7"></i>Supertrend</label>
-          <label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" checked onchange="toggleLwOverlay('bb_upper',this.checked);toggleLwOverlay('bb_lower',this.checked)"><i style="background:#8c8c8c"></i>Bollinger Bands</label>
-          <label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" checked onchange="toggleLwOverlay('atr_band_upper',this.checked);toggleLwOverlay('atr_band_lower',this.checked)"><i style="background:#3fb950"></i>ATR Bands</label>
-          <label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" checked onchange="toggleLwOverlay('vol_band_upper',this.checked);toggleLwOverlay('vol_band_lower',this.checked)"><i style="background:#a371f7"></i>Volatility Bands</label>
-          <label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" checked onchange="toggleLwOverlay('support_zone_upper',this.checked);toggleLwOverlay('support_zone_lower',this.checked)"><i style="background:#3fb950"></i>Dynamic Support Zone</label>
-          <label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" checked onchange="toggleLwZigzag(this.checked)"><i style="background:#58a6ffcc"></i>ZigZag</label>
-          <label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" checked onchange="lwSignalsVisible=this.checked;lwRedrawMarkers()"><i style="background:#d29922"></i>S7 Signals</label>
+          <label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" onchange="toggleLwVolume(this.checked)"><i style="background:#58a6ff88"></i>Futures Volume</label>
+          <label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" onchange="toggleLwOverlay('ema20',this.checked)"><i style="background:#58a6ff"></i>EMA 20</label>
+          <label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" onchange="toggleLwOverlay('ema50',this.checked)"><i style="background:#d29922"></i>EMA 50</label>
+          <label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" onchange="toggleLwOverlay('supertrend',this.checked)"><i style="background:#a371f7"></i>Supertrend</label>
+          <label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" onchange="toggleLwOverlay('bb_upper',this.checked);toggleLwOverlay('bb_lower',this.checked)"><i style="background:#8c8c8c"></i>Bollinger Bands</label>
+          <label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" onchange="toggleLwOverlay('atr_band_upper',this.checked);toggleLwOverlay('atr_band_lower',this.checked)"><i style="background:#3fb950"></i>ATR Bands</label>
+          <label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" onchange="toggleLwOverlay('vol_band_upper',this.checked);toggleLwOverlay('vol_band_lower',this.checked)"><i style="background:#a371f7"></i>Volatility Bands</label>
+          <label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" onchange="toggleLwOverlay('support_zone_upper',this.checked);toggleLwOverlay('support_zone_lower',this.checked)"><i style="background:#3fb950"></i>Dynamic Support Zone</label>
+          <label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" onchange="toggleLwZigzag(this.checked)"><i style="background:#58a6ffcc"></i>ZigZag</label>
+          <label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" onchange="lwSignalsVisible=this.checked;lwRedrawMarkers()"><i style="background:#d29922"></i>S7 Signals</label>
           <span class="reasons" id="lwIndicatorNote" style="margin-left:auto">Feature #7 indicators — refresh every ~30s</span>
         </div>
         <div id="lwVolumeNote" class="reasons" style="margin-top:2px"></div>
@@ -3440,6 +3440,11 @@ function initLwChart(){
        autoscaleInfoProvider:function(){return null;}},
       overlayStyle[key]));
   });
+  /* The chart's indicator toggles ship OFF by default (2026-08-06).
+     Apply whatever the checkboxes currently say, now that the series
+     exist — see lwSyncToggles(). Runs after EVERY rebuild, so a symbol
+     switch cannot silently bring the panes back. */
+  try{ lwSyncToggles(); }catch(e){}
   // ZigZag market-structure overlay, per explicit request. A single
   // connecting line through confirmed pivots (native LWC line series,
   // not a custom-drawn shape) plus HH/HL/LH/LL text at each turning
@@ -3900,6 +3905,32 @@ function clearLwPriceLines(){
 
 let lwCurrentInterval="1";
 let lwConnectSeq=0;
+
+/* 2026-08-06 — the chart's indicator toggles now ship OFF by default,
+   per request. Unchecking the boxes alone is NOT enough: the series and
+   panes are created VISIBLE by lightweight-charts, and the toggle
+   functions only flip visibility on an existing series. Without this
+   the control would read "off" while the pane still drew — a state
+   mismatch, which is the same class of defect as a gate line that says
+   the opposite of what it means.
+
+   So the CHECKBOX is the source of truth: after the chart is built,
+   every chart-control checkbox has its handler fired with its own
+   current state. Turning one back on in Settings therefore needs no
+   second code path — it is the same handler either way. */
+function lwSyncToggles(){
+  /* Query the document directly. The first cut looked up an
+     id="lwControls" container that DOES NOT EXIST — the `||document`
+     fallback meant it still worked, so nothing visibly broke, and
+     test_design_theme_consolidation caught the dangling reference. A
+     lookup that silently falls through is worse than one that fails:
+     it reads as though a container is being scoped to. */
+  var boxes=document.querySelectorAll('input[type="checkbox"][onchange*="toggleLw"],'
+            +'input[type="checkbox"][onchange*="lwSignalsVisible"]');
+  boxes.forEach(function(b){
+    try{ b.dispatchEvent(new Event("change")); }catch(e){}
+  });
+}
 function connectLwChart(symbol, interval){
   if(interval) lwCurrentInterval=interval;
   // Bug found live (2026-07-25): closing the old socket is

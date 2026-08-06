@@ -4,6 +4,48 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.46 — login page matched, chart indicators default OFF (2026-08-06)
+
+### Login page
+
+It carries its OWN copy of the `:root` tokens, which is why v59.44's
+dashboard restyle left it dark and produced a jarring dark-login ->
+light-app transition. Same palette applied, plus a faint page wash so
+the white card has an edge instead of a shadow.
+
+One self-inflicted flaw, caught by looking: the first cut styled
+`.card,.panel,form` as cards, and `form` sits INSIDE the card — so it
+drew a box within a box around the fields. `form` now carries no border.
+
+### Chart indicators OFF by default
+
+MACD, RSI, Stoch, ATR, Futures Volume, EMA 20/50, Supertrend, Bollinger
+Bands, ATR Bands, Volatility Bands, Dynamic Support Zone, ZigZag and S7
+Signals — 14 toggles, now unchecked. `lwShowLevels` was deliberately
+left ON: it was not in the request.
+
+UNCHECKING THE BOXES ALONE WOULD NOT HAVE WORKED. The series and panes
+are created VISIBLE by lightweight-charts, and the toggle functions only
+flip visibility on an ALREADY-EXISTING series. The control would have
+read "off" while the pane still drew — a state mismatch, the same class
+of defect as the "✓ SENSEX is on hold" gate label fixed earlier today.
+
+So the CHECKBOX is now the source of truth: `lwSyncToggles()` fires
+every chart-control checkbox's handler with its own current state, and
+runs after EVERY rebuild — so a symbol switch cannot silently bring the
+panes back. Turning one on needs no second code path; it is the same
+handler either way.
+
+### A dangling id, caught by an existing test
+
+`lwSyncToggles()` first looked up `document.getElementById("lwControls")`
+— an id that DOES NOT EXIST. The `||document` fallback meant it still
+worked and nothing visibly broke;
+`test_design_theme_consolidation` failed on the dangling reference.
+A lookup that silently falls through is worse than one that fails,
+because it reads as though a container is being scoped to. Now queries
+the document directly and says why.
+
 ## v59.45 — Strategy Performance leaderboard (UI phase B) (2026-08-06)
 
 A QC-style ranking on the Strategies page — but deliberately NOT ranked
