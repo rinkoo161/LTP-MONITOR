@@ -818,7 +818,8 @@ def option_stop_geometry(entry, cfg=None, atr_pct=None, spot=None,
             meta)
 
 def analyze(chain: dict, momentum: dict | None = None,
-            indicators: dict | None = None, snapshot_ctx: dict | None = None) -> dict:
+            indicators: dict | None = None, snapshot_ctx: dict | None = None,
+            as_of: str | None = None) -> dict:
     rows = chain["rows"]
     spot = chain["spot"] or 0
     if not rows or not spot:
@@ -833,10 +834,28 @@ def analyze(chain: dict, momentum: dict | None = None,
     from datetime import date as _date
     days_to_expiry = None
     exp_str = chain.get("expiry")
+    # `as_of` (2026-08-08) — the reference date days_to_expiry counts
+    # from. Defaults to today, which is right for a live chain and WRONG
+    # for a reconstructed historical one: a frame rebuilt for 2026-07-23
+    # whose front expiry was 2026-07-28 measured -16 days from today
+    # instead of +6, so the Black-Scholes fallback below could never
+    # solve and `iv` stayed 0 on every historical frame. That is the
+    # second reason `daily_atm_iv` was empty (the first was the expiry
+    # blend in history.day_chain_frames). Callers replaying history must
+    # pass the date of the frame; every live caller keeps today.
+    _ref = None
+    if as_of:
+        try:
+            _y, _m, _d = (int(x) for x in str(as_of).split("-"))
+            _ref = _date(_y, _m, _d)
+        except (ValueError, TypeError):
+            _ref = None
+    if _ref is None:
+        _ref = _date.today()
     if exp_str:
         try:
             y, m, d_ = (int(x) for x in exp_str.split("-"))
-            days_to_expiry = (_date(y, m, d_) - _date.today()).days + 1
+            days_to_expiry = (_date(y, m, d_) - _ref).days + 1
         except (ValueError, TypeError):
             pass
     for r in rows:

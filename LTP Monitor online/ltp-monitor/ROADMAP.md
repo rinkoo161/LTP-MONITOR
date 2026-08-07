@@ -4,6 +4,74 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.53 — wire the ATM IV backfill, and the three defects that made it produce nothing (2026-08-08)
+
+`risk_engine.backfill_iv_history()` had been written, was correct in its
+own terms, and was called by NOTHING — the same failure
+`prune_chain_snapshots()` had at v53, found the same way. `daily_atm_iv`
+was empty on every symbol, so agents.py's own IV-percentile tier (which
+READS that table via `history.get_daily_atm_iv_history`) has had no
+long-window source since it was built, and the strategy-reset memo could
+not evaluate the volatility risk premium at all.
+
+Wiring it to the LearningAgent daily-maintenance slot was one call. It
+then produced **zero rows on all 40 available days**. Three separate
+defects sat underneath, each of which alone was enough to zero the
+output:
+
+1. **Expiry blend** (`history.day_chain_frames`). The frame's expiry was
+   `next(m["expiry"] for m in insts.values())` — whichever the dict
+   yielded first, out of all four on record. For NIFTY that is
+   2026-07-21 for EVERY day, including days after it expired.
+   Worse, `insts` spans all expiries and `f["rows"]` is keyed by STRIKE
+   ALONE: **231 of 244 NIFTY strikes exist in more than one expiry**, so
+   every reconstructed frame was a blend of up to four expiries with
+   premiums silently overwriting each other.
+2. **`analyzer.analyze()` measured days-to-expiry from `date.today()`.**
+   Right for a live chain, wrong for a reconstructed one — a frame
+   rebuilt for 2026-07-23 against a 2026-07-28 expiry measured -16 days
+   instead of +6, so the Black-Scholes fallback could never solve and
+   `iv` stayed 0 on every historical frame.
+3. **Expiry-day readings are degenerate.** With days_to_expiry = 1 the
+   ATM solve returns 1.2 / 0.4 (NIFTY 07-28, 08-04) and 0.5 (FINNIFTY
+   07-28) against a ~10% norm. Caching those is WORSE than the empty
+   table: an absent series degrades gracefully through the existing
+   fallback, whereas a 0.4 in the series silently drags every percentile
+   that gates a trade.
+
+Fixes, all opt-in so nothing else moves:
+- `day_chain_frames(symbol, day, expiry=None)` — passing an expiry
+  filters the instrument set to it. **Default unchanged**, because
+  backtester.py has three call sites whose replay results feed the
+  promotion gate; changing those silently would move live-enablement.
+- `analyze(..., as_of=None)` — defaults to today, so every live caller
+  is byte-identical. Replay callers pass the frame's date.
+- The backfill skips today (a mid-session `frames[-1]` cached as EOD
+  would be permanent and silent, since the result is upserted and later
+  runs skip days already present) and skips days_to_expiry <= 1.
+
+Result: 36 of 40 days now produce a value (4 skipped as expiry days),
+NIFTY ~8.9-11.6%, BANKNIFTY ~11.0-14.4%, FINNIFTY ~10.7-15.5%.
+
+Known limitations, NOT fixed here:
+- **The series is not constant-maturity.** FINNIFTY's front expiry jumps
+  from 2026-07-28 (dte 2) straight to 2026-08-25 (dte 28) as the weekly
+  set rolls to monthly, so its readings compare a 5-day IV against a
+  28-day IV. That is term structure, not volatility, and it makes the
+  series unsafe for percentile ranking across the roll. Fixing it means
+  choosing an interpolation convention (VIX-style constant 30-day is the
+  standard answer) — a methodology decision, deliberately not taken
+  unilaterally.
+- **NIFTY 2026-08-03 reads 25.9 at dte=2** where other dte=2 days read
+  8.9 and 9.8. Left in. It is filtered by no structural rule, and
+  dropping it because the number looks wrong would be fitting the data.
+- **SENSEX has 0 days of option-candle coverage**, so it produces no IV
+  series at all. Separate data-collection gap.
+- `backtester.py`'s three `day_chain_frames` call sites still get the
+  blended-expiry reconstruction described in (1). Their replay results
+  feed `is_live_enabled()`. **Listed in PENDING WORK — needs approval
+  before changing, because it moves backtest numbers.**
+
 ## v59.52 — costs split: fees are what the broker debits (2026-08-06)
 
 Asked why a NIFTY round trip showed Rs 133 when `fee_per_lot` is 30.

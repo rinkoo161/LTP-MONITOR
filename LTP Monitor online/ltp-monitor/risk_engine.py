@@ -263,16 +263,50 @@ def backfill_iv_history(symbol, days_back=90):
     is honest about that via its own return value (`days_processed`),
     not silently assuming a fixed window.
 
+    TODAY IS ALWAYS EXCLUDED. `chain_days()` reads distinct dates out of
+    `candles`, which is written live, so on any trading day it returns
+    today alongside the completed ones. Taking `frames[-1]` of a session
+    still in progress would cache a mid-morning reading as that day's
+    EOD IV — and because the result is upserted and every later run
+    skips a day it already has, that wrong value would be PERMANENT and
+    silent. The guard lives here rather than at the call site so the
+    function is correct for any caller (2026-08-08).
+
     Returns {"days_processed": n, "days_skipped_cached": n,
-    "days_skipped_no_data": n}."""
+    "days_skipped_no_data": n, "days_skipped_incomplete": n,
+    "days_skipped_expiry_day": n}."""
     import history
     import analyzer as _an
     from datetime import datetime, timedelta
-    processed = skipped_cached = skipped_no_data = 0
+    processed = skipped_cached = skipped_no_data = skipped_incomplete = 0
+    skipped_expiry_day = 0
     cutoff = (datetime.now() - timedelta(days=days_back)).strftime("%Y-%m-%d")
+    today = datetime.now().strftime("%Y-%m-%d")
     for day in history.chain_days(symbol):
         if day < cutoff:
             continue
+        if day >= today:
+            skipped_incomplete += 1
+            continue
+        # Expiry day is unusable and must not be cached (2026-08-08).
+        # Measured: with days_to_expiry = 1 the ATM Black-Scholes solve
+        # returns 1.2 / 0.4 (NIFTY 07-28, 08-04) and 0.5 (FINNIFTY
+        # 07-28) against a ~10% norm — a near-zero-time option gives a
+        # degenerate root, not a low volatility. Caching those would be
+        # WORSE than the empty table this wiring set out to fix: an
+        # absent series degrades gracefully via the existing fallback,
+        # whereas a 0.4 sitting in the series silently drags every
+        # percentile that gates a trade.
+        _exp = history.front_expiry_on(symbol, day)
+        if _exp:
+            try:
+                _y, _m, _d = (int(x) for x in _exp.split("-"))
+                _dy, _dm, _dd = (int(x) for x in day.split("-"))
+                if (datetime(_y, _m, _d) - datetime(_dy, _dm, _dd)).days + 1 <= 1:
+                    skipped_expiry_day += 1
+                    continue
+            except (ValueError, TypeError):
+                pass
         c = history._conn()
         row = c.execute("SELECT atm_iv FROM daily_atm_iv WHERE symbol=? AND date=?",
                         (symbol, day)).fetchone()
@@ -280,13 +314,21 @@ def backfill_iv_history(symbol, days_back=90):
         if row is not None:
             skipped_cached += 1
             continue
-        frames = history.day_chain_frames(symbol, day)
+        # 2026-08-08 — must pass the expiry that was FRONT on `day`.
+        # Without it the reconstruction blends every expiry on record
+        # and stamps the frame with a long-past one, so days_to_expiry
+        # is negative, the Black-Scholes fallback never solves, and IV
+        # comes back 0 for every day — which is exactly why this table
+        # was still empty after the function was wired to the EOD job.
+        frames = history.day_chain_frames(
+            symbol, day, expiry=history.front_expiry_on(symbol, day))
         if not frames:
             skipped_no_data += 1
             continue
         ts, chain = frames[-1]   # last frame of the day = EOD reading
         try:
-            analysis = _an.analyze(chain)
+            # as_of=day, not today — see the note in analyzer.analyze().
+            analysis = _an.analyze(chain, as_of=day)
         except Exception:
             skipped_no_data += 1
             continue
@@ -306,7 +348,9 @@ def backfill_iv_history(symbol, days_back=90):
         history.upsert_daily_atm_iv(symbol, day, atm_iv)
         processed += 1
     return {"days_processed": processed, "days_skipped_cached": skipped_cached,
-           "days_skipped_no_data": skipped_no_data}
+           "days_skipped_no_data": skipped_no_data,
+           "days_skipped_incomplete": skipped_incomplete,
+           "days_skipped_expiry_day": skipped_expiry_day}
 
 
 def iv_percentile(current_iv, iv_history, source_label=None):

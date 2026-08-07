@@ -6542,6 +6542,42 @@ class LearningAgent(Agent):
                 # nobody finds out about until disk fills up.
                 self.bus.log(self.name, f"\u26a0 chain_snapshots prune "
                              f"FAILED: {type(e).__name__}: {e}")
+        # Long-window ATM IV series (2026-08-08). risk_engine.
+        # backfill_iv_history() was written, correct, and called by
+        # NOTHING \u2014 the same failure prune_chain_snapshots() had above,
+        # found the same way. `daily_atm_iv` was empty on every symbol,
+        # so agents.py's own IV-percentile tier (which READS that table
+        # via history.get_daily_atm_iv_history) has silently had no
+        # long-window source since it was built, and the strategy-reset
+        # memo could not evaluate the volatility risk premium at all.
+        #
+        # Its OWN bus key, not chain_prune_done: the prune block above
+        # sets its key mid-try, so sharing it would let a prune failure
+        # skip the backfill forever \u2014 and these two have nothing to do
+        # with each other beyond running once a day.
+        #
+        # Cheap in steady state: the function skips any day already in
+        # daily_atm_iv, so a normal run reconstructs ONE new day per
+        # symbol. Only the first run after this ships does real work.
+        if self.bus.get("iv_backfill_done") != today:
+            try:
+                import risk_engine as _re
+                # bus "symbols", the same list every other agent walks —
+                # config.py's own comment calls it the list that "drives
+                # strategy, risk and ...". There is no module-level
+                # SYMBOLS constant to fall back to.
+                for _sym in self.bus.get("symbols", []):
+                    _r = _re.backfill_iv_history(_sym)
+                    if _r.get("days_processed"):
+                        self.bus.log(self.name,
+                                     f"ATM IV backfill {_sym}: {_r}")
+                self.bus.set("iv_backfill_done", today)
+            except Exception as e:
+                # Same convention as the prune above. An IV series that
+                # silently stops growing is exactly how this table came
+                # to be empty in the first place.
+                self.bus.log(self.name, f"\u26a0 ATM IV backfill FAILED: "
+                             f"{type(e).__name__}: {e}")
         done = self.bus.get("journal_done")
         all_trades = self.bus.get("closed_trades", [])
         # Bug found 2026-07-26: `closed_trades` is loaded at startup

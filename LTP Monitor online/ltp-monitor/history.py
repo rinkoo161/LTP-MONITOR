@@ -1308,9 +1308,33 @@ def chain_days(symbol):
     return [r[0] for r in rows]
 
 
-def day_chain_frames(symbol, day):
+def option_expiries(symbol):
+    """Sorted distinct option expiries on record for symbol."""
+    c = _conn()
+    rows = c.execute(
+        "SELECT DISTINCT expiry FROM instruments WHERE symbol=? AND kind='opt' "
+        "AND expiry IS NOT NULL AND expiry!='' ORDER BY 1", (symbol,)).fetchall()
+    c.close()
+    return [r[0] for r in rows]
+
+
+def front_expiry_on(symbol, day):
+    """The expiry that was nearest-dated ON `day` — i.e. the one a live
+    chain fetch would have returned that session. Falls back to the
+    latest on record if every expiry predates `day`."""
+    exps = option_expiries(symbol)
+    if not exps:
+        return None
+    return next((e for e in exps if e >= day), exps[-1])
+
+
+def day_chain_frames(symbol, day, expiry=None):
     """Minute-by-minute chain reconstruction for one day.
     Returns sorted list of (ts, chain_dict) usable by analyzer.analyze.
+
+    `expiry` restricts the reconstruction to ONE expiry (see the note at
+    the filter below). Default None keeps the pre-2026-08-08 behaviour
+    so existing backtester call sites are untouched.
 
     2026-07-26 — real gap found and fixed while wiring up
     risk_engine.backfill_iv_history(): this function's own reconstructed
@@ -1341,8 +1365,33 @@ def day_chain_frames(symbol, day):
                 "SELECT ts,c FROM candles WHERE security_id=? AND ts>=? AND ts<?",
                 (idx[0], t0, t1)):
             frames.setdefault(ts, {"spot": close, "rows": {}})
+    # 2026-08-08 — `expiry` is OPT-IN and defaults to the legacy
+    # behaviour on purpose.
+    #
+    # The legacy path (expiry=None) labels the frame with whichever
+    # expiry `insts` happens to yield first — for NIFTY that is
+    # 2026-07-21 for EVERY day, including days after it expired, so
+    # days_to_expiry goes negative and analyzer's Black-Scholes
+    # fallback cannot solve: iv comes back 0 on every reconstructed
+    # frame. That is why `daily_atm_iv` was empty even once
+    # backfill_iv_history() was finally wired up.
+    #
+    # It is also wrong in a second, quieter way: `insts` spans ALL
+    # expiries and `f["rows"]` is keyed by STRIKE ALONE, so the 231 of
+    # 244 NIFTY strikes that exist in more than one expiry overwrite
+    # each other — every legacy frame is a blend of up to 4 expiries.
+    #
+    # Passing an expiry filters the instrument set to it and labels the
+    # frame with it, which is what a real option chain is. The default
+    # is unchanged because backtester.py has three call sites whose
+    # replay results feed the promotion gate; changing those silently
+    # would move live-enablement decisions. See ROADMAP PENDING WORK.
+    if expiry:
+        insts = {sid: m for sid, m in insts.items()
+                 if m.get("expiry") == expiry}
     q = ",".join("?" * len(insts)) if insts else "''"
-    day_expiry = next((m["expiry"] for m in insts.values() if m.get("expiry")), "")
+    day_expiry = expiry or next(
+        (m["expiry"] for m in insts.values() if m.get("expiry")), "")
     for sid, ts, close, v, oi in c.execute(
             f"SELECT security_id,ts,c,v,oi FROM candles WHERE security_id IN ({q}) "
             "AND ts>=? AND ts<?", (*insts, t0, t1)):
