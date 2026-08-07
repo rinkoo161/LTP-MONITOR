@@ -4,6 +4,87 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.55 — the tuner could only tighten; two pairs had ratcheted into silence (2026-08-08)
+
+`strategies.evaluate()` took **no params argument at all**. It re-read
+the PERSISTED version off disk on every call:
+
+    from backtester import get_params
+    _p = get_params(name, analysis.get("symbol"))
+    wall_gap_frac = _p.get("wall_gap_frac", 2.0)
+
+So `backtester._eval_with_params()` — whose docstring promises it
+"inject[s] tunable params into the real evaluator" — could not. It only
+re-applied the same two filters AFTERWARDS, i.e. tighten further. A
+candidate that RELAXED `wall_gap_frac` was still gated here on the
+incumbent's tighter value, so **relaxation could never show more trades
+than the incumbent**. The search ratchets one way and cannot come back.
+
+Measured, NIFTY bear_call_spread, same frames and days:
+
+    persisted 4.0/0.40  ->  0 of 60 eligible
+    passed    1.5/0.25  ->  5 of 60 eligible
+
+The persisted history proves the ratchet actually ran. **Every version
+reason, in all 23 versions across the two affected pairs, reads
+"tightening". Not one relaxation:**
+
+    bear_call_spread/NIFTY      v1 (0.8/0.15) -> v10 (4.0/0.40), tuning_exhausted=True
+    bull_put_spread/BANKNIFTY   v1 (0.8/0.15) -> v13 (4.0/0.40)
+
+Both ended at the restrictive corner of `SPREAD_BOUNDS` producing ~0
+trades — which the promotion gate reads as "no edge" when it actually
+means "never evaluated".
+
+### Fixes
+
+1. `evaluate(name, analysis, regime, candles=None, params=None)`. When
+   `params` is supplied it is USED; `params=None` keeps the disk read,
+   so the live agent (`agents.py:5122`) and both `app.py` endpoints are
+   byte-identical. `_eval_with_params` now passes `params=p`, which is
+   what makes its own docstring true.
+2. Both pinned pairs reset to `DEFAULT_PARAMS` (2.0/0.28), **not** to
+   the permissive bound — picking the bounds minimum would be choosing
+   the value that generates the most trades, the same mistake pointing
+   the other way. Applied by `scratch/reset_pinned_params.py`, which
+   APPENDS a new version rather than mutating the active one so the
+   ratchet stays visible, and backs up to
+   `~/.ltp-monitor/strategy_versions.pre-unpin.json`.
+   Both pairs had `live_enabled=False`, so **no live trading changed.**
+
+### What unpinning revealed — read this before celebrating
+
+    pair                        n before   n after |  pnl before    pnl after
+    NIFTY bear_call_spread             0        20 |          +0       -2,878
+    BANKNIFTY bull_put_spread          2       119 |        -354      -25,972
+
+**Unpinning did not uncover hidden profit. It uncovered hidden losses.**
+These strategies lose money when they are allowed to trade, and the
+tuner's relentless tightening was a crude but directionally-sensible
+response to that — it simply had no way to express "this loses money"
+other than tightening until nothing qualified.
+
+The value of the fix is therefore about MEASUREMENT, not P&L: a
+promotion gate reading "0 trades" cannot distinguish "no edge" from
+"never evaluated", whereas -Rs 25,972 over 119 trades is evidence it can
+act on. Both pairs now fail gate (2) of the v59.54 promotion criteria on
+real numbers instead of passing unexamined as no-data.
+
+### Still open
+
+- The tuner can now measure relaxation, but nothing yet stops it walking
+  back to the corner. Whether the search should be allowed to reach a
+  configuration that produces zero trades at all is a separate design
+  question — a zero-trade configuration is not a strategy.
+- `replay_momentum` remains dead for an unrelated reason: `confidence`
+  maxes at 60 against a threshold of 70 because the replay passes
+  neither `momentum` nor `indicators` to `analyze()`, and both feed the
+  vote count behind `confidence = min(95, 40 + abs(net) * 10)`.
+  `compute_momentum()` is a pure function the replay could call with the
+  `(ts, spot)` it already holds; `_indicators()` calls
+  `dhan_client.intraday()`, a LIVE broker call, so replaying it needs
+  the MACD/Stochastic maths split out of the fetch. Not attempted here.
+
 ## v59.54 — backtester call sites fixed, and a CORRECTION to v59.53 (2026-08-08)
 
 All three `history.day_chain_frames()` call sites in `backtester.py`

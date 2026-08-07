@@ -683,8 +683,14 @@ def _eval_with_params(name, analysis, p, regime=None, candles=None):
     The permissive default remains ONLY for callers that genuinely have
     no timestamp context; it is no longer what the replays use.
     """
+    # params=p (2026-08-08) — this is what makes the docstring above
+    # true. Without it evaluate() re-read the persisted version and
+    # gated on THAT, so `p` could only ever tighten the result further;
+    # a relaxing candidate was unmeasurable. The re-checks below are now
+    # a strict no-op when evaluate() got the same `p`, and are kept as a
+    # backstop for the default-params path.
     ev = slib.evaluate(name, analysis, regime or {"regime": "rangebound"},
-                       candles=candles)
+                       candles=candles, params=p)
     if not ev or not ev.get("eligible"):
         return ev
     strikes = sorted(s["strike"] for s in analysis["strikes"])

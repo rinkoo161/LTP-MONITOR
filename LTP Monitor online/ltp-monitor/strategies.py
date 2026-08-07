@@ -106,7 +106,7 @@ def _wall(analysis, side):
     return lines[0]["level"] if lines else None
 
 
-def evaluate(name, analysis, regime, candles=None):
+def evaluate(name, analysis, regime, candles=None, params=None):
     """Return an entry-ready spread or None, with human-readable reasons.
 
     `candles` (2026-07-27, item 9) — optional 5-minute index candles
@@ -134,11 +134,32 @@ def evaluate(name, analysis, regime, candles=None):
     if len(strikes) < 4 or not spot:
         return {"eligible": False, "reasons": ["not enough chain data"]}
     gap = strikes[1] - strikes[0]
-    try:
-        from backtester import get_params
-        _p = get_params(name, analysis.get("symbol"))
-    except Exception:
-        _p = {}
+    # `params` (2026-08-08) — when a caller supplies parameters, USE
+    # THEM. Until now this function ignored everything the caller had
+    # and re-read the PERSISTED version off disk, which quietly broke
+    # the auto-tuner: backtester._eval_with_params() advertises that it
+    # "inject[s] tunable params into the real evaluator", but it could
+    # only re-apply the same two filters AFTERWARDS. A candidate that
+    # RELAXED wall_gap_frac was still gated here on the incumbent's
+    # tighter value, so relaxation could never show more trades than
+    # the incumbent — the search could ratchet tighter and never come
+    # back. Measured on NIFTY bear_call_spread, same frames/days:
+    # persisted 4.0/0.40 -> 0 of 60 eligible; 1.5/0.25 -> 5 of 60.
+    #
+    # Two (symbol, strategy) pairs had already reached the restrictive
+    # corner of SPREAD_BOUNDS and were producing ~0 trades, which the
+    # promotion gate reads as "no edge" when it means "never evaluated".
+    #
+    # params=None keeps the disk read, so the live agent (agents.py
+    # :5122) and both app.py endpoints are byte-identical.
+    if params is None:
+        try:
+            from backtester import get_params
+            _p = get_params(name, analysis.get("symbol"))
+        except Exception:
+            _p = {}
+    else:
+        _p = params
     wall_gap_frac = _p.get("wall_gap_frac", 2.0)
     credit_min_frac = _p.get("credit_min_frac", 0.28)
 
