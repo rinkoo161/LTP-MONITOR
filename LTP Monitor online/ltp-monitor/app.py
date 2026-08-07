@@ -25,7 +25,7 @@ from agents import Orchestrator, compute_momentum
 import agents
 
 BASE = os.path.dirname(os.path.abspath(__file__))
-APP_VERSION = "v59.55"   # maintained per explicit request; last delivered was v49
+APP_VERSION = "v59.56"   # maintained per explicit request; last delivered was v49
 
 app = FastAPI(title="LTP Option Chain Monitor")
 
@@ -5000,4 +5000,29 @@ if __name__ == "__main__":
     if host != "127.0.0.1":
         print("  ⚠ serving on the network — anyone who can reach this port "
               "can trade with your keys; firewall it to trusted IPs only")
-    uvicorn.run(app, host=host, port=port)
+    # timeout_graceful_shutdown (2026-08-08). uvicorn's default is None,
+    # meaning it waits FOREVER for in-flight connections to finish after
+    # SIGTERM. On 2026-08-08 a restart hung past 20s and had to be
+    # SIGKILLed, which is the dangerous outcome: a forced kill lands
+    # mid-write to open_state.json / history.db, and open_state.json is
+    # what re-seeds live positions on the next boot.
+    #
+    # BE PRECISE ABOUT WHAT THIS DOES AND DOES NOT FIX. The root cause
+    # was NOT identified. Measured on an isolated instance:
+    #
+    #   SIGTERM, no client                     -> exits in 0.6s
+    #   SIGTERM, websocket held open           -> exits in 0.5s
+    #   SIGTERM, websocket dropped ABRUPTLY    -> exits in 0.6s
+    #
+    # so the chart websocket — the obvious suspect, and the subject of
+    # the orphaned-push-loop bug at _ws_alive() above — is NOT the
+    # cause. Both hypotheses were falsified. The leading remaining
+    # explanation is an HTTP request blocked on a locked SQLite file:
+    # `database is locked` appears in activity.log at 00:17:58 that
+    # morning, while concurrent replays held write locks. That was not
+    # reproduced either.
+    #
+    # This therefore BOUNDS the symptom rather than removing a known
+    # cause: whatever is in flight, the process now exits on its own
+    # within 10s and the restart script never needs to escalate.
+    uvicorn.run(app, host=host, port=port, timeout_graceful_shutdown=10)

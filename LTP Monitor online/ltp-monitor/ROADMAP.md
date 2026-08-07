@@ -4,6 +4,54 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.56 — bound the graceful shutdown (root cause NOT found) (2026-08-08)
+
+A restart hung past 20s on SIGTERM and had to be SIGKILLed. That is the
+dangerous outcome, not the slow one: a forced kill lands mid-write to
+`open_state.json` / `history.db`, and `open_state.json` is what re-seeds
+live positions on the next boot.
+
+`uvicorn.run()` was called with no `timeout_graceful_shutdown`, whose
+default is None — **wait forever** for in-flight connections. Proven
+side by side on a minimal Starlette app with one never-returning
+request:
+
+    uvicorn DEFAULT (no timeout)   ->  STILL ALIVE after 23s   (unbounded)
+    timeout_graceful_shutdown=10   ->  exited in 10s
+
+Fixed by passing `timeout_graceful_shutdown=10`.
+
+### The root cause was NOT identified, and the obvious suspect was ruled out
+
+Measured against a real isolated instance of this app:
+
+    SIGTERM, no client                   ->  exits in 0.6s
+    SIGTERM, websocket held open         ->  exits in 0.5s
+    SIGTERM, websocket dropped ABRUPTLY  ->  exits in 0.6s
+
+So the chart websocket does **not** block shutdown — including the
+abrupt-drop case, which is the orphaned-push-loop failure mode
+documented at `app._ws_alive()` and the reason `test_ws_leak.py` exists.
+Both websocket hypotheses were falsified.
+
+The leading remaining explanation is an HTTP request blocked on a locked
+SQLite file: `database is locked` appears in `activity.log` at 00:17:58
+that morning, while concurrent replay processes held write locks on the
+same database. That was **not reproduced either**, so it stays a
+hypothesis.
+
+This change therefore **bounds the symptom rather than removing a known
+cause**. That is worth having on its own — the process now exits by
+itself within 10s whatever is in flight, and `scratch/restart_app.sh`
+never needs to escalate to SIGKILL — but it is not a diagnosis, and if
+restarts start taking a full 10s that is the signal the underlying
+holder is still there and worth chasing properly.
+
+10s is deliberately shorter than the 20s the restart script waits before
+escalating; a longer timeout would still end in the SIGKILL this exists
+to prevent. `test_graceful_shutdown.py` asserts both, and is
+mutation-checked: removing the kwarg makes it FAIL.
+
 ## v59.55 — the tuner could only tighten; two pairs had ratcheted into silence (2026-08-08)
 
 `strategies.evaluate()` took **no params argument at all**. It re-read
