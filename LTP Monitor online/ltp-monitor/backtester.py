@@ -320,13 +320,21 @@ def replay_spreads(symbol, name, params=None, days=None, log=lambda m: None):
     cooldown = cfg.get("spread_reentry_cooldown_min", 15) * 60
     stop_n = cfg.get("spread_stop_after_consecutive_losses", 2)
     for day in (days or _completed_days(history.chain_days(symbol))):
-        frames = history.day_chain_frames(symbol, day)
+        # expiry= and as_of= (2026-08-08) — without them this replay ran
+        # on a chain blended across every expiry on record (231 of 244
+        # NIFTY strikes exist in more than one, and frames are keyed by
+        # strike alone, so premiums overwrote each other) and analyze()
+        # measured days_to_expiry from TODAY rather than from `day`,
+        # which zeroed IV and greeks on every historical frame. See
+        # v59.53 in ROADMAP.md.
+        frames = history.day_chain_frames(
+            symbol, day, expiry=history.front_expiry_on(symbol, day))
         if len(frames) < 30:
             continue
         open_list, last_eval = [], 0
         cd_until, consec = 0, 0
         for ts, chain in frames:
-            analysis = _an.analyze(chain)
+            analysis = _an.analyze(chain, as_of=day)
             for open_sp in list(open_list):
                 pnl_ps = 0
                 ok = True
@@ -557,7 +565,10 @@ def replay_portfolio(symbols=None, names=None, days=None, log=lambda m: None):
     for day in all_days:
         frames = {}
         for sym in symbols:
-            for ts, chain in history.day_chain_frames(sym, day):
+            # see the note in replay_spreads() — one expiry per day, and
+            # analyze() below counts from `day`, not from today.
+            for ts, chain in history.day_chain_frames(
+                    sym, day, expiry=history.front_expiry_on(sym, day)):
                 frames.setdefault(ts, {})[sym] = chain
         stamps = sorted(frames)
         if len(stamps) < 30:
@@ -608,7 +619,7 @@ def replay_portfolio(symbols=None, names=None, days=None, log=lambda m: None):
                 chain = here.get(sym)
                 if not chain:
                     continue
-                analysis = _an.analyze(chain)
+                analysis = _an.analyze(chain, as_of=day)
                 for name in names:
                     if len(open_list) >= max_open:
                         skipped["max_concurrent"] += 1
@@ -695,12 +706,14 @@ def replay_momentum(symbol, params=None, days=None, log=lambda m: None):
     fee = cfg.get("fee_per_lot", 40) * 2
     trades = []
     for day in (days or _completed_days(history.chain_days(symbol))):
-        frames = history.day_chain_frames(symbol, day)
+        # see the note in replay_spreads() — same two defects.
+        frames = history.day_chain_frames(
+            symbol, day, expiry=history.front_expiry_on(symbol, day))
         if len(frames) < 30:
             continue
         pos, day_count = None, 0
         for ts, chain in frames:
-            analysis = _an.analyze(chain)
+            analysis = _an.analyze(chain, as_of=day)
             if pos:
                 row = next((r for r in chain["rows"]
                             if r["strike"] == pos["strike"]), None)

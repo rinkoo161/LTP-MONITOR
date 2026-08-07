@@ -4,6 +4,71 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.54 — backtester call sites fixed, and a CORRECTION to v59.53 (2026-08-08)
+
+All three `history.day_chain_frames()` call sites in `backtester.py`
+(`replay_spreads` 330, `replay_portfolio` 570, `replay_momentum` 710)
+now pass the day's front expiry, and all three `_an.analyze()` calls
+(337, 622, 716) now pass `as_of=day`.
+
+**Measured impact: ZERO. Identical to the rupee across 468 trades.**
+
+    replay                                n     pnl before    pnl after   delta
+    spreads:BANKNIFTY:bear_call_spread  169        -26,612      -26,612      +0
+    spreads:FINNIFTY:bull_put_spread    113         +2,960       +2,960      +0
+    spreads:FINNIFTY:bear_call_spread   125         -3,230       -3,230      +0
+    spreads:NIFTY:bull_put_spread        59         -7,044       -7,044      +0
+    spreads:NIFTY:bear_call_spread        0              0            0      +0
+    momentum (x3 symbols)                 0              0            0      +0
+    portfolio                            86         -3,301       -3,301      +0
+
+An identical result across 468 trades looked like the new code path was
+not being exercised, so it was verified rather than assumed: the loaded
+source does contain `front_expiry_on` and `as_of=day`. The zero is real,
+and the reason forces a correction to v59.53.
+
+### CORRECTION to the v59.53 entry above
+
+v59.53 said "every reconstructed frame was a blend of up to four
+expiries, premiums overwriting each other." **That is wrong.** The
+231-of-244 strike overlap is real in the `instruments` TABLE, but on any
+given day only ONE expiry has archived candles:
+
+    expiries with archived candles, NIFTY 2026-08-06:  2026-08-11 only (167 instruments)
+
+so `f["rows"]` — keyed by strike alone — never actually collided. Legacy
+and filtered reconstructions return the SAME 113 rows with IDENTICAL
+premiums; the only thing that changed is the expiry LABEL
+('2026-07-21' -> '2026-08-11').
+
+The label was the whole defect, and it mattered for exactly one reason:
+it fed a negative `days_to_expiry`, which zeroed IV. Nothing was ever
+blended. The v59.53 fix is still correct and still necessary — the IV
+series it unblocked is real — but the premium-corruption claim was an
+overstatement and is withdrawn.
+
+### Why the backtester was immune
+
+`strategies.py` reads **no IV and no greeks at all** — zero word-bounded
+matches for `iv`, `delta`, `theta`, `vega`, `gamma`, `days_to_expiry`.
+The credit-spread logic runs on OI walls and premiums only. Since the
+premiums were never wrong, and IV was never read, the replays could not
+move.
+
+So this change is a **correctness fix with no behavioural impact today**.
+It is worth keeping because it stops being inert the moment either
+condition changes: more expiries get archived per day, or a strategy
+starts consuming IV/greeks. It does NOT change any promotion decision
+now, and no `is_live_enabled()` state moves as a result.
+
+### Separate pre-existing finding, NOT addressed here
+
+`replay_momentum` produces **0 trades on all three symbols**, before and
+after. So does `spreads:NIFTY:bear_call_spread`. Both were already zero
+under the old code, so neither is caused or fixed by this change. A
+replay that silently produces nothing is indistinguishable from a
+strategy with no signals — worth a look, but it is its own investigation.
+
 ## v59.53 — wire the ATM IV backfill, and the three defects that made it produce nothing (2026-08-08)
 
 `risk_engine.backfill_iv_history()` had been written, was correct in its
