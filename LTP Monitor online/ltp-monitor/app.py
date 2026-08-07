@@ -6,6 +6,7 @@ Credentials are managed in the dashboard's Settings panel (gear icon).
 
 import os
 import store
+import threading
 import time
 import traceback
 
@@ -25,7 +26,7 @@ from agents import Orchestrator, compute_momentum
 import agents
 
 BASE = os.path.dirname(os.path.abspath(__file__))
-APP_VERSION = "v59.56"   # maintained per explicit request; last delivered was v49
+APP_VERSION = "v59.57"   # maintained per explicit request; last delivered was v49
 
 app = FastAPI(title="LTP Option Chain Monitor")
 
@@ -374,6 +375,32 @@ def get_chain(symbol: str) -> dict:
 
 pilot = Orchestrator(get_chain, orders_factory)
 pilot.ctx["dhan_client"] = dhan_client
+
+
+# Set on SIGTERM so the chart websocket's push loop can stop pushing and
+# return (2026-08-08). uvicorn's graceful shutdown waits for every open
+# connection, and a websocket never ends on its own — so a single open
+# chart tab held the whole process hostage. Measured against an isolated
+# instance, timing the PROCESS (not the port — a hung uvicorn releases
+# its listening socket while still running, which is how an earlier
+# attempt at this measurement produced a false negative and briefly
+# convinced me the websocket was innocent):
+#
+#     SIGTERM, no client            -> exits in 0s
+#     SIGTERM, websocket held open  -> 10s, i.e. it sat there until
+#                                      timeout_graceful_shutdown fired
+#
+# timeout_graceful_shutdown (see __main__) bounds this, but a bound is
+# not a fix: without the flag below, EVERY restart with a dashboard open
+# pays the full timeout. The loop already polls once per second and
+# already knows how to break, so it just needs to be told.
+# NOTE it is set from uvicorn's signal handler (see __main__), NOT from
+# @app.on_event("shutdown"). That was the first attempt and it does not
+# work: the lifespan shutdown event fires AFTER uvicorn has finished
+# draining open connections, i.e. after the wait this is meant to end.
+# Measured with the on_event version in place — websocket case still
+# took 11s, identical to no fix at all.
+SHUTTING_DOWN = threading.Event()
 
 
 # ------------------------------------------------------------ data & AI
@@ -3996,6 +4023,15 @@ async def ws_candles(websocket: WebSocket, symbol: str, interval: str = "1"):
             # never do.
             if not ws_alive(websocket):
                 break
+            # Stop pushing when the process is going down (2026-08-08).
+            # uvicorn's graceful shutdown waits for open connections and
+            # a websocket never ends by itself, so one open chart tab
+            # held the whole restart until timeout_graceful_shutdown
+            # fired. Breaking here lets the handler return and the
+            # connection close normally, which is what makes shutdown
+            # fast again rather than merely bounded.
+            if SHUTTING_DOWN.is_set():
+                break
             # Live tick-by-tick streaming only makes sense for the 1m
             # view — live_candle:{symbol} is always built from 1m
             # ticks (MarketDataAgent._build_candle), so pushing it into
@@ -5025,4 +5061,15 @@ if __name__ == "__main__":
     # This therefore BOUNDS the symptom rather than removing a known
     # cause: whatever is in flight, the process now exits on its own
     # within 10s and the restart script never needs to escalate.
-    uvicorn.run(app, host=host, port=port, timeout_graceful_shutdown=10)
+    # handle_exit fires the moment SIGTERM/SIGINT arrives, BEFORE uvicorn
+    # starts draining connections — which is the only point early enough
+    # to matter. Setting SHUTTING_DOWN from @app.on_event("shutdown")
+    # was tried first and does nothing: lifespan shutdown runs after the
+    # drain it is supposed to cut short (measured: 11s either way).
+    class _Server(uvicorn.Server):
+        def handle_exit(self, sig, frame):
+            SHUTTING_DOWN.set()
+            return super().handle_exit(sig, frame)
+
+    _Server(uvicorn.Config(app, host=host, port=port,
+                           timeout_graceful_shutdown=10)).run()

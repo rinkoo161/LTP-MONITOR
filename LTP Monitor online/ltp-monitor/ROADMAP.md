@@ -4,6 +4,62 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.57 — the websocket WAS the cause; v59.56's diagnosis was wrong (2026-08-08)
+
+**This entry corrects the one below it.** v59.56 states "root cause NOT
+identified" and "the chart websocket ... is NOT the cause". Both are
+wrong, and they are wrong because the measurement was wrong.
+
+### The false negative
+
+v59.56's evidence came from timing `lsof -ti:PORT` — treating an empty
+result as "the process exited". **A hung uvicorn releases its listening
+socket while still running.** The port goes free almost immediately; the
+process can sit there indefinitely. Every "exits in 0.5s" reading in
+v59.56 was measuring the socket, not the process.
+
+It surfaced by accident: a later restart reported `before: 5473 5620`,
+where 5620 was a test instance from those very experiments — one I had
+recorded as "exited in 0.6s". It had been alive the whole time, holding
+no port, and needed SIGKILL.
+
+Re-measured with `kill -0` (process liveness), same app, same isolated
+instance:
+
+    SIGTERM, no client            ->  exits in 0s
+    SIGTERM, websocket held open  ->  10s   (i.e. it waited for the
+                                             timeout_graceful_shutdown
+                                             bound v59.56 added)
+
+So the websocket was the cause all along, and v59.56's bound was
+masking it rather than explaining it.
+
+### The fix, and the fix that did not work
+
+`uvicorn.Server.handle_exit` is overridden to set a `SHUTTING_DOWN`
+event, and the chart websocket's push loop breaks on it. The loop
+already polls once a second and already knows how to break.
+
+The FIRST attempt set the flag from `@app.on_event("shutdown")`. That
+does nothing — lifespan shutdown fires AFTER uvicorn drains open
+connections, i.e. after the wait it was meant to cut short. Measured 11s
+with it in place, identical to no fix. The signal has to be caught at
+the signal, not at the lifespan event.
+
+    before fix:  no client 0s   websocket open 10s
+    after fix:   no client 0s   websocket open  1s
+
+### What is kept from v59.56
+
+`timeout_graceful_shutdown=10` stays. The loop fix handles the
+websocket; the timeout still bounds anything ELSE that blocks, and an
+unbounded wait is wrong regardless of what caused this particular hang.
+It is now a backstop rather than the mechanism.
+
+`test_graceful_shutdown.py` asserts both halves and encodes both wrong
+turns as checks, so neither can be repeated silently. Mutation-checked:
+removing the loop break makes it FAIL.
+
 ## v59.56 — bound the graceful shutdown (root cause NOT found) (2026-08-08)
 
 A restart hung past 20s on SIGTERM and had to be SIGKILLed. That is the
