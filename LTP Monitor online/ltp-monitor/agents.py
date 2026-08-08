@@ -36,6 +36,7 @@ from collections import deque
 from datetime import datetime, timedelta, timezone
 
 import config
+import daily_marks
 from analyzer import analyze, ai_signal, ai_budget_status as _ai_budget
 
 try:
@@ -58,6 +59,14 @@ except Exception as _e:
     # global-macro data module has an issue.
     NewsMacroAgent = None
     print(f"[agents] news_macro_agent unavailable, NewsMacroAgent disabled: {_e}")
+
+try:
+    from marketsense_link import MarketSenseAgent
+except Exception as _e:
+    # Optional read-only bridge to the MarketSense platform (separate
+    # process, :8100). Same degrade-loudly pattern as NewsMacroAgent.
+    MarketSenseAgent = None
+    print(f"[agents] marketsense_link unavailable, MarketSenseAgent disabled: {_e}")
 
 IST = timezone(timedelta(hours=5, minutes=30))
 BASE = os.path.dirname(os.path.abspath(__file__))
@@ -6501,7 +6510,15 @@ class LearningAgent(Agent):
         # returns. LearningAgent already runs on a 300s cadence and is
         # the closest thing this codebase has to a daily-maintenance
         # agent, so this rides along rather than spinning up a new one.
-        if self.bus.get("chain_prune_done") != today:
+        # daily_marks, not the bus (2026-08-08). The Bus is in-memory,
+        # so this "once per day" gate was really once per RESTART:
+        # nine prune runs between 00:01 and 00:20 while v59.53..58
+        # were deployed, each scanning a 752k-row table, each
+        # holding the write lock past other writers' 30s
+        # busy_timeout ("futures OI archive FAILED ... database is
+        # locked"), and each thinning NOTHING. The bus key is still
+        # set so anything introspecting the blackboard sees it.
+        if not daily_marks.done("chain_prune_done", today):
             try:
                 import history
                 # v59.0 item 18 — this passed a 5-day retention and hard-
@@ -6515,6 +6532,7 @@ class LearningAgent(Agent):
                 # v58.32 - same daily maintenance slot; see
                 # history.prune_ta_calibration() for the sizing note.
                 history.prune_ta_calibration(config.load().get('ta_calibration_retention_days', 10))
+                daily_marks.mark("chain_prune_done", today)
                 self.bus.set("chain_prune_done", today)
                 self.bus.log(self.name, f"chain_snapshots retention: {res}")
                 # v59.0 item 32 — contract sizes drift silently. ~24 call
@@ -6559,7 +6577,10 @@ class LearningAgent(Agent):
         # Cheap in steady state: the function skips any day already in
         # daily_atm_iv, so a normal run reconstructs ONE new day per
         # symbol. Only the first run after this ships does real work.
-        if self.bus.get("iv_backfill_done") != today:
+        # Same persistence as the prune above — this key had the
+        # identical flaw, introduced in v59.53 by following the
+        # existing convention without questioning it.
+        if not daily_marks.done("iv_backfill_done", today):
             try:
                 import risk_engine as _re
                 # bus "symbols", the same list every other agent walks —
@@ -6571,6 +6592,7 @@ class LearningAgent(Agent):
                     if _r.get("days_processed"):
                         self.bus.log(self.name,
                                      f"ATM IV backfill {_sym}: {_r}")
+                daily_marks.mark("iv_backfill_done", today)
                 self.bus.set("iv_backfill_done", today)
             except Exception as e:
                 # Same convention as the prune above. An IV series that
@@ -8116,6 +8138,8 @@ AGENT_CLASSES = [MarketDataAgent, TechnicalAgent, RegimeAgent, NewsAgent,
                  MTFConfluenceAgent, TAElliottAgent]
 if NewsMacroAgent is not None:
     AGENT_CLASSES.append(NewsMacroAgent)
+if MarketSenseAgent is not None:
+    AGENT_CLASSES.append(MarketSenseAgent)
 
 
 class Orchestrator:

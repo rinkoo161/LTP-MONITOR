@@ -31,6 +31,15 @@ _lock = threading.Lock()
 DEFAULTS = {
     "dhan_client_id": "",
     "dhan_access_token": "",
+    # ---- MarketSense read-only bridge (2026-08-08) ----
+    # MarketSense is the separate NSE-filings intelligence platform (own
+    # process, :8100, own data sources). This link only POLLS its REST
+    # API for display: events/watchlist/risk flags/levels onto the bus.
+    # It never places orders and introduces no second broker — Dhan
+    # remains the only broker in this app (operator constraint).
+    "marketsense_enabled": True,
+    "marketsense_url": "http://127.0.0.1:8100",
+    "marketsense_poll_sec": 300,
     # ---- Session boundaries (NSE change effective 2026-08-03) ----
     # Index F&O now trades until 15:40 (was 15:30), while INTRADAY F&O
     # positions are auto-squared by the broker at 15:25. Those are two

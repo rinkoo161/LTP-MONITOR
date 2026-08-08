@@ -4,6 +4,24 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.59 — MarketSense read-only bridge (2026-08-08)
+
+New optional agent (`marketsense_link.MarketSenseAgent`, NewsMacroAgent
+degrade-loudly pattern) polling the separate MarketSense platform's REST
+API (:8100) every `marketsense_poll_sec` (300s). Bus keys: `ms_events`,
+`ms_watchlist` (conviction≥70 buys), `ms_event_flag:{SYM}`,
+`ms_risk_flag:{SYM}` (their A6 hard_block/penalty verdicts),
+`ms_levels:{SYM}`, `ms_link` (health). READ-ONLY by construction: no
+broker imports (enforced by test_marketsense_link.py), no order paths,
+MarketSense outage degrades to stale-flagged data. The operator's broker
+constraint stands: Dhan remains this app's only broker; MarketSense uses
+its own data sources in its own process. Config keys registered in
+DEFAULTS (`marketsense_enabled`/`_url`/`_poll_sec`). The agent surfaces
+in the Agent System panel automatically via info(); no dashboard.html
+changes in this release. WHY bus-only first: consumers can adopt the
+keys incrementally, and any future order-gating on `ms_risk_flag`
+belongs in RiskAgent server-side, not in this link.
+
 ## v59.58 — trial logging, so N stops being a guess (2026-08-08)
 
 Part 4 of the strategy-reset memo deflates a Sharpe ratio by N, the
