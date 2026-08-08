@@ -67,6 +67,34 @@ Verified from live data, not fixtures: MarketSense is up on :8100 and
 both endpoints the bridge calls return HTTP 200 (`/api/pulse` 9 entries,
 `/api/signals` 152).
 
+### CORRECTION, same day: the gate CANNOT FIRE against index symbols
+
+Checked before arming it. MarketSense returned 152 signals, **all
+`risk_verdict: clear`** — but more to the point, every one of them is a
+single cash equity (AARTIIND, ABCAPITAL, ADANIENSOL, APOLLOHOSP,
+PVRINOXLTD), and the pulse events likewise (PRITIKAUTO, DPSCLTD,
+EIHOTEL).
+
+**Overlap with what this system trades — NIFTY / BANKNIFTY / FINNIFTY /
+SENSEX — is ZERO**, and not by coincidence: the route list
+(`/api/company/{symbol}`, `/api/filings/{symbol}`, `/api/signals`) is a
+single-stock research API with no index-level endpoint.
+
+The gate keys on `job["symbol"]`, which is always one of the four
+indices, so `ms_risk_flag:NIFTY` can never be set and the check passes
+unconditionally. **The wiring is correct and its safety properties are
+real and tested, but it is structurally inert.** The symbol universe
+should have been checked before wiring, not after; the test fixture used
+`TATASTEEL` and that was the tell.
+
+Left enabled deliberately — it costs a dict lookup per order and is
+ready if MarketSense ever emits index-level verdicts. Recorded here so
+nobody later reads its green tick as a check that ran.
+
+The two bridge defects fixed on the way (sticky flags, unusable
+freshness) are genuine and worth keeping regardless: they would bite any
+future consumer of these keys.
+
 ## v59.60 — "once per day" was once per RESTART (2026-08-08)
 
 `LearningAgent`'s daily maintenance was gated on
