@@ -1045,9 +1045,19 @@ rather than the flattering one. The hurdle is **E[max SR] = 3.255**,
 scaled by the observed √V[SR] across the configurations we try in this
 round. A candidate must beat a deflated Sharpe with that null.
 
-**Mandatory change before any tuning resumes:** every evaluation must
-be appended to a trial log, so N is a measured quantity next time
-rather than a guess. Not applied — this session may not edit code.
+**Mandatory change before any tuning resumes: DONE (v59.58).**
+`trial_log.py` appends every evaluated configuration — accepted or not —
+to `~/.ltp-monitor/tuner_trials.jsonl`, recorded from
+`backtester._replay_for()`, which is now the single evaluation
+chokepoint. The reason N was lost is that it was NOT single: the daily
+tuner in `LearningAgent` called `replay_spreads()`/`replay_pa()`
+directly and was invisible to anything watching `_replay_for()`. Those
+two call sites now route through it.
+
+N = 1,000 remains the pre-committed floor for the CURRENT round, because
+the historical count is still gone and nothing recovers it. From the
+next round on, `trial_log.summary()` reports the measured N and the
+hurdle should be recomputed from it rather than assumed.
 
 ## 4.5 Benjamini–Hochberg
 

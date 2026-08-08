@@ -7133,8 +7133,12 @@ class BacktestAgent(Agent):
                                  f"{sym} {name}: {why} but already at filter "
                                  "bound")
                     continue
+                # via _replay_for, not replay_spreads directly, so this
+                # candidate lands in trial_log — the daily tuner is the
+                # path that made N unrecoverable (2026-08-08).
                 new_m = backtester.metrics(
-                    backtester.replay_spreads(sym, name, params=tuned))
+                    backtester._replay_for(name, sym, tuned,
+                                           source="daily_tune"))
                 new_trades = new_m.get("trades") or 0
                 new_pnl = new_m.get("net_pnl") or 0
                 new_profitable = new_trades >= min_conf and new_pnl > 0
@@ -7245,8 +7249,10 @@ class BacktestAgent(Agent):
                                  "bound — no further tuning possible")
                     backtester.save_versions(vers)
                     continue
+                # via _replay_for — see the note at the spread tuner above.
                 new_m = backtester.metrics(
-                    backtester.replay_pa(sym, name, params=tuned))
+                    backtester._replay_for(name, sym, tuned,
+                                           source="daily_tune"))
                 new_trades = new_m.get("trades") or 0
                 new_pnl = new_m.get("net_pnl") or 0
                 new_profitable = (new_trades >= min_trades_for_confidence

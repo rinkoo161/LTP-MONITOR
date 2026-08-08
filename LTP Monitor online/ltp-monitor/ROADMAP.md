@@ -4,6 +4,62 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.58 — trial logging, so N stops being a guess (2026-08-08)
+
+Part 4 of the strategy-reset memo deflates a Sharpe ratio by N, the
+number of configurations tried. N was **unrecoverable**: the tuner
+searches continuous bounds `(lo, hi, relax_dir)` with no grid, and only
+ACCEPTED results were ever persisted — 11 records on disk for a search
+over 37 free parameters. The protocol had to pre-commit a conservative
+floor of N=1000 (hurdle E[max SR] = 3.255) instead of a real count.
+
+`trial_log.py` appends every evaluated configuration — accepted or not —
+to `~/.ltp-monitor/tuner_trials.jsonl`. `summary()` reports n_trials,
+n_distinct_configs, and a breakdown by source and by strategy/symbol.
+
+### The fix is a CHOKEPOINT, not a log statement
+
+The reason N was lost is that there was more than one evaluation path:
+
+  * `sweep_params()` tracked its candidates in a `tried` list, in
+    memory, and threw them away when the call returned;
+  * `LearningAgent`'s daily tuner called `backtester.replay_spreads()`
+    and `replay_pa()` **directly**, so anything watching
+    `_replay_for()` would never have seen them.
+
+`backtester._replay_for()` is now the single place a parameter set is
+evaluated, and it records. The two daily-tuner call sites route through
+it. `test_trial_log.py` asserts no parameterised `replay_*` call remains
+in agents.py — so a future strategy family cannot join the search
+without being counted.
+
+### Two bugs caught by its own tests
+
+1. **Torn-line splicing.** A crash mid-append leaves a fragment with no
+   trailing newline; the next `record()` appended straight onto it,
+   producing one unparseable line and destroying BOTH rows — the one
+   the crash damaged and a perfectly good one after it. `record()` now
+   heals a missing final newline before appending.
+2. **A suite-order-dependent test.** The first version asserted
+   `count() == 0` at start. That passed alone and FAILED in the suite,
+   because `run_tests.py` gives all tests ONE isolated store and any
+   earlier test running a backtest appends here — which is the feature
+   working. Rewritten to assert deltas. Same class as the vacuous check
+   in test_evaluate_params: a test whose result depends on what ran
+   before it is not testing what it claims.
+
+Mutation-checked, all three detected: daily tuner bypassing the
+chokepoint, `_replay_for` not recording, torn-line healing removed.
+
+### What this does and does not change
+
+N=1000 stays the pre-committed floor for the CURRENT round — the
+historical count is still gone and nothing recovers it. From the next
+round on, `trial_log.summary()` gives the measured N and the hurdle
+should be recomputed from it. The memo's Part 4.4 is updated to say so.
+
+No config values were changed; live settings stay exactly as they are.
+
 ## v59.57 — the websocket WAS the cause; v59.56's diagnosis was wrong (2026-08-08)
 
 **This entry corrects the one below it.** v59.56 states "root cause NOT

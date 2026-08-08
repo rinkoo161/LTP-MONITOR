@@ -973,20 +973,42 @@ def replay_ta_elliott(symbol, params=None, days=None, log=lambda m: None):
     return trades
 
 
-def _replay_for(name, symbol, params, days=None):
+def _replay_for(name, symbol, params, days=None, source="replay"):
     """Dispatch to the correct replay function for any strategy name —
     used by sweep_params() so it works identically across spreads/
     momentum/PA without the caller needing to know which loop backs
-    which strategy."""
+    which strategy.
+
+    2026-08-08 — this is now also the ONE place a parameter set is
+    recorded to trial_log. It has to be one place: the deflated Sharpe
+    in Part 4 of the strategy-reset memo needs N, the count of
+    configurations evaluated, and N was unrecoverable precisely because
+    evaluations happened down several paths and only ACCEPTED results
+    were ever persisted. LearningAgent's daily tuner used to call
+    replay_spreads()/replay_pa() directly and would have been invisible
+    here; those two call sites now come through this function instead,
+    so a future strategy family cannot be added to the search without
+    also being counted.
+    """
     if name in ("bull_put_spread", "bear_call_spread"):
-        return replay_spreads(symbol, name, params=params, days=days)
-    if name == "momentum_buy":
-        return replay_momentum(symbol, params=params, days=days)
-    if name == "ew_reversal":
-        return replay_ew_reversal(symbol, params=params, days=days)
-    if name == "ta_elliott":
-        return replay_ta_elliott(symbol, params=params, days=days)
-    return replay_pa(symbol, name, params=params, days=days)
+        out = replay_spreads(symbol, name, params=params, days=days)
+    elif name == "momentum_buy":
+        out = replay_momentum(symbol, params=params, days=days)
+    elif name == "ew_reversal":
+        out = replay_ew_reversal(symbol, params=params, days=days)
+    elif name == "ta_elliott":
+        out = replay_ta_elliott(symbol, params=params, days=days)
+    else:
+        out = replay_pa(symbol, name, params=params, days=days)
+    try:
+        import trial_log
+        trial_log.record(name, symbol, params, metrics(out), source)
+    except Exception as e:
+        # Reported, never swallowed — a recorder that silently stops
+        # working recreates exactly the gap this exists to close.
+        print(f"  ⚠ trial_log skipped for {name}/{symbol}: "
+              f"{type(e).__name__}: {e}")
+    return out
 
 
 def replay_futures(symbol, name, params=None, days=None, log=lambda m: None):
