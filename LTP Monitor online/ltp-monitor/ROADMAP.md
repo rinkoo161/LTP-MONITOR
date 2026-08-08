@@ -4,6 +4,63 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.63 — Telegram messages: HTML, escaped, and structured (2026-08-08)
+
+Asked for "proper indication and structure" rather than plain text. That
+turned up a **correctness bug, not a cosmetic one**.
+
+### Markdown was silently dropping the most important notifications
+
+Legacy Markdown treats `_` as an italics marker. An ODD number of them
+is an unterminated entity, and Telegram rejects the WHOLE message with
+HTTP 400 — which `_send()` catches and logs, so the notification simply
+never arrives. Measured against the live API:
+
+    vwap_pullback        -> HTTP 400 can't parse entities   MESSAGE LOST
+    ema_mtf              -> HTTP 400                        MESSAGE LOST
+    momentum_confluence  -> HTTP 400                        MESSAGE LOST
+    sg_ema               -> HTTP 400                        MESSAGE LOST
+    bull_put_spread      -> sent, rendered bull<i>put</i>spread
+
+**Four of the names in `pa_strategies.PA_NAMES` — the fills most worth
+being told about — were exactly the ones that failed.** The even-count
+names did not error; they rendered wrong, which is arguably worse
+because nothing logs it.
+
+Switched to `parse_mode: HTML`, where only `&`, `<`, `>` are special,
+with `_esc()` applied to every interpolated value — alert message,
+category, symbol, strategy name, headline. Re-sent live: **4/4 delivered
+where it had been 0/4.**
+
+### Structure
+
+Every message is now a card: an emoji state indicator, a bold heading, a
+`━━━` rule, and aligned rows. P&L carries a 🟢/🔴/⚪ cue so the sign
+reads at a glance in a notification list, and win rate is shown as
+`5/8 (63%)` rather than a bare count. Positions distinguish CE 🟩 /
+PE 🟥 / spread 🟦. Alerts carry severity, category, symbol and time.
+
+### Two mistakes made while verifying this
+
+1. An HTTP 400 appeared during the live test. It was **my own test line
+   sending an empty string**, not the bot — confirmed by reproducing it
+   directly (`message text is empty`).
+2. The live test emitted four synthetic `[execution] HIGH` alerts on a
+   throwaway Bus, and `bus.log()` writes to the REAL `activity.log`. Four
+   fake fill lines are now in the audit trail at 14:18:41. The log was
+   **not rewritten** — it is an audit trail — but a clarifying line was
+   appended at 14:19:00 naming them as synthetic, so nobody later reads
+   them as real trades. That is the same class of confusion as the
+   phantom journal records from 2026-08-06.
+
+The escaping test checks BEHAVIOUR (`_esc("a & b < c > d")`), after a
+first version grepped a 400-character window of source and failed
+because the docstring is longer than that — testing the prose instead of
+the code, again.
+
+Mutation-checked: reverting `parse_mode` to Markdown is DETECTED.
+Suite 138/140, 0 failed.
+
 ## v59.62 — Telegram notifier + READ-ONLY chat (2026-08-08)
 
 Pushes trade fills and other alerts, a P&L summary every 30 minutes

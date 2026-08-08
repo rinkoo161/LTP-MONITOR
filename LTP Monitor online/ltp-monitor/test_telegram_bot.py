@@ -89,6 +89,53 @@ check("only sendMessage and getUpdates are ever requested",
                           "sendDocument")))) <= {"sendMessage", "getUpdates"},
       f"{_api_methods}")
 
+print("\n1b) messages are HTML and every interpolated value is ESCAPED")
+# This is a correctness check, not a style one. Under legacy Markdown an
+# ODD number of underscores is an unterminated entity and Telegram
+# rejects the WHOLE message with HTTP 400 — which _send() catches and
+# logs, so the notification silently never arrives. Measured live
+# 2026-08-08: vwap_pullback, ema_mtf, momentum_confluence and sg_ema all
+# returned 400 (message LOST); bull_put_spread sent but rendered
+# bull<i>put</i>spread. Four of pa_strategies.PA_NAMES — the fills most
+# worth being told about — were the ones that failed.
+check("parse_mode is HTML, not Markdown",
+      '"parse_mode": "HTML"' in SRC and '"parse_mode": "Markdown"' not in SRC,
+      "Markdown drops any message whose strategy name has an odd number "
+      "of underscores")
+check("an escaping helper exists", "def _esc(" in SRC)
+# Behaviour, not a source window. The first version grepped 400 chars
+# after "def _esc(" and failed because the docstring is longer than that
+# — testing the prose again instead of the code.
+import telegram_bot as _tgm
+check("_esc covers &, < and >",
+      _tgm._esc("a & b < c > d") == "a &amp; b &lt; c &gt; d",
+      _tgm._esc("a & b < c > d"))
+check("and & is escaped FIRST, so &lt; is not double-escaped",
+      _tgm._esc("<") == "&lt;", _tgm._esc("<"))
+check("the alert body escapes the message field",
+      "_esc(a.get('message'" in SRC or '_esc(a.get("message"' in SRC,
+      "a['message'] is where strategy names land")
+check("and escapes the symbol and category too",
+      "_esc(a.get('category'" in SRC and "_esc(a.get('symbol'" in SRC)
+# the real regression: the four names that were lost must survive escaping
+import telegram_bot as _tg
+for _n in ("vwap_pullback", "ema_mtf", "momentum_confluence", "sg_ema"):
+    check(f"{_n} survives _esc() unchanged", _tg._esc(_n) == _n,
+          "HTML has no underscore semantics — this is why the switch fixes it")
+check("&lt;script&gt; style input is neutralised",
+      _tg._esc("<b>x</b>") == "&lt;b&gt;x&lt;/b&gt;",
+      "a headline containing markup must not become markup")
+
+print("\n1c) the message cards are structured, not bare prose")
+for frag, what in (("📊", "P&L card has an indicator"),
+                   ("📂", "positions card has an indicator"),
+                   ("⚙️", "status card has an indicator"),
+                   ("📰", "news card has an indicator"),
+                   ("<b>", "bold headings are used"),
+                   ("def _rule(", "a separator rule exists"),
+                   ("def _money(", "money carries a red/green cue")):
+    check(what, frag in SRC)
+
 print("\n2) it answers ONLY the configured chat")
 check("_poll_commands compares the sender against telegram_chat_id",
       any("!= chat_id" in l for l in _code),

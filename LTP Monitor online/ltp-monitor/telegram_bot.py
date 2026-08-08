@@ -45,13 +45,15 @@ IST = timezone(timedelta(hours=5, minutes=30))
 API = "https://api.telegram.org/bot{token}/{method}"
 
 HELP = (
-    "*LTP Monitor*\n"
-    "/pnl — realised P&L today + open risk\n"
-    "/positions — open positions and spreads\n"
-    "/status — agents, market session, link health\n"
-    "/news — latest material headlines\n"
-    "/help — this message\n\n"
-    "_Read-only. This bot cannot place or exit trades._"
+    "🤖 <b>LTP Monitor</b>\n"
+    "━━━━━━━━━━━━━━━━━━\n"
+    "📊 /pnl — realised P&amp;L today\n"
+    "📂 /positions — open positions &amp; spreads\n"
+    "⚙️ /status — session, P&amp;L, link health\n"
+    "📰 /news — latest material headlines\n"
+    "❓ /help — this message\n"
+    "━━━━━━━━━━━━━━━━━━\n"
+    "<i>Read-only — cannot place or exit trades.</i>"
 )
 
 
@@ -63,11 +65,48 @@ def _call(token, method, params=None, timeout=15):
         return json.loads(r.read().decode("utf-8"))
 
 
+def _esc(v):
+    """Escape for Telegram's HTML parse mode — only &, <, > matter.
+
+    HTML rather than Markdown, and this is NOT cosmetic. Under legacy
+    Markdown an ODD number of underscores is an unterminated entity and
+    Telegram rejects the whole message with HTTP 400, which _send()
+    catches and logs — so the notification silently never arrives.
+    Measured against the live API on 2026-08-08:
+
+        vwap_pullback        -> HTTP 400 can't parse entities  (LOST)
+        ema_mtf              -> HTTP 400                       (LOST)
+        momentum_confluence  -> HTTP 400                       (LOST)
+        sg_ema               -> HTTP 400                       (LOST)
+        bull_put_spread      -> sent, but rendered bull<i>put</i>spread
+
+    Four of the names in pa_strategies.PA_NAMES, i.e. the fills most
+    worth being told about, were the ones that failed. HTML has no such
+    trap: three characters escape and nothing else is special.
+    """
+    return (str(v).replace("&", "&amp;").replace("<", "&lt;")
+            .replace(">", "&gt;"))
+
+
+def _money(v):
+    """Rupees with a colour cue. Sign is carried by the emoji as well as
+    the number, so it reads at a glance in a notification list."""
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return "— ₹—"
+    return f"{'🟢' if f > 0 else '🔴' if f < 0 else '⚪'} ₹{f:+,.0f}"
+
+
 def _fmt_money(v):
     try:
         return f"₹{float(v):+,.0f}"
     except (TypeError, ValueError):
         return "₹—"
+
+
+def _rule():
+    return "━━━━━━━━━━━━━━━━━━"
 
 
 class TelegramAgent(threading.Thread):
@@ -111,7 +150,7 @@ class TelegramAgent(threading.Thread):
         try:
             _call(token, "sendMessage",
                   {"chat_id": chat_id, "text": text,
-                   "parse_mode": "Markdown",
+                   "parse_mode": "HTML",
                    "disable_web_page_preview": "true"})
             return True
         except (urllib.error.URLError, OSError, ValueError) as e:
@@ -137,16 +176,21 @@ class TelegramAgent(threading.Thread):
     def _positions_text(self):
         pos = self.bus.get("positions", {}) or {}
         spr = self.bus.get("spreads", {}) or {}
-        if not pos and not spr:
-            return "No open positions."
-        out = []
+        n = len(pos) + len(spr)
+        if not n:
+            return "📂 <b>OPEN POSITIONS</b>\n" + _rule() + "\nNothing open."
+        out = [f"📂 <b>OPEN POSITIONS ({n})</b>", _rule()]
         for k, p in pos.items():
-            out.append(f"• {p.get('symbol', k)} {p.get('leg', '')} "
-                       f"{p.get('strike', '')} × {p.get('lots', '?')} lot(s) "
-                       f"@ {p.get('entry', '?')}")
-        for k, s in spr.items():
-            out.append(f"• {s.get('symbol', k)} SPREAD {s.get('name', '')} "
-                       f"× {s.get('lots', '?')} lot(s)")
+            leg = str(p.get("leg", "")).upper()
+            icon = "🟩" if leg == "CE" else "🟥" if leg == "PE" else "▪️"
+            out.append(f"{icon} <b>{_esc(p.get('symbol', k))} {_esc(leg)} "
+                       f"{_esc(p.get('strike', ''))}</b>")
+            out.append(f"     {_esc(p.get('lots', '?'))} lot × "
+                       f"entry <code>₹{_esc(p.get('entry', '?'))}</code>")
+        for k, sp in spr.items():
+            out.append(f"🟦 <b>{_esc(sp.get('symbol', k))} SPREAD</b> "
+                       f"<code>{_esc(sp.get('name', ''))}</code>")
+            out.append(f"     {_esc(sp.get('lots', '?'))} lot")
         return "\n".join(out)
 
     def _status_text(self):
@@ -155,20 +199,35 @@ class TelegramAgent(threading.Thread):
         open_n = len(self.bus.get("positions", {}) or {}) + \
             len(self.bus.get("spreads", {}) or {})
         ms = self.bus.get("ms_link") or {}
-        return (f"*Session*: {'OPEN' if _ag.market_open() else 'CLOSED'}\n"
-                f"*Today*: {_fmt_money(net)} over {n} trade(s), {wins} win(s)\n"
-                f"*Open*: {open_n}\n"
-                f"*MarketSense*: {'ok' if ms.get('ok') else 'down/stale'}")
+        live = _ag.market_open()
+        wr = f"{wins}/{n} ({wins / n * 100:.0f}%)" if n else "—"
+        return (
+            f"⚙️ <b>STATUS</b>  <i>{datetime.now(IST):%H:%M IST}</i>\n"
+            + _rule() + "\n"
+            f"{'🟢' if live else '🔴'} Market     <b>"
+            f"{'OPEN' if live else 'CLOSED'}</b>\n"
+            f"{_money(net)}  realised today\n"
+            f"📈 Trades     <b>{n}</b>   win rate {wr}\n"
+            f"📂 Open       <b>{open_n}</b>\n"
+            f"🔗 MarketSense <b>{'ok' if ms.get('ok') else 'down/stale'}</b>")
 
     def _news_text(self):
         n = self.bus.get("news") or {}
         items = (n.get("headlines") or n.get("items") or [])[:5]
         if not items:
-            return "No material headlines on the bus."
-        out = []
+            return ("📰 <b>NEWS</b>\n" + _rule()
+                    + "\nNothing material on the bus.")
+        out = ["📰 <b>NEWS</b>", _rule()]
         for h in items:
-            t = h.get("title") if isinstance(h, dict) else str(h)
-            out.append(f"• {t}")
+            if isinstance(h, dict):
+                title = h.get("title") or h.get("headline") or str(h)
+                sent = str(h.get("sentiment") or "").lower()
+                icon = ("🟢" if "bull" in sent or "positive" in sent
+                        else "🔴" if "bear" in sent or "negative" in sent
+                        else "⚪")
+            else:
+                title, icon = str(h), "⚪"
+            out.append(f"{icon} {_esc(title)[:160]}")
         return "\n".join(out)
 
     # ----------------------------------------------------------- cycle
@@ -213,10 +272,18 @@ class TelegramAgent(threading.Thread):
         for a in fresh:
             if order.get(a.get("severity", "low"), 0) < floor:
                 continue
-            icon = {"high": "🔴", "medium": "🟠", "low": "⚪"}.get(a.get("severity"), "•")
-            if self._send(token, chat_id,
-                          f"{icon} *{a.get('category', '?')}* "
-                          f"{a.get('symbol', '')}\n{a.get('message', '')}"):
+            sev = a.get("severity", "low")
+            icon = {"high": "🔴", "medium": "🟠", "low": "⚪"}.get(sev, "▪️")
+            # EVERY interpolated value is escaped. a["message"] is where
+            # strategy names land (vwap_pullback, sg_ema, ...), which is
+            # exactly what broke under Markdown.
+            body = (f"{icon} <b>{_esc(str(sev).upper())}</b> · "
+                    f"<code>{_esc(a.get('category', '?'))}</code>"
+                    f"{'  ' + _esc(a.get('symbol')) if a.get('symbol') else ''}\n"
+                    + _rule() + "\n"
+                    f"{_esc(a.get('message', ''))}\n"
+                    f"<i>🕒 {_esc(a.get('ts', ''))}</i>")
+            if self._send(token, chat_id, body):
                 n += 1
         if fresh:
             self._seen_alert = fresh[-1].get("id", self._seen_alert)
@@ -232,12 +299,18 @@ class TelegramAgent(threading.Thread):
             return 0
         self._last_session = now_open
         if now_open:
-            return int(self._send(token, chat_id, "🟢 *Market OPEN*"))
+            return int(self._send(
+                token, chat_id,
+                "🟢 <b>MARKET OPEN</b>\n" + _rule() + "\n"
+                f"<i>{datetime.now(IST):%a %d %b · %H:%M IST}</i>"))
         net, n, wins = self._today_pnl()
+        wr = f"{wins}/{n} ({wins / n * 100:.0f}%)" if n else "—"
         return int(self._send(
             token, chat_id,
-            f"🔴 *Market CLOSED*\nToday: {_fmt_money(net)} over {n} "
-            f"trade(s), {wins} win(s)"))
+            "🔴 <b>MARKET CLOSED</b>\n" + _rule() + "\n"
+            f"{_money(net)}  realised\n"
+            f"📈 Trades     <b>{n}</b>   win rate {wr}\n"
+            f"<i>{datetime.now(IST):%a %d %b · %H:%M IST}</i>"))
 
     def _push_pnl(self, cfg, token, chat_id):
         import agents as _ag
@@ -250,10 +323,14 @@ class TelegramAgent(threading.Thread):
         net, n, wins = self._today_pnl()
         open_n = len(self.bus.get("positions", {}) or {}) + \
             len(self.bus.get("spreads", {}) or {})
+        wr = f"{wins}/{n} ({wins / n * 100:.0f}%)" if n else "—"
         return int(self._send(
             token, chat_id,
-            f"📊 *P&L update*\n{_fmt_money(net)} over {n} trade(s), "
-            f"{wins} win(s)\nOpen: {open_n}"))
+            f"📊 <b>P&amp;L UPDATE</b>  <i>{datetime.now(IST):%H:%M IST}</i>\n"
+            + _rule() + "\n"
+            f"{_money(net)}  realised today\n"
+            f"📈 Trades     <b>{n}</b>   win rate {wr}\n"
+            f"📂 Open       <b>{open_n}</b>"))
 
     def _poll_commands(self, token, chat_id):
         try:
@@ -281,9 +358,16 @@ class TelegramAgent(threading.Thread):
     def _handle(self, token, chat_id, cmd):
         if cmd in ("pnl", "p"):
             net, n, wins = self._today_pnl()
+            wr = f"{wins}/{n} ({wins / n * 100:.0f}%)" if n else "—"
+            open_n = len(self.bus.get("positions", {}) or {}) + \
+                len(self.bus.get("spreads", {}) or {})
             self._send(token, chat_id,
-                       f"📊 Today: {_fmt_money(net)} over {n} trade(s), "
-                       f"{wins} win(s)")
+                       f"📊 <b>P&amp;L TODAY</b>  "
+                       f"<i>{datetime.now(IST):%H:%M IST}</i>\n"
+                       + _rule() + "\n"
+                       f"{_money(net)}  realised\n"
+                       f"📈 Trades     <b>{n}</b>   win rate {wr}\n"
+                       f"📂 Open       <b>{open_n}</b>")
         elif cmd in ("positions", "pos"):
             self._send(token, chat_id, self._positions_text())
         elif cmd == "status":
