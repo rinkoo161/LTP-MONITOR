@@ -26,7 +26,7 @@ from agents import Orchestrator, compute_momentum
 import agents
 
 BASE = os.path.dirname(os.path.abspath(__file__))
-APP_VERSION = "v59.61"   # maintained per explicit request; last delivered was v49
+APP_VERSION = "v59.62"   # maintained per explicit request; last delivered was v49
 
 app = FastAPI(title="LTP Option Chain Monitor")
 
@@ -658,6 +658,11 @@ class SettingsIn(BaseModel):
     marketsense_poll_sec: int | None = None
     marketsense_risk_gate_enabled: bool | None = None
     marketsense_max_flag_age_sec: int | None = None
+    telegram_enabled: bool | None = None
+    telegram_bot_token: str | None = None
+    telegram_chat_id: str | None = None
+    telegram_pnl_interval_min: int | None = None
+    telegram_alert_min_severity: str | None = None
     macro_yf_interval: str | None = None
     macro_yf_period: str | None = None
     macro_debug_logging: bool | None = None

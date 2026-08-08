@@ -4,6 +4,71 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.62 — Telegram notifier + READ-ONLY chat (2026-08-08)
+
+Pushes trade fills and other alerts, a P&L summary every 30 minutes
+during market hours, market open/close transitions, and news the system
+already judged material. Answers `/pnl` `/positions` `/status` `/news`
+`/help`.
+
+Ships **OFF** (`telegram_enabled: False`) and needs a bot token pasted
+in Settings, like every other integration here.
+
+### It cannot trade, and that is enforced, not just intended
+
+No command reaches `Orchestrator.manual_trade`, `enter_spread`,
+`place_order` or `confirm_pending`. CLAUDE.md's invariant is that every
+order passes `RiskAgent.evaluate()`; a chat command that could trade
+would be a second execution path reachable by anyone holding the bot
+token — and a bot token is a bearer credential that travels through
+Telegram's servers.
+
+`test_telegram_bot.py` enforces this by **parsing the AST** and
+asserting those names are never CALLED, that no order/broker handle is
+touched, and that the only Telegram API methods used are `sendMessage`
+and `getUpdates`. The first version grepped for the names and failed
+against the module's own docstring — the paragraph explaining that it
+does not call them. Checking what the code says instead of what it does
+is a mistake this codebase has made before.
+
+### It does not fork the notion of "notify-worthy"
+
+It forwards `bus.alerts`, the same stream the dashboard bell renders and
+already populated by execution/risk/news/volatility. A second definition
+of the same thing is how the news sentiment regexes and the OI quadrant
+classifier drifted apart.
+
+### Three failure modes closed
+
+- **Backlog flood.** `bus.alerts` holds 100 entries; on first cycle the
+  agent adopts the current tip as its watermark instead of replaying
+  them into the chat on every restart.
+- **Lifetime P&L reported as today's.** `closed_trades` is loaded at
+  startup from the FULL persisted history and appended to all session —
+  it is NOT reset daily. `_today_pnl()` filters on `closed_date`, which
+  is the exact bug LearningAgent's journal had.
+- **Strangers.** Every update is checked against `telegram_chat_id`;
+  anything else is dropped, counted, and logged. Without it, whoever
+  finds the bot reads the book.
+
+`telegram_bot_token` is in `SECRET_KEYS`, so `public_view()` never ships
+it to the browser. All five keys are in `SettingsIn`.
+
+### Data leaves the machine
+
+Positions, P&L and symbols are sent to api.telegram.org. That is
+inherent to the feature, not an oversight — and it is why this defaults
+to disabled rather than on.
+
+Mutation-checked: chat-id check removed, lifetime P&L, backlog replay,
+config default flipped on, token unmarked as secret — all DETECTED. The
+backlog check initially passed for the WRONG REASON (it called the real
+`_send`, which failed on a fake token and returned 0 either way, and
+made a real network call from the suite); it now stubs the sender and
+asserts both directions.
+
+Suite 138/140, 0 failed.
+
 ## v59.61 — ms_risk_flag wired into RiskAgent (2026-08-08)
 
 `marketsense_link.py`'s own docstring said this gate "belongs in

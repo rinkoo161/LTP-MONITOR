@@ -44,6 +44,17 @@ DEFAULTS = {
     # Only "hard_block" stops an order; "penalty"/"suppressed" are
     # recorded and do NOT block — treating an advisory downgrade as a
     # veto would hand a separate process the power to halt trading.
+    # Telegram notifier + READ-ONLY chat (2026-08-08). Ships OFF, like
+    # every other integration here, and needs a token pasted in Settings.
+    # It cannot place, modify or exit an order — see telegram_bot.py.
+    # NOTE data leaves the machine: positions, P&L and symbols are sent
+    # to api.telegram.org. That is inherent to the feature, not a leak,
+    # but it is why the default is False.
+    "telegram_enabled": False,
+    "telegram_bot_token": "",
+    "telegram_chat_id": "",
+    "telegram_pnl_interval_min": 30,
+    "telegram_alert_min_severity": "medium",
     "marketsense_risk_gate_enabled": True,
     # A flag is only honoured while the LINK is fresh. MarketSense
     # keeps the last good values on the bus through an outage, so
@@ -899,7 +910,7 @@ SECRET_KEYS = ("dhan_client_id", "dhan_access_token", "anthropic_api_key",
                "kotak_sid", "kotak_auth_token",
                "kotak_session_token", "kotak_mobile",
                "twelve_data_api_key", "alpha_vantage_api_key", "newsapi_api_key",
-               "tradingview_webhook_secret")
+               "tradingview_webhook_secret", "telegram_bot_token")
 
 
 def load() -> dict:

@@ -61,6 +61,12 @@ except Exception as _e:
     print(f"[agents] news_macro_agent unavailable, NewsMacroAgent disabled: {_e}")
 
 try:
+    from telegram_bot import TelegramAgent
+except Exception as _e:
+    TelegramAgent = None
+    print(f"[agents] telegram_bot unavailable, TelegramAgent disabled: {_e}")
+
+try:
     from marketsense_link import MarketSenseAgent
 except Exception as _e:
     # Optional read-only bridge to the MarketSense platform (separate
@@ -8173,6 +8179,8 @@ if NewsMacroAgent is not None:
     AGENT_CLASSES.append(NewsMacroAgent)
 if MarketSenseAgent is not None:
     AGENT_CLASSES.append(MarketSenseAgent)
+if TelegramAgent is not None:
+    AGENT_CLASSES.append(TelegramAgent)
 
 
 class Orchestrator:
