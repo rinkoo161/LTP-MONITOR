@@ -4,6 +4,66 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.60 — "once per day" was once per RESTART (2026-08-08)
+
+`LearningAgent`'s daily maintenance was gated on
+`self.bus.get("chain_prune_done") != today`. **The Bus is in-memory**, so
+the marker died with the process and the job ran on every boot.
+
+From `activity.log`, while v59.53..v59.58 were being deployed:
+
+    chain_snapshots retention ran NINE times between 00:01 and 00:20
+
+each scanning a **752,254-row** table in a **470 MB** database, each
+holding the write lock long enough to push other writers past their 30s
+`busy_timeout`:
+
+    [00:17:58] market_data ⚠ NIFTY: futures OI archive FAILED
+               (RuntimeError: database is locked) — S10 stays chain_only
+
+and **every one of those nine runs thinned nothing** —
+`tier2_thinned: 0, tier3_thinned: 0`, because no data is old enough yet.
+
+That explains the shape of the problem in the log: 15 lock errors on
+2026-07-26 (the day the WAL/busy_timeout fix itself was deployed), none
+for eleven days, then a cluster today. **It tracks restart frequency,
+not load** — and today's cluster was self-inflicted by the deploy
+cadence, not by anything the market did.
+
+`daily_marks.py` persists the marker to a small JSON file. Deliberately
+NOT a table in history.db: the problem being fixed IS contention on that
+database, and a marker that needs the write lock to record "I finished
+writing" contends for the resource it protects. Writes go through a temp
+file + `os.replace`, so a crash cannot leave a torn marker.
+
+A corrupt marker file reads as empty and lets the job re-run — the
+pre-change behaviour, safe because every job it guards is idempotent.
+Failing the other way would stop retention forever, silently.
+
+### The same flaw was in my own v59.53
+
+`iv_backfill_done` used the identical in-memory pattern, because it
+followed the existing convention without questioning whether "once per
+day" actually meant that. Both gates now persist.
+
+### Two markers deliberately NOT changed
+
+`journal_done` and `weekly_risk_done` have the same in-memory flaw, but
+re-running the EOD journal after a restart is a BEHAVIOUR question, not
+a lock question, and changing it unilaterally could alter what gets
+written. `test_daily_marks.py` asserts they are still bus-keyed, so the
+next person finds them rather than rediscovering the pattern.
+
+### test_v53_hygiene needed a mechanism update, not an assertion change
+
+It re-triggered the prune branch by clearing the bus key. With the gate
+moved off the bus, that no longer reopens the branch, so the block was
+skipped and never logged — the test failed on "feed had 0 lines". The
+fix clears the persistent marker too, and the assertions now check
+`daily_marks` (what actually decides) with the bus key checked
+separately as a mirror. Mutation-checked: reverting the gate to the bus
+makes `test_daily_marks` FAIL.
+
 ## v59.59 — MarketSense read-only bridge (2026-08-08)
 
 New optional agent (`marketsense_link.MarketSenseAgent`, NewsMacroAgent

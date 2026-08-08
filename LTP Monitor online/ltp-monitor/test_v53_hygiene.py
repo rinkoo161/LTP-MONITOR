@@ -67,6 +67,14 @@ check("fixture seeded 4 rows (1 strike x 2 legs x 2 timestamps)",
 
 bus = Bus()
 bus.set("closed_trades", [])
+# v59.59 — the gate moved OFF the in-memory bus and onto daily_marks,
+# because a bus-keyed "once per day" was really once per RESTART: the
+# prune ran nine times in 20 minutes across one deploy session, each
+# time scanning a 752k-row table and starving other writers past their
+# 30s busy_timeout. Clearing the bus key alone no longer re-opens the
+# branch, so the persistent marker has to be cleared too.
+import daily_marks as _dm
+_dm.mark("chain_prune_done", "")     # any non-matching stamp = "not done"
 bus.set("chain_prune_done", None)   # force the prune branch to run
 ag = agents.LearningAgent(bus, {})
 real_market_open = agents.market_open
@@ -97,7 +105,13 @@ _prune_days = {
     agents.now_ist().strftime("%Y-%m-%d"),
     (agents.now_ist() - _dt.timedelta(days=1)).strftime("%Y-%m-%d"),
 }
+# Assert on daily_marks: that is what actually DECIDES whether the job
+# re-runs now. The bus key is still set for introspection, so check both
+# — if they ever disagree, the persistent one is the one that matters.
 check("chain_prune_done marked for today (won't re-run this cycle)",
+      any(_dm.done("chain_prune_done", d) for d in _prune_days),
+      str(_dm.all_marks().get("chain_prune_done")))
+check("and the bus key still mirrors it, for anything introspecting",
       bus.get("chain_prune_done") in _prune_days,
       str(bus.get("chain_prune_done")))
 
@@ -145,6 +159,7 @@ config.save({"chain_snapshot_retention_days":
 print("\n4) prune failure is logged loudly, not swallowed")
 bus2 = Bus()
 bus2.set("closed_trades", [])
+_dm.mark("chain_prune_done", "")     # clear the persistent gate too
 bus2.set("chain_prune_done", None)
 ag2 = agents.LearningAgent(bus2, {})
 real_prune = history.prune_chain_snapshots
@@ -160,7 +175,9 @@ check("a prune exception is caught, logged loudly, and does not crash cycle()",
       logged, f"feed had {len(bus2.feed)} lines")
 check("chain_prune_done NOT marked when the prune failed "
       "(so it retries next cycle instead of giving up for the day)",
-      bus2.get("chain_prune_done") is None, str(bus2.get("chain_prune_done")))
+      not _dm.done("chain_prune_done",
+                   agents.now_ist().strftime("%Y-%m-%d")),
+      str(_dm.all_marks().get("chain_prune_done")))
 
 print("\n" + "=" * 60)
 failed = [l for l, ok in results if not ok]
