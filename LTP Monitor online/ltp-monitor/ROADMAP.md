@@ -4,6 +4,61 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.65 — IV series is now self-describing; the tenor fear was overstated (2026-08-09)
+
+`daily_atm_iv` stored `(symbol, date, atm_iv)` and nothing else, so a
+reading taken 5 days from expiry and one taken 28 days out were stored
+identically and compared as if equal. That difference is term structure,
+not volatility, and Candidate A's entry gate reads this series.
+
+### True constant-maturity interpolation is impossible here
+
+It needs two expiries priced on the SAME day. `option_chain()` fetches
+only `_nearest_expiry` — measured, **0 of 40 archived days** carry a
+second expiry. No code change fixes that retroactively; enabling it
+going forward costs a second chain fetch per symbol per cycle against a
+rate-limited broker.
+
+### The tenor spread, and what it actually costs
+
+    NIFTY      n=11  dte 2..7    spread  5 days
+    BANKNIFTY  n=13  dte 2..28   spread 26 days   near 13.15  far 12.41  gap -0.74
+    FINNIFTY   n=12  dte 2..28   spread 26 days   near 13.50  far 13.54  gap +0.04
+
+**−0.74 and +0.04 vol points, against a 3.0 threshold.** An order of
+magnitude under it. A hard tenor band would discard roughly half of
+BANKNIFTY and FINNIFTY to correct 0.7 vol points, so **no band is
+imposed by default** — the capability is provided, the policy is left to
+the caller on evidence.
+
+### Changes
+
+- `daily_atm_iv.days_to_expiry` added (migration-safe ALTER) and
+  backfilled for all 36 existing rows.
+- `backfill_iv_history()` records the tenor it used, reusing the `_dte`
+  it already computes for the expiry-day guard.
+- `get_daily_atm_iv_history(..., tenor_band=(lo,hi))` returns only
+  comparable readings; unknown-tenor rows are excluded. Default `None`
+  keeps the existing live caller byte-identical.
+- `history.iv_tenor_report(symbol)` answers the question with a number.
+
+### I overstated this one
+
+It was flagged across several sessions as the highest-value open item,
+on the reasoning that the roll would swamp the gate. The defect is real
+— an unlabelled series cannot be compared — but I asserted the
+magnitude before measuring it, and the measurement says it is small.
+Recorded in memo Part 6.
+
+Mutation-checked: producer dropping the tenor DETECTED; a band silently
+imposed on the live caller DETECTED. A third mutation (removing the
+explicit `IS NOT NULL`) is correctly NOT detected — SQL's
+`NULL BETWEEN x AND y` is already falsy, so that clause is redundant
+rather than load-bearing, and the test says so instead of pretending
+otherwise.
+
+Suite 140/142, 0 failed.
+
 ## v59.64 — the news risk gate was firing on non-events (2026-08-08)
 
 `NewsAgent` asked the model for `risk_event` with **no definition of

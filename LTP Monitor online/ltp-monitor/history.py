@@ -260,33 +260,126 @@ def _ensure_schema(c):
     c.execute("""CREATE TABLE IF NOT EXISTS daily_atm_iv(
         symbol TEXT, date TEXT, atm_iv REAL,
         PRIMARY KEY(symbol, date))""")
+    # days_to_expiry (2026-08-09). The series was NOT self-describing:
+    # a reading taken 5 days from expiry and one taken 28 days out were
+    # stored identically and compared as if equal. They are not — the
+    # difference is term structure, not volatility.
+    #
+    # It is not hypothetical. FINNIFTY's front expiry jumps from
+    # 2026-08-04 (dte 2) straight to 2026-08-25 (dte 28) when the weekly
+    # set rolls to monthly, and BANKNIFTY sits on the 08-25 monthly
+    # while NIFTY is on the 08-11 weekly. Candidate A's entry gate
+    # (atm_iv - rv20 >= 3.0, strategy-reset memo Part 3) would fire on
+    # that roll rather than on any change in volatility.
+    #
+    # TRUE constant-maturity interpolation is NOT possible here: it
+    # needs two expiries priced on the SAME day, and broker_adapter's
+    # option_chain() fetches only _nearest_expiry — measured, 0 of 40
+    # archived days carry a second expiry. Recording the tenor is what
+    # lets a consumer compare like with like instead of pretending the
+    # question does not exist.
+    try:
+        cols = [r[1] for r in c.execute("PRAGMA table_info(daily_atm_iv)")]
+        if "days_to_expiry" not in cols:
+            c.execute("ALTER TABLE daily_atm_iv ADD COLUMN days_to_expiry INTEGER")
+    except Exception as _me:
+        print(f"[migrate] daily_atm_iv days_to_expiry add skipped: {_me}")
     c.commit()
 
 
-def upsert_daily_atm_iv(symbol, date_str, atm_iv):
+def upsert_daily_atm_iv(symbol, date_str, atm_iv, days_to_expiry=None):
+    """`days_to_expiry` is the tenor the reading was taken at. Callers
+    that omit it store NULL, which get_daily_atm_iv_history() treats as
+    unknown-tenor and excludes from any banded query — an unlabelled
+    reading cannot be shown to be comparable."""
     c = _conn()
-    c.execute("INSERT OR REPLACE INTO daily_atm_iv VALUES (?,?,?)",
-             (symbol, date_str, atm_iv))
+    c.execute("INSERT OR REPLACE INTO daily_atm_iv"
+              "(symbol,date,atm_iv,days_to_expiry) VALUES (?,?,?,?)",
+              (symbol, date_str, atm_iv, days_to_expiry))
     c.commit()
     c.close()
 
 
-def get_daily_atm_iv_history(symbol, since_date=None):
-    """Cached long-window ATM IV series (from `daily_atm_iv`, populated
-    by risk_engine.backfill_iv_history()) — oldest first. Returns a
-    plain list of floats, same shape as get_iv_history() so callers
-    (risk_engine.iv_percentile) can use either interchangeably."""
+def get_daily_atm_iv_history(symbol, since_date=None, tenor_band=None):
+    """Cached long-window ATM IV series — oldest first, list of floats,
+    same shape as get_iv_history() so risk_engine.iv_percentile() can
+    use either interchangeably.
+
+    `tenor_band` (2026-08-09) is (min_dte, max_dte) inclusive. Supply it
+    to get a COMPARABLE series: readings outside the band, and readings
+    with an unknown tenor (days_to_expiry IS NULL), are excluded.
+
+    Default None keeps the pre-existing behaviour — every row, tenor
+    ignored — because that is what the existing IV-percentile caller
+    expects and silently changing what it receives would move a live
+    reading with no one having asked for it. A caller that needs
+    comparability asks for it.
+    """
     c = _conn()
+    q = "SELECT atm_iv FROM daily_atm_iv WHERE symbol=?"
+    args = [symbol]
     if since_date:
-        rows = c.execute(
-            "SELECT atm_iv FROM daily_atm_iv WHERE symbol=? AND date>=? ORDER BY date",
-            (symbol, since_date)).fetchall()
-    else:
-        rows = c.execute(
-            "SELECT atm_iv FROM daily_atm_iv WHERE symbol=? ORDER BY date",
-            (symbol,)).fetchall()
+        q += " AND date>=?"
+        args.append(since_date)
+    if tenor_band:
+        lo, hi = tenor_band
+        q += " AND days_to_expiry IS NOT NULL AND days_to_expiry BETWEEN ? AND ?"
+        args += [lo, hi]
+    rows = c.execute(q + " ORDER BY date", args).fetchall()
     c.close()
     return [r[0] for r in rows if r[0] is not None]
+
+
+def daily_atm_iv_rows(symbol, since_date=None):
+    """(date, atm_iv, days_to_expiry) — for anything that needs to SEE
+    the tenor rather than just consume the level."""
+    c = _conn()
+    q = ("SELECT date, atm_iv, days_to_expiry FROM daily_atm_iv "
+         "WHERE symbol=?")
+    args = [symbol]
+    if since_date:
+        q += " AND date>=?"
+        args.append(since_date)
+    rows = c.execute(q + " ORDER BY date", args).fetchall()
+    c.close()
+    return [{"date": d, "atm_iv": v, "days_to_expiry": t} for d, v, t in rows]
+
+
+def iv_tenor_report(symbol):
+    """How comparable is this symbol's IV series with itself?
+
+    Exists so the tenor question is ANSWERED WITH A NUMBER rather than
+    argued about. Returns the tenor spread and the measured level
+    difference between near- and far-dated readings — the size of the
+    term-structure contamination, in vol points.
+
+    Measured 2026-08-09 on the first 36 rows:
+        NIFTY      dte 2..7    (weekly only)
+        BANKNIFTY  dte 2..28   near 13.1%  far 12.4%  gap -0.7
+        FINNIFTY   dte 2..28   near 13.5%  far 13.5%  gap +0.0
+
+    That gap is an order of magnitude below the 3.0 vol-point threshold
+    in Candidate A's entry gate, so imposing a hard tenor band — which
+    would discard roughly half of BANKNIFTY and FINNIFTY — is NOT
+    justified on this evidence. Re-run it as the series grows; the
+    sample is 11-13 rows per symbol and the estimate is noisy.
+    """
+    rows = [r for r in daily_atm_iv_rows(symbol) if r["days_to_expiry"]]
+    if not rows:
+        return {"symbol": symbol, "n": 0, "available": False}
+    tens = [r["days_to_expiry"] for r in rows]
+    near = [r["atm_iv"] for r in rows if r["days_to_expiry"] <= 10]
+    far = [r["atm_iv"] for r in rows if r["days_to_expiry"] > 10]
+    gap = None
+    if near and far:
+        gap = round(sum(far) / len(far) - sum(near) / len(near), 2)
+    return {"symbol": symbol, "n": len(rows), "available": True,
+            "dte_min": min(tens), "dte_max": max(tens),
+            "dte_spread": max(tens) - min(tens),
+            "n_near": len(near), "n_far": len(far),
+            "near_mean": round(sum(near) / len(near), 2) if near else None,
+            "far_mean": round(sum(far) / len(far), 2) if far else None,
+            "term_structure_gap": gap}
 
 
 def insert_risk_decision(ts, symbol, signal, verdict, risk_score, risk_level,

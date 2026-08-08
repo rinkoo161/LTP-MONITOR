@@ -1234,3 +1234,70 @@ sessions is that effect showing up directly.
 | B expiry-day max-OI pin | gamma | **untested** — needs ~20 expiries, ~2026-12 |
 | C opening-gap fade | liquidity provision | **DEAD** — kill conditions 2 and 3 fired; holdout spent |
 
+
+
+---
+
+# Part 6 — The constant-maturity question, answered (2026-08-09)
+
+Part 5 left this as the highest-priority open item, on the reasoning
+that Candidate A's gate (`atm_iv - rv20 >= 3.0`) would fire on the
+weekly-to-monthly tenor roll rather than on volatility. **Measured, that
+reasoning was wrong about the magnitude.**
+
+## True constant-maturity interpolation is not possible
+
+It needs two expiries priced on the same day. `option_chain()` fetches
+only `_nearest_expiry`. Measured across the archive:
+
+    days with 2+ expiries priced:  0 of 40
+
+No code change fixes that retroactively, and enabling it going forward
+means a second chain fetch per symbol per cycle against a rate-limited
+broker — a real cost, not a free improvement.
+
+## What the tenor spread actually is
+
+`daily_atm_iv` recorded no tenor at all, so the series was not
+self-describing. Now labelled, on the first 36 rows:
+
+| symbol | n | dte range | spread |
+|---|---:|---|---:|
+| NIFTY | 11 | 2..7 | 5 days |
+| BANKNIFTY | 13 | 2..28 | **26 days** |
+| FINNIFTY | 12 | 2..28 | **26 days** |
+
+## And what it costs, which is the number that matters
+
+| symbol | near (≤10d) | far (>10d) | gap |
+|---|---:|---:|---:|
+| BANKNIFTY | 13.15% | 12.41% | **−0.74** |
+| FINNIFTY | 13.50% | 13.54% | **+0.04** |
+
+**An order of magnitude below the 3.0 vol-point threshold.** A hard
+tenor band would discard roughly half of BANKNIFTY and FINNIFTY to
+correct 0.7 vol points. On this evidence that trade is not worth making,
+so no band is imposed by default.
+
+## What was done instead
+
+- `daily_atm_iv.days_to_expiry` added and backfilled for all 36 rows —
+  the series is now self-describing.
+- `get_daily_atm_iv_history(..., tenor_band=(lo, hi))` returns a
+  comparable subset when a caller wants one. Default `None` preserves
+  the existing live behaviour exactly.
+- `history.iv_tenor_report(symbol)` answers the question with a number
+  rather than an argument, so it can be re-run as the series grows.
+
+## Correcting Part 5's framing
+
+I called this the highest-value open item and repeated that across
+several sessions. It was the right thing to investigate and a real
+defect — an unlabelled series genuinely cannot be compared — but the
+contamination is small, and I asserted its significance before
+measuring it. The sample is 11–13 rows per symbol and the estimate is
+noisy; re-run `iv_tenor_report()` at ~60 sessions before Candidate A is
+built.
+
+**All four Part 3 candidates' blockers are now resolved or measured. The
+remaining wait is data accumulation, not engineering.**

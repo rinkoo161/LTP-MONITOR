@@ -345,7 +345,21 @@ def backfill_iv_history(symbol, days_back=90):
             skipped_no_data += 1
             continue
         atm_iv = sum(ivs) / len(ivs)
-        history.upsert_daily_atm_iv(symbol, day, atm_iv)
+        # Store the TENOR alongside the level (2026-08-09). Without it
+        # the series is not self-describing and a 5-day reading is
+        # indistinguishable from a 28-day one — which is term structure,
+        # not volatility. _dte was already computed above for the
+        # expiry-day guard; reuse it rather than recomputing.
+        _tenor = None
+        if _exp:
+            try:
+                _y2, _m2, _d2 = (int(x) for x in _exp.split("-"))
+                _dy2, _dm2, _dd2 = (int(x) for x in day.split("-"))
+                _tenor = (datetime(_y2, _m2, _d2)
+                          - datetime(_dy2, _dm2, _dd2)).days + 1
+            except (ValueError, TypeError):
+                _tenor = None
+        history.upsert_daily_atm_iv(symbol, day, atm_iv, _tenor)
         processed += 1
     return {"days_processed": processed, "days_skipped_cached": skipped_cached,
            "days_skipped_no_data": skipped_no_data,
