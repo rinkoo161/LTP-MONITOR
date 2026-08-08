@@ -1143,3 +1143,94 @@ deleted; no parameter was tuned; no sweep was run. The two changes this
 work identifies as necessary — wiring `risk_engine.backfill_iv_history()`
 into the EOD job, and logging every tuner evaluation — are recommendations
 awaiting sign-off, not applied changes.**
+
+---
+
+# Part 5 — Candidate C tested. It fails, and it was never detectable.
+
+Run under the Part 4 protocol, which was frozen before this. Nothing was
+tuned. `scratch/c_gapfade.py`.
+
+The spread could not be priced historically — `daily_atm_iv` starts
+2026-07 and chain data 2026-07-29 — so this measures the **directional
+component in index points**, which needs no IV assumption. Break-evens
+are the pre-registered linear equivalents (net delta ~0.30, 1 lot):
+13.0 NIFTY pts, 28.1 BANKNIFTY pts. A credit spread also earns theta, so
+this is a FLOOR on the structure, not the whole of it.
+
+## Training portion (pre-2026-03-16, holdout excluded)
+
+| symbol | n | mean fade | sd | t | break-even | verdict |
+|---|---:|---:|---:|---:|---:|---|
+| NIFTY | 99 | **+7.73 pts** | 124.8 | +0.62 | 13.0 | below |
+| BANKNIFTY | 115 | **−32.70 pts** | 310.3 | −1.13 | 28.1 | wrong sign |
+
+BANKNIFTY's point estimate is **negative**: on that index a qualifying
+gap CONTINUES on average, it does not fade. That is the opposite of the
+hypothesis.
+
+## Holdout — touched once, as pre-committed
+
+| symbol | n | mean fade | t | break-even |
+|---|---:|---:|---:|---:|
+| NIFTY | 48 | −2.39 pts | −0.10 | 13.0 |
+| BANKNIFTY | 51 | −12.57 pts | −0.17 | 28.1 |
+
+Negative on both, t ≈ 0. It agrees with the training result rather than
+contradicting it, so there is no conflict to adjudicate.
+
+## Pre-registered kill conditions — three fired
+
+Candidate C's kill condition was: *mean net <= 0 at n >= 283, OR the
+fade capture is positive but below the 16% break-even, OR results
+reverse sign between the 2024-2025 and 2026 halves.*
+
+1. **NIFTY capture is positive but below break-even** (+7.73 vs 13.0).
+   Clause 2. Fired.
+2. **NIFTY sign flips between halves**: −4.60 (n=49, to 2025-04-07) then
+   +19.81 (n=50). Clause 3. Fired.
+3. BANKNIFTY does not even reach clause 2 — its capture is negative.
+
+Neither symbol approaches the promotion gate's t >= 3.0, so the deflated
+Sharpe and Benjamini-Hochberg steps are moot; nothing survives to
+correct.
+
+## The finding that outlives the candidate
+
+Per-session noise dwarfs the edge we would need:
+
+| symbol | sd | break-even | n for 80% power | qualifying sessions | years required |
+|---|---:|---:|---:|---:|---:|
+| NIFTY | 124.8 pts | 13.0 pts | **724** | ~50/yr | **15** |
+| BANKNIFTY | 310.3 pts | 28.1 pts | **957** | ~58/yr | **17** |
+
+**Even if the fade existed at exactly break-even size, we could not
+demonstrate it inside 15 years.** The standard deviation is ten times
+the edge. This is not "the strategy failed" — it is "this class of
+trade is structurally undetectable at our cost structure and trade
+volume", which is precisely the question Part 0 was built to ask, now
+answered for a real candidate rather than in the abstract.
+
+It also confirms the risk flagged in Part 3: opening gaps in Indian
+indices are largely information-driven, and information-driven gaps
+continue rather than fade. BANKNIFTY's negative mean on 115 training
+sessions is that effect showing up directly.
+
+## What was NOT done
+
+- Nothing was tuned. The gap threshold, the 50% retrace filter, the
+  09:45 entry and the strike distance are as pre-registered.
+- No indicator was added to separate "information" gaps from
+  "imbalance" gaps. That is the treadmill this exercise exists to
+  escape, and Part 3 said so in advance.
+- The stopping sentence is NOT yet invoked. It requires all three
+  candidates tested; A and B are still waiting on data.
+
+## Status of the three candidates
+
+| | family | status |
+|---|---|---|
+| A conditional short premium | VRP | **untested** — needs ~60 sessions of `daily_atm_iv`, ~2026-11 |
+| B expiry-day max-OI pin | gamma | **untested** — needs ~20 expiries, ~2026-12 |
+| C opening-gap fade | liquidity provision | **DEAD** — kill conditions 2 and 3 fired; holdout spent |
+
