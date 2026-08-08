@@ -177,6 +177,49 @@ def classify_bias(title):
     return "neutral"
 
 
+# 2026-08-08 — the LLM decides `risk_event` with no definition of what
+# one IS, and it shows. Of 114 flagged events in activity.log:
+#
+#     23  described MIXED conditions ("both positive and negative")
+#      7  had an EMPTY note, or the literal prompt placeholder "<one line>"
+#      5  described purely POSITIVE developments ("indices ended higher
+#         amid easing US-Iran tensions")
+#
+# 27 distinct notes — nearly a quarter — where the classifier's OWN
+# description says it is not a risk event. Each one fires a HIGH alert,
+# and when it lands with a directional sentiment it blocks trades for up
+# to news_block_minutes via news_risk_opportunity().
+#
+# This is a PRECISE NEGATIVE filter, deliberately: it rejects only what
+# is demonstrably not an event. The tempting alternative — requiring a
+# HIGH_SEVERITY_RE keyword — would have suppressed a genuine one already
+# in the log ("Sensex drops over 200 points ... due to Strait of Hormuz
+# tensions" matches none of those words). Failing open on anything
+# ambiguous is the right direction for a risk gate.
+MIXED_RE = re.compile(
+    r"\bmixed\b|both positive and negative|both\b.{0,30}\band negative",
+    re.I)
+
+
+def is_material_risk_event(note):
+    """Does this risk_event's own description describe an actual event?
+
+    Returns (material, reason). Reuses classify_bias() rather than a
+    second set of sentiment regexes — the news wording has already been
+    forked once in this codebase and collapsed back to one definition.
+    """
+    n = (note or "").strip()
+    if not n:
+        return False, "empty note"
+    if n.startswith("<") and n.endswith(">"):
+        return False, f"prompt placeholder left verbatim ({n!r})"
+    if MIXED_RE.search(n):
+        return False, "describes mixed/balanced conditions, not an event"
+    if classify_bias(n) == "bullish":
+        return False, "describes purely positive developments"
+    return True, ""
+
+
 def classify_category(title):
     for cat, rx in CATEGORY_RE.items():
         if rx.search(title):

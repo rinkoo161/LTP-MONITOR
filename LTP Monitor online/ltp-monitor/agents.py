@@ -3201,10 +3201,24 @@ class NewsAgent(Agent):
         self.bus.set("news_stale_warned", False)
         if config.load().get("ai_engine", "local") != "off":
             try:
+                # risk_event is DEFINED here (2026-08-08). It used to be
+                # asked for with no definition at all, and the model
+                # answered "true" for mixed conditions, for purely
+                # positive news, and once for the placeholder itself —
+                # 33 of 114 flagged events. `note` no longer uses angle
+                # brackets, because "<one line>" came back verbatim 6
+                # times and was flagged as a risk event.
                 out = claude(
-                    "Market news headlines for Indian indices below. Reply "
-                    "ONLY JSON: {\"sentiment\":\"bullish|bearish|neutral\","
-                    "\"risk_event\":true|false,\"note\":\"<one line>\"}\n\n"
+                    "Market news headlines for Indian indices below.\n"
+                    "risk_event means a SPECIFIC, DATEABLE event likely to "
+                    "move the index in the next hour — a rate decision, "
+                    "geopolitical escalation, circuit breaker, large "
+                    "default, or similar. General conditions, mixed "
+                    "sentiment, routine moves and positive news are NOT "
+                    "risk events; answer false for those.\n"
+                    "Reply ONLY JSON: {\"sentiment\":\"bullish|bearish|"
+                    "neutral\",\"risk_event\":true|false,\"note\":\"one "
+                    "short sentence naming the event\"}\n\n"
                     + "\n".join(heads), None, 200)
                 j = json.loads(out.replace("```json", "").replace("```", "").strip())
             except ClaudeAuthError as e:
@@ -3216,6 +3230,22 @@ class NewsAgent(Agent):
         else:
             j = {"sentiment": "neutral", "risk_event": False,
                  "note": "headlines collected (AI off)"}
+        # The prompt above asks for a definition; this ENFORCES it.
+        # Load-bearing rather than belt-and-braces: ai_engine may be
+        # "off" or unreachable, prompts drift, and a model is free to
+        # ignore an instruction. news_engine owns the wording rules —
+        # extended there, not re-implemented here, because the news
+        # sentiment logic has already been forked once in this codebase
+        # and had to be collapsed back to one definition.
+        if j.get("risk_event"):
+            import news_engine as _ne
+            _material, _why = _ne.is_material_risk_event(j.get("note"))
+            if not _material:
+                j["risk_event"] = False
+                j["risk_event_downgraded"] = _why
+                self.bus.log(self.name,
+                             f"news risk_event downgraded — {_why}: "
+                             f"{str(j.get('note'))[:90]!r}")
         j["headlines"] = heads[:8]
         # State-transition alerting: alert when a risk event first
         # appears, and only re-alert periodically (a cooldown) while it

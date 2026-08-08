@@ -4,6 +4,76 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.64 — the news risk gate was firing on non-events (2026-08-08)
+
+`NewsAgent` asked the model for `risk_event` with **no definition of
+what one is**. Of 114 flagged events in `activity.log`:
+
+    23  described MIXED conditions ("both positive and negative")
+     6  were the literal prompt placeholder "<one line>"
+     3  described purely POSITIVE developments
+     1  was empty
+    ---
+    33  where the classifier's OWN description says it is not an event
+
+Each fired a HIGH alert, and when one lands with a directional sentiment
+it blocks trades for up to `news_block_minutes` via
+`news_risk_opportunity()` — which `RiskAgent.evaluate()` consults on
+every order, including manual ones.
+
+The trigger was a real alert: *"Mixed economic news including both
+positive (e.g., India's resilient economy) and negative (e.g., US Senate
+Russia sanctions bill) developments."* rated HIGH. A classifier that
+reads "some good, some bad" and returns maximum risk is describing every
+day that has ever happened.
+
+### Two changes, and the second is the load-bearing one
+
+1. **The prompt now defines `risk_event`** — a specific, dateable event
+   likely to move the index within the hour; general conditions, mixed
+   sentiment, routine moves and positive news are explicitly not. The
+   `note` field also stopped using angle brackets, because `<one line>`
+   came back verbatim six times and was flagged as a risk event.
+2. **`news_engine.is_material_risk_event()` ENFORCES it server-side.**
+   Load-bearing rather than belt-and-braces: `ai_engine` may be `off` or
+   unreachable, prompts drift, and a model is free to ignore an
+   instruction. It lives in `news_engine` and calls the existing
+   `classify_bias()` — the news sentiment logic has already been forked
+   once in this codebase and had to be collapsed back to one definition.
+
+### It is a PRECISE NEGATIVE, deliberately
+
+It rejects only what is demonstrably not an event: empty, placeholder,
+mixed/balanced, or purely positive. The tempting tighter rule —
+requiring a `HIGH_SEVERITY_RE` keyword — would have been WRONG. It
+suppresses a genuine event already in the log: *"Sensex drops over 200
+points and Nifty tests 23,600 due to Strait of Hormuz tensions"* matches
+none of those words. For a risk gate, ambiguity must fail toward
+KEEPING the event: a spurious block costs one missed trade, a missed
+block means trading into an event.
+
+Replayed against all 114 historical notes:
+
+    81 kept    23 mixed    6 placeholder    3 positive    1 empty
+
+and the Strait of Hormuz event survives.
+
+### A test that asserted the wrong thing
+
+The first version required *"Indian indices ended higher amid easing
+US-Iran tensions"* to be rejected as positive. It should not be:
+`classify_bias()` correctly returns neutral because the text carries
+both bullish ("higher", "easing") and bearish ("tensions") wording, and
+the design says ambiguity is kept. The test was wrong, not the filter —
+corrected, with the ambiguous cases now asserted as deliberately kept.
+
+Mutation-checked, all five DETECTED: mixed no longer rejected, empty no
+longer rejected, positive no longer rejected, the agent no longer
+enforcing, and — most importantly — over-tightening to a keyword
+whitelist.
+
+Suite 139/141, 0 failed.
+
 ## v59.63 — Telegram messages: HTML, escaped, and structured (2026-08-08)
 
 Asked for "proper indication and structure" rather than plain text. That
