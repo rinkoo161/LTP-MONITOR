@@ -40,6 +40,19 @@ DEFAULTS = {
     "marketsense_enabled": True,
     "marketsense_url": "http://127.0.0.1:8100",
     "marketsense_poll_sec": 300,
+    # Order gate fed by MarketSense's own risk verdicts (2026-08-08).
+    # Only "hard_block" stops an order; "penalty"/"suppressed" are
+    # recorded and do NOT block — treating an advisory downgrade as a
+    # veto would hand a separate process the power to halt trading.
+    "marketsense_risk_gate_enabled": True,
+    # A flag is only honoured while the LINK is fresh. MarketSense
+    # keeps the last good values on the bus through an outage, so
+    # without an age limit a hard_block set before a crash would block
+    # that symbol forever. 900s = 3x the 300s poll, so a single missed
+    # poll does not disarm the gate. FAILS OPEN by design: an outage in
+    # an optional advisory service must not stop trading, the same rule
+    # the LLM layer already follows.
+    "marketsense_max_flag_age_sec": 900,
     # ---- Session boundaries (NSE change effective 2026-08-03) ----
     # Index F&O now trades until 15:40 (was 15:30), while INTRADAY F&O
     # positions are auto-squared by the broker at 15:25. Those are two

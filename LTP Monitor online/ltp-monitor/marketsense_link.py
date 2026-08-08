@@ -57,6 +57,12 @@ class MarketSenseAgent(threading.Thread):
         self.status = "idle"
         self.summary = ""
         self._last_poll = 0.0
+        # Symbols currently carrying an ms_risk_flag. Needed because
+        # a flag that is only ever SET is sticky forever: a symbol
+        # flagged once stayed flagged until restart even after
+        # MarketSense cleared it. Harmless while nothing read the
+        # key; a permanent phantom block once RiskAgent does.
+        self._flagged = set()
         self._last_ok = None
 
     # -- Orchestrator duck-type ----------------------------------------
@@ -99,7 +105,8 @@ class MarketSenseAgent(threading.Thread):
             self.summary = (f"MarketSense unreachable"
                             + (f" (data {stale_min}m stale)" if stale_min else
                                " (no data yet)"))
-            self.bus.set("ms_link", {"ok": False, "error": str(e)[:120],
+            self.bus.set("ms_link", {"ok": False, "at_ts": self._last_ok,
+                                     "error": str(e)[:120],
                                      "stale_min": stale_min})
             return  # keep whatever was on the bus; display marks staleness
 
@@ -115,6 +122,7 @@ class MarketSenseAgent(threading.Thread):
                      and (s.get("conviction") or 0) >= 70]
         self.bus.set("ms_watchlist", watchlist)
         n_risk = 0
+        _flagged_now = set()
         for s in signals:
             sym = s.get("symbol")
             if not sym:
@@ -125,13 +133,25 @@ class MarketSenseAgent(threading.Thread):
                     "verdict": s.get("risk_verdict"),
                     "stance": s.get("stance"),
                     "at": s.get("as_of")})
+                _flagged_now.add(sym)
                 n_risk += 1
             if s.get("entry") and s.get("invalidation") is not None:
                 self.bus.set(f"ms_levels:{sym}", {
                     "entry": s.get("entry"), "target": s.get("target"),
                     "stop": s.get("invalidation"),
                     "profile": s.get("profile"), "at": s.get("as_of")})
-        self.bus.set("ms_link", {"ok": True, "events": len(pulse),
+        # Clear symbols MarketSense no longer flags. Without this the
+        # gate in RiskAgent would block a symbol forever on a verdict
+        # that was withdrawn hours ago.
+        for _gone in (self._flagged - _flagged_now):
+            self.bus.set(f"ms_risk_flag:{_gone}", None)
+        self._flagged = _flagged_now
+        # at_ts: epoch of the last SUCCESSFUL poll. "at" is a %H:%M:%S
+        # string, which cannot be aged across midnight and cannot be
+        # compared at all. RiskAgent needs to know whether this data is
+        # current before it is allowed to stop a trade.
+        self.bus.set("ms_link", {"ok": True, "at_ts": time.time(),
+                                 "events": len(pulse),
                                  "watchlist": len(watchlist),
                                  "risk_flags": n_risk,
                                  "at": datetime.now(IST).strftime("%H:%M:%S")})

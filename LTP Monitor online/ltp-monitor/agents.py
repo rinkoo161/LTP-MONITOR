@@ -3770,6 +3770,39 @@ class RiskAgent(Agent):
         # really a profitable trail exit.
         check(not symbol_paused(job["symbol"], cfg),
               f"{job['symbol']} not on hold")
+        # MarketSense risk gate (2026-08-08). marketsense_link.py's own
+        # docstring says this gate "belongs in RiskAgent", and this is
+        # the one function every order passes through, including manual
+        # dashboard clicks via Orchestrator.manual_trade.
+        #
+        # THREE DELIBERATE LIMITS, because this hands a SEPARATE PROCESS
+        # partial control over whether we trade:
+        #   1. Only "hard_block" blocks. "penalty"/"suppressed" are
+        #      advisory downgrades; vetoing on those would let a
+        #      second-opinion service halt the book.
+        #   2. The flag is honoured only while the LINK is fresh. The
+        #      bridge deliberately keeps its last good values on the bus
+        #      through an outage, so an unaged flag would block a symbol
+        #      forever on a verdict withdrawn hours ago.
+        #   3. It FAILS OPEN. If MarketSense is down or slow, trading
+        #      continues and the skip is stated in the checks list —
+        #      an optional advisory service must never be able to stop
+        #      trading by falling over, the same rule llm.py follows.
+        if cfg.get("marketsense_risk_gate_enabled", True):
+            _ms = self.bus.get(f"ms_risk_flag:{job['symbol']}") or {}
+            _link = self.bus.get("ms_link") or {}
+            _age = time.time() - (_link.get("at_ts") or 0)
+            _max_age = cfg.get("marketsense_max_flag_age_sec", 900)
+            _fresh = bool(_link.get("ok")) and _age <= _max_age
+            if _fresh:
+                check(_ms.get("verdict") != "hard_block",
+                      f"MarketSense: {job['symbol']} not hard-blocked")
+            else:
+                # Honest label: says the gate did NOT run. The 2026-08-03
+                # lesson about "✓ SENSEX is on hold" applies — a tick
+                # must never imply a check passed when it was skipped.
+                check(True, f"MarketSense gate skipped — link stale "
+                            f"({_age:.0f}s > {_max_age}s)")
         # PER-TRADE RUPEE CAP, EVALUATED HERE RATHER THAN AT EXECUTION.
         #
         # 2026-08-06. This ceiling already existed, but only inside

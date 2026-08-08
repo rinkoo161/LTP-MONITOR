@@ -4,6 +4,69 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.61 — ms_risk_flag wired into RiskAgent (2026-08-08)
+
+`marketsense_link.py`'s own docstring said this gate "belongs in
+RiskAgent". It is now there — inside `RiskAgent.evaluate()`, the one
+function every order passes through, including manual dashboard clicks
+via `Orchestrator.manual_trade`.
+
+This hands a SEPARATE PROCESS partial control over whether we trade, so
+the failure modes matter more than the happy path. **Three deliberate
+limits:**
+
+1. **Only `hard_block` blocks.** `penalty` and `suppressed` are advisory
+   downgrades and are recorded, not vetoed. Blocking on those would let
+   a second-opinion service halt the book.
+2. **The flag is honoured only while the LINK is fresh** (default 900s =
+   3x the 300s poll, `marketsense_max_flag_age_sec`).
+3. **It FAILS OPEN.** MarketSense down, slow, or absent -> trading
+   continues and the skip is stated in the checks list. An optional
+   advisory service must never stop trading by falling over — the same
+   rule `llm.py` already follows.
+
+Config: `marketsense_risk_gate_enabled` (default True) turns it off
+without a deploy.
+
+### Two defects in the bridge had to be fixed first
+
+Wiring it as-shipped would have produced permanent phantom blocks:
+
+1. **Sticky flags.** The loop only ever SET `ms_risk_flag:{sym}` — it
+   never removed one when MarketSense stopped flagging the symbol. Once
+   flagged, a symbol stayed flagged until restart. Harmless while
+   nothing read the key; a permanent block the moment something did.
+   The bridge now tracks what it flagged and clears what went clean.
+2. **No machine-readable freshness.** `ms_link["at"]` is a `%H:%M:%S`
+   string that cannot be aged across midnight. On a poll failure the
+   bridge deliberately returns early and keeps its last good values on
+   the bus, so a `hard_block` set just before an outage would outlive it
+   indefinitely. `ms_link` now carries `at_ts` (epoch of the last
+   SUCCESSFUL poll).
+
+### Honest labels
+
+When the link is stale the check reads *"MarketSense gate skipped — link
+stale (Ns > Ms)"* rather than a bare tick. The 2026-08-03 lesson applies:
+`✓ SENSEX is on hold` read as held-and-approved-anyway. A tick must
+never imply a check ran when it was skipped.
+
+### Also closed: the SettingsIn gap
+
+`marketsense_enabled`, `marketsense_url` and `marketsense_poll_sec`
+arrived in v59.59 in `config.DEFAULTS` but not in `SettingsIn`, so they
+could not be set from Settings at all and `test_settings_model_sync` was
+red on `main`. All five keys (those three plus the two new gate keys)
+are now in the model. **Suite is 137/139, 0 failed** — green for the
+first time since v59.59 landed.
+
+Mutation-checked, all four detected: gate disabled outright; blocking on
+`penalty`/`suppressed`; staleness ignored; flag-clearing removed.
+
+Verified from live data, not fixtures: MarketSense is up on :8100 and
+both endpoints the bridge calls return HTTP 200 (`/api/pulse` 9 entries,
+`/api/signals` 152).
+
 ## v59.60 — "once per day" was once per RESTART (2026-08-08)
 
 `LearningAgent`'s daily maintenance was gated on

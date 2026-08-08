@@ -26,7 +26,7 @@ from agents import Orchestrator, compute_momentum
 import agents
 
 BASE = os.path.dirname(os.path.abspath(__file__))
-APP_VERSION = "v59.60"   # maintained per explicit request; last delivered was v49
+APP_VERSION = "v59.61"   # maintained per explicit request; last delivered was v49
 
 app = FastAPI(title="LTP Option Chain Monitor")
 
@@ -648,6 +648,16 @@ class SettingsIn(BaseModel):
     macro_providers_enabled: list | None = None
     macro_intrasession_enabled: bool | None = None
     macro_intrasession_refresh_sec: int | None = None
+    # MarketSense bridge + its order gate. A DEFAULTS key absent
+    # from this model cannot be set from Settings at all, which is
+    # what test_settings_model_sync guards. The three bridge keys
+    # arrived with v59.59 and were missing; the two gate keys are
+    # from v59.61 (2026-08-08).
+    marketsense_enabled: bool | None = None
+    marketsense_url: str | None = None
+    marketsense_poll_sec: int | None = None
+    marketsense_risk_gate_enabled: bool | None = None
+    marketsense_max_flag_age_sec: int | None = None
     macro_yf_interval: str | None = None
     macro_yf_period: str | None = None
     macro_debug_logging: bool | None = None
