@@ -415,6 +415,13 @@ class DhanOrders:
             "price": float(price) if order_type == "LIMIT" else 0,
             "disclosedQuantity": 0,
             "afterMarketOrder": False,
+            # v59.69 (third-eye Tier 3) — client-side order tag. Dhan
+            # echoes correlationId back in the order book, so a timed-out
+            # placement can be identified there instead of guessed at.
+            # (Dhan does not dedupe on it — the retry protection is the
+            # exit-side cooldown in agents.exit(); this makes the manual
+            # and future order_status() reconciliation possible.)
+            "correlationId": f"LTP{int(time.time() * 1000) % 10 ** 12}",
         }
         r = requests.post(API + "/orders", json=body, headers=self.c._h,
                           timeout=15)

@@ -26,7 +26,7 @@ from agents import Orchestrator, compute_momentum
 import agents
 
 BASE = os.path.dirname(os.path.abspath(__file__))
-APP_VERSION = "v59.68"   # maintained per explicit request; last delivered was v49
+APP_VERSION = "v59.69"   # maintained per explicit request; last delivered was v49
 
 app = FastAPI(title="LTP Option Chain Monitor")
 
@@ -932,6 +932,10 @@ class SettingsIn(BaseModel):
     ollama_timeout: int | None = None
     pa_min_trades_for_confidence: int | None = None
     gate_min_days: int | None = None   # v59.66 — min OOS days before the live gate scores
+    exit_quote_max_age_sec: int | None = None  # v59.69 — max quote age for exit decisions
+    broker_reconcile_interval_sec: int | None = None  # v59.69 — live position reconcile cadence
+    exit_retry_cooldown_sec: int | None = None  # v59.69 — cooldown after failed live SELL
+    slippage_impact_alpha: float | None = None  # v59.69 — size impact exponent on spread cost
     # v59.68 — option cost rates (now registered in DEFAULTS; see config.py)
     opt_brokerage_per_order: float | None = None
     opt_stt_sell_pct: float | None = None

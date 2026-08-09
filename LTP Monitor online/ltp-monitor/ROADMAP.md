@@ -4,6 +4,80 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.69 — Tier 3: the risk stack bounds the day; exits act only on real, fresh prices (2026-08-09)
+
+Verification and fixes for the third-eye review's execution-realism
+findings. July 30 (−₹78,740 against a ₹10,000 daily limit) was the
+anatomy lesson; each of its enabling defects is closed:
+
+**One definition of "day P&L", restart-proof.** `realized_pnl_today(bus)`
+derives the figure from `closed_trades` (reloaded from trades.jsonl at
+boot) instead of RiskAgent's incremental counter, which (a) never reset
+on date rollover — the "daily" limit was a since-restart limit — and
+(b) zeroed on any restart while open_state.json re-seeded the open
+positions. The peak-drawdown tracker also rolls over at date change.
+
+**Futures entries pass the daily-loss gate.** `enter_future()` now
+checks `realized_pnl_today − futures_risk_per_trade_rupees` against
+`daily_loss_limit` — the missing gate that let 19 futures trades lose
+₹73,115 on July 30 while the options path was correctly blocked.
+
+**A closed market pre-empts every exit chain.** `spread_exit_reason`'s
+square-off branch moved from LAST to FIRST (it used to run the profit/
+loss/breach chain on after-hours remnant quotes — the 23:52:46 "profit
+target" exits), `_monitor_one` and `_monitor_futures` square off before
+evaluating anything, and the old bottom-of-chain EOD branches are gone.
+Replay parity holds automatically (shared function).
+
+**Exit decisions hold on stale quotes.** New `exit_quote_max_age_sec`
+(default 90): `_monitor_one`/`_monitor_spreads`/`_monitor_futures` skip
+stop/target/trail decisions — and skip writing the stale price into
+pnl/mfe/mae, which the kill-switch sums as if current — when the quote
+is older. `future_ohlc` now carries a `ts` (it had no timestamp to
+check even in principle). Entry gates already had age checks; exits had
+none while the feed's failure backoff reaches 300s.
+
+**Live order lifecycle.** Entry order-of-operations fixed: duplicate
+check → build the position → place the order → register (it used to
+place the LIVE order first, so a KeyError building the dict left a
+live untracked position, and the duplicate check could "abandon" an
+already-sent order). A placement exception now tracks the position as
+`UNCONFIRMED-ERROR` with a HIGH alert — believing we are flat while
+the broker holds a fill is the unrecoverable direction. Exit-side:
+`exit_retry_cooldown_sec` (default 30) stops the 2s-cadence re-fire of
+a SELL whose first attempt may have filled; "LIVE EXIT FAILED" is now a
+HIGH alert, not a feed line that rotates out in ~13 minutes. Dhan
+orders carry a `correlationId` tag so a timed-out placement can be
+identified in the order book. `_reconcile_broker()` (live-only, every
+`broker_reconcile_interval_sec`) finally calls the
+`DhanOrders.positions()` that had zero call sites, compares net qty per
+securityId against the internal book (positions + spread legs +
+futures), and HIGH-alerts every mismatch — report-only, no
+auto-correction from a possibly-partial broker read.
+
+**Fill realism.** Slippage is size-aware: `halfspread(n) = hs₁ × n^α`
+with `slippage_impact_alpha` (default 0.5, square-root impact; the
+measured half-spread distribution — median 0.65 / mean 2.27 / max 15.8
+pts — is thin depth at the touch, and 30% of executed trades exceed one
+lot). Statutory charges stay linear. The PA/S8/S9 replays now resolve
+exits INTRABAR via shared `_bar_exit()` — detection on highs/lows,
+stop-first when a bar spans both (futures_replay's documented
+conservatism), fills AT the level, same-bar T1 ratchets bind from the
+next bar — and entries fill at the NEXT bar's open instead of the
+signal bar's own close.
+
+Not changed: the kill-switch's unrealized-only trigger and 60-minute
+cooldown stand — with the daily-loss gate now closing behind it on
+every path (options AND futures, realized P&L that survives restarts),
+re-entry after a kill no longer has an unbounded afternoon.
+
+Tests: `test_tier3_execution.py` — 24 checks, executable: the shared
+day-P&L definition, the futures gate (blocked and traversed cases),
+closed-market-first exits, the `_bar_exit` truth table, a stubbed
+`replay_pa` run proving next-bar-open fills and level-priced stops,
+size-impact scaling (n^1.5 at α=0.5, linear at α=0), and the broker
+reconciler (mismatch alert, bus publication, paper-mode no-op).
+
 ## v59.68 — Tier 0: the cost models actually run, and the record is restated (2026-08-09)
 
 Verification and fixes for every Tier 0 (measurement integrity) finding

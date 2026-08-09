@@ -802,6 +802,46 @@ def replay_momentum(symbol, params=None, days=None, log=lambda m: None):
     return trades
 
 
+def _bar_exit(pos, bar, is_last):
+    """Intrabar exit resolution for the spot-proxy replays (v59.69,
+    third-eye Tier 3). The old test compared CLOSES only: a bar that
+    pierced the stop and closed back inside did not stop out, a bar
+    that tagged T2 and closed back did not take profit, and every exit
+    filled at the close rather than the level — highs/lows were
+    computed by _resample and never consulted. Rules, matching
+    futures_replay's documented conservatism:
+
+      * detection uses the bar's high/low, not its close;
+      * a bar that spans BOTH stop and target is charged as the STOP —
+        within one minute there is no way to know which printed first,
+        and assuming the target is how a backtest flatters itself;
+      * a T1 ratchet earned from THIS bar's own extremes takes effect
+        from the NEXT bar — crediting a same-bar T1-then-breakeven
+        escape would assume the favourable print came first, the same
+        flattery in a different coat;
+      * stop/target exits fill AT THE LEVEL; only EOD fills at the close.
+
+    Returns (exit_px, reason) or (None, None). Mutates pos's t1/stop
+    ratchet exactly once per bar — call it once.
+    """
+    d = pos["dir"]
+    hi = bar.get("high", bar["close"])
+    lo = bar.get("low", bar["close"])
+    fav = hi if d > 0 else lo
+    adv = lo if d > 0 else hi
+    stop_now = pos["stop"]              # before any ratchet from this bar
+    if not pos["t1_done"] and d * (fav - pos["t1"]) >= 0:
+        pos["t1_done"] = True
+        pos["stop"] = pos["entry"]      # breakeven trail — from next bar
+    if d * (adv - stop_now) <= 0:
+        return stop_now, "stop"
+    if d * (fav - pos["t2"]) >= 0:
+        return pos["t2"], "target-2"
+    if is_last:
+        return bar["close"], "EOD"
+    return None, None
+
+
 def _resample(c1, mins):
     out = []
     for i in range(0, len(c1), mins):
@@ -848,28 +888,37 @@ def replay_pa(symbol, name, params=None, days=None, log=lambda m: None):
             ema_periods.add(int(p.get("slow", 20)))
         precomputed = {"anchor": pa._anchor(c1),
                       "ema": {n: pa._ema(closes_full, n) for n in ema_periods}}
-        pos, taken = None, 0
+        pos, pending, taken = None, None, 0
         for i in range(10, len(c1)):
             win = c1[:i + 1]
             spot = win[-1]["close"]
             if pos:
-                d = pos["dir"]
-                if not pos["t1_done"] and d * (spot - pos["t1"]) >= 0:
-                    pos["t1_done"] = True
-                    pos["stop"] = pos["entry"]          # breakeven trail
-                hit_stop = d * (spot - pos["stop"]) <= 0
-                hit_t2 = d * (spot - pos["t2"]) >= 0
-                eod = i == len(c1) - 1
-                if hit_stop or hit_t2 or eod:
-                    pts = d * (spot - pos["entry"])
+                exit_px, why = _bar_exit(pos, win[-1], i == len(c1) - 1)
+                if exit_px is not None:
+                    pts = pos["dir"] * (exit_px - pos["entry"])
                     trades.append({"day": day, "strategy": name,
                                    "pnl": round(pts * 0.5 * lot - fee, 0),
                                    "risk": abs(pos["entry"] - pos["stop0"]) * 0.5 * lot,
-                                   "reason": "stop" if hit_stop else
-                                             ("target-2" if hit_t2 else "EOD"),
+                                   "reason": why,
                                    "entry_ts": pos["entry_ts"], "exit_ts": win[-1]["ts"],
-                                   "entry_spot": pos["entry_spot"], "exit_spot": spot})
+                                   "entry_spot": pos["entry_spot"], "exit_spot": exit_px})
                     pos = None
+                continue
+            if pending is not None:
+                # v59.69 — fill ONE BAR AFTER the signal, at this bar's
+                # open. The signal was computed from the previous bar's
+                # close; filling at that same close assumed transacting
+                # on the print that generated the signal (third-eye
+                # Tier 1/3 lookahead item). Levels stay as designed at
+                # signal time; the entry price is what was gettable.
+                fill = win[-1].get("open", spot)
+                pos = {"dir": pending["dir"], "entry": fill,
+                       "stop": pending["stop_spot"], "stop0": pending["stop_spot"],
+                       "t1": pending["t1_spot"], "t2": pending["t2_spot"],
+                       "t1_done": False, "entry_ts": win[-1]["ts"],
+                       "entry_spot": fill}
+                pending = None
+                taken += 1
                 continue
             if name == "sg_ema":
                 # v59.66 — sg_ema is NOT dispatched by pa.evaluate() (it
@@ -895,12 +944,7 @@ def replay_pa(symbol, name, params=None, days=None, log=lambda m: None):
                                  params=p, taken_today=taken,
                                  precomputed=precomputed)
             if ev:
-                pos = {"dir": ev["dir"], "entry": ev["entry_spot"],
-                       "stop": ev["stop_spot"], "stop0": ev["stop_spot"],
-                       "t1": ev["t1_spot"], "t2": ev["t2_spot"],
-                       "t1_done": False, "entry_ts": win[-1]["ts"],
-                       "entry_spot": ev["entry_spot"]}
-                taken += 1
+                pending = ev          # fills next bar — see above
     return trades
 
 
@@ -930,42 +974,41 @@ def replay_ew_reversal(symbol, params=None, days=None, log=lambda m: None):
         c1 = history.day_index_candles(symbol, day, for_compute=True)
         if len(c1) < 60:
             continue
-        pos, taken = None, 0
+        pos, pending, taken = None, None, 0
         for i in range(30, len(c1)):
             win = c1[:i + 1]
             spot = win[-1]["close"]
             if pos:
-                d = pos["dir"]
-                if not pos["t1_done"] and d * (spot - pos["t1"]) >= 0:
-                    pos["t1_done"] = True
-                    pos["stop"] = pos["entry"]
-                hit_stop = d * (spot - pos["stop"]) <= 0
-                hit_t2 = d * (spot - pos["t2"]) >= 0
-                eod = i == len(c1) - 1
-                if hit_stop or hit_t2 or eod:
-                    pts = d * (spot - pos["entry"])
+                exit_px, why = _bar_exit(pos, win[-1], i == len(c1) - 1)
+                if exit_px is not None:
+                    pts = pos["dir"] * (exit_px - pos["entry"])
                     trades.append({"day": day, "strategy": "ew_reversal",
                                    "subtype": pos.get("subtype"),
                                    "pnl": round(pts * 0.5 * lot - fee, 0),
                                    "risk": abs(pos["entry"] - pos["stop0"]) * 0.5 * lot,
-                                   "reason": "stop" if hit_stop else
-                                             ("target-2" if hit_t2 else "EOD"),
+                                   "reason": why,
                                    "entry_ts": pos["entry_ts"], "exit_ts": win[-1]["ts"],
-                                   "entry_spot": pos["entry_spot"], "exit_spot": spot})
+                                   "entry_spot": pos["entry_spot"], "exit_spot": exit_px})
                     pos = None
+                continue
+            if pending is not None:
+                # v59.69 — next-bar-open fill; see replay_pa.
+                fill = win[-1].get("open", spot)
+                pos = {"dir": pending["dir"], "entry": fill,
+                       "stop": pending["stop_spot"], "stop0": pending["stop_spot"],
+                       "t1": pending["t1_spot"], "t2": pending["t2_spot"],
+                       "t1_done": False, "entry_ts": win[-1]["ts"],
+                       "entry_spot": fill,
+                       "subtype": pending.get("setup_subtype")}
+                pending = None
+                taken += 1
                 continue
             pivots = structure.zigzag_series(win, dev)
             ev, _det = ew_reversal.evaluate(win, _resample(win, 5),
                                             _resample(win, 15), params=p,
                                             taken_today=taken, pivots=pivots)
             if ev:
-                pos = {"dir": ev["dir"], "entry": ev["entry_spot"],
-                       "stop": ev["stop_spot"], "stop0": ev["stop_spot"],
-                       "t1": ev["t1_spot"], "t2": ev["t2_spot"],
-                       "t1_done": False, "entry_ts": win[-1]["ts"],
-                       "entry_spot": ev["entry_spot"],
-                       "subtype": ev.get("setup_subtype")}
-                taken += 1
+                pending = ev          # fills next bar
     return trades
 
 
@@ -989,28 +1032,32 @@ def replay_ta_elliott(symbol, params=None, days=None, log=lambda m: None):
         c1 = history.day_index_candles(symbol, day, for_compute=True)
         if len(c1) < 120:
             continue
-        pos, taken = None, 0
+        pos, pending, taken = None, None, 0
         for i in range(60, len(c1)):
             win = c1[:i + 1]
             spot = win[-1]["close"]
             if pos:
-                d = pos["dir"]
-                if not pos["t1_done"] and d * (spot - pos["t1"]) >= 0:
-                    pos["t1_done"] = True
-                    pos["stop"] = pos["entry"]
-                hit_stop = d * (spot - pos["stop"]) <= 0
-                hit_t2 = d * (spot - pos["t2"]) >= 0
-                eod = i == len(c1) - 1
-                if hit_stop or hit_t2 or eod:
-                    pts = d * (spot - pos["entry"])
+                exit_px, why = _bar_exit(pos, win[-1], i == len(c1) - 1)
+                if exit_px is not None:
+                    pts = pos["dir"] * (exit_px - pos["entry"])
                     trades.append({"day": day, "strategy": "ta_elliott",
                                    "pnl": round(pts * 0.5 * lot - fee, 0),
                                    "risk": abs(pos["entry"] - pos["stop0"]) * 0.5 * lot,
-                                   "reason": "stop" if hit_stop else
-                                             ("target-2" if hit_t2 else "EOD"),
+                                   "reason": why,
                                    "entry_ts": pos["entry_ts"], "exit_ts": win[-1]["ts"],
-                                   "entry_spot": pos["entry_spot"], "exit_spot": spot})
+                                   "entry_spot": pos["entry_spot"], "exit_spot": exit_px})
                     pos = None
+                continue
+            if pending is not None:
+                # v59.69 — next-bar-open fill; see replay_pa.
+                fill = win[-1].get("open", spot)
+                pos = {"dir": pending["dir"], "entry": fill,
+                       "stop": pending["stop_spot"], "stop0": pending["stop_spot"],
+                       "t1": pending["t1_spot"], "t2": pending["t2_spot"],
+                       "t1_done": False, "entry_ts": win[-1]["ts"],
+                       "entry_spot": fill}
+                pending = None
+                taken += 1
                 continue
             c5w, c15w = _resample(win, 5), _resample(win, 15)
             if len(c5w) < int(p.get("bb_period", 20)) + 3:
@@ -1020,12 +1067,7 @@ def replay_ta_elliott(symbol, params=None, days=None, log=lambda m: None):
             ev, _conf = _tae.evaluate(state, win, params=p,
                                       taken_today=taken, pivots=pivots)
             if ev:
-                pos = {"dir": ev["dir"], "entry": ev["entry_spot"],
-                       "stop": ev["stop_spot"], "stop0": ev["stop_spot"],
-                       "t1": ev["t1_spot"], "t2": ev["t2_spot"],
-                       "t1_done": False, "entry_ts": win[-1]["ts"],
-                       "entry_spot": ev["entry_spot"]}
-                taken += 1
+                pending = ev          # fills next bar
     return trades
 
 

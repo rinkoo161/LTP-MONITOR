@@ -268,6 +268,23 @@ DEFAULTS = {
     "max_spread_capital_pct": 60.0,
     "spread_reentry_cooldown_min": 15,
     "pa_min_trades_for_confidence": 15,  # min backtest trades before a version can go live
+    "slippage_impact_alpha": 0.5,  # v59.69 — size impact exponent on the bid-ask
+                           # component: halfspread(n) = halfspread_1 × n^alpha.
+                           # 0 = linear (no impact, the old assumption), 0.5 =
+                           # square-root (standard empirical form), 1.0 = walks
+                           # the book proportionally. See size_aware_cost.py for
+                           # the measured band this parameterises.
+    "exit_retry_cooldown_sec": 30,  # v59.69 — after a live SELL fails/times out,
+                           # refuse to re-place for this long (the first order
+                           # may have filled; a 2s-cadence re-fire was a
+                           # duplicate-order generator)
+    "broker_reconcile_interval_sec": 300,  # v59.69 — how often the LIVE book is
+                           # compared against the broker's actual positions
+                           # (paper mode: skipped, nothing to reconcile)
+    "exit_quote_max_age_sec": 90,  # v59.69 — max quote age for EXIT decisions
+                           # (stops/targets/trails). Entry gates had age checks;
+                           # exits had none, and the feed's failure backoff
+                           # reaches 300s. Older than this: hold, don't act.
     "gate_min_days": 10,   # v59.66 — min DISTINCT out-of-sample days before the
                            # promotion gate will score a strategy at all. The day
                            # is the independent observation (same-day trades share

@@ -373,6 +373,25 @@ def symbol_paused(symbol, cfg=None):
     return str(symbol).upper() in {str(x).upper() for x in paused}
 
 
+def realized_pnl_today(bus):
+    """Sum of TODAY's closed-trade net P&L — the ONE definition of "day
+    P&L" for risk gating.
+
+    v59.69 (third-eye Tier 3) — RiskAgent used to keep an incremental
+    `self.daily_pnl` that was (a) never reset on date rollover, so the
+    "daily" loss limit was actually a since-restart limit, and (b) zeroed
+    by any restart while open_state.json re-seeded the open positions —
+    a mid-day restart forgot the morning's realized losses entirely
+    (July 30 ended at 7.9× the daily limit partly on this). Deriving the
+    figure from `closed_trades` — loaded from trades.jsonl at startup and
+    appended on every close — is correct across restarts AND rollovers
+    by construction, with nothing to remember to reset.
+    """
+    today = now_ist().strftime("%Y-%m-%d")
+    return sum((t.get("pnl") or 0) for t in (bus.get("closed_trades") or [])
+               if (t.get("closed_date") or (t.get("closed_at") or "")[:10]) == today)
+
+
 def spread_exit_value(credit, pnl_ps):
     """The spread's VALUE at exit — the `premium_out` the cost model needs.
 
@@ -420,6 +439,18 @@ def spread_exit_reason(sp, pnl_ps, spot, cfg, now_ts, market_is_open,
     time.time()/market_open() calls precisely so a replay can drive
     historical timestamps through the identical code.
     """
+    # --- market closed: square off, evaluate NOTHING ------------------
+    # v59.69 (third-eye Tier 3). This check used to sit LAST, below the
+    # profit-target/loss-limit/breach chain — so after the session ended,
+    # any non-zero last-traded premiums still in the bus kept the whole
+    # chain live, and on 2026-07-30 three spreads "hit profit target" /
+    # "loss limit" at 23:52:46 on phantom night-time prices. A closed
+    # market has exactly one legitimate action, the square-off, and it
+    # must not be preceded by decisions that pretend fills are available.
+    # (Replay parity holds automatically: the final frame of a replay day
+    # now labels as square-off rather than whichever branch fired first.)
+    if not market_is_open:
+        return "market closing — squaring off spread"
     # --- defense zone: act BEFORE a full breach, not only at it -------
     if cfg.get("spread_defense_enabled", True) and spot and not sp.get("defended"):
         short_leg = sp["legs"][0]["leg"]
@@ -472,8 +503,6 @@ def spread_exit_reason(sp, pnl_ps, spot, cfg, now_ts, market_is_open,
         elapsed = (now_ts - sp["opened_ts"]) / 60
         return (f"time stop ({elapsed:.0f}m ≥ {cfg['time_stop_minutes']}m) "
                 f"— forcing a decision rather than waiting indefinitely")
-    if not market_is_open:
-        return "market closing — squaring off spread"
     return None
 
 
@@ -590,11 +619,34 @@ def _cost_parts(kind, symbol, lots, premium_in, premium_out, cfg,
                                         cfg=cfg, lot=lot)
             r = {"statutory": b["statutory_rupees"],
                  "spread": b["items"]["slippage"]}
+            # v59.69 — same square-root size impact as the options
+            # branch below (the ×lots after this block stays linear;
+            # this factor is the EXTRA walk into the book per lot).
+            if lots > 1:
+                _alpha = max(0.0, min(1.0, float(
+                    cfg.get("slippage_impact_alpha", 0.5) or 0.0)))
+                if _alpha > 0:
+                    r["spread"] *= lots ** _alpha
         else:
             import options_costs
+            # v59.69 (third-eye Tier 3) — size-aware spread. The
+            # bid-ask does NOT scale linearly with size: the measured
+            # distribution (median 0.65, mean 2.27, max 15.80 pts —
+            # size_aware_cost.py) is thin depth at the touch, so a
+            # multi-lot order walks the book. Modelled as
+            # halfspread(n) = halfspread_1 x n^alpha (alpha 0.5, the
+            # standard square-root impact form; 0 disables). Statutory
+            # charges stay linear — they genuinely are.
+            _kw = {}
+            if lots > 1:
+                _alpha = max(0.0, min(1.0, float(
+                    cfg.get("slippage_impact_alpha", 0.5) or 0.0)))
+                if _alpha > 0:
+                    _hs1 = float(cfg.get("opt_halfspread_points", 0.5) or 0.5)
+                    _kw["halfspread"] = _hs1 * (lots ** _alpha)
             r = options_costs.cost_round_trip(
                 float(premium_in), float(premium_out), lot,
-                legs=legs, cfg=cfg)
+                legs=legs, cfg=cfg, **_kw)
         stat = float(r.get("statutory", 0)) * lots
         slip = float(r.get("spread", 0)) * lots
         if stat + slip > 0:
@@ -1913,10 +1965,12 @@ class MarketDataAgent(Agent):
             ohlc = {}
             self._future_ohlc = ohlc
         o = ohlc.get(sym)
+        # "ts" (v59.69) — the futures quote had NO timestamp at all, so
+        # exit monitoring could not age-check it even in principle.
         if not o or o.get("date") != today:
             ohlc[sym] = {"date": today, "open": ltp, "high": ltp, "low": ltp,
                         "close": ltp, "vwap_sum": ltp, "vwap_n": 1,
-                        "vwap": ltp, "volume": cum_volume}
+                        "vwap": ltp, "volume": cum_volume, "ts": time.time()}
             self.bus.set(f"future_ohlc:{sym}", ohlc[sym])
         else:
             o["high"] = max(o["high"], ltp)
@@ -1927,6 +1981,7 @@ class MarketDataAgent(Agent):
             o["vwap"] = round(o["vwap_sum"] / o["vwap_n"], 2)
             if cum_volume is not None:
                 o["volume"] = cum_volume
+            o["ts"] = time.time()
             self.bus.set(f"future_ohlc:{sym}", o)
 
         if cum_volume is not None:
@@ -3786,7 +3841,10 @@ class RiskAgent(Agent):
 
     def _on_closed(self, msg):
         pnl = msg.get("pnl", 0)
-        self.daily_pnl += pnl
+        # v59.69 — daily_pnl is no longer accumulated here: it is derived
+        # from closed_trades via realized_pnl_today() at every use, which
+        # survives restarts and rolls over at midnight without a reset
+        # hook. This handler now only tracks the consecutive-loss halt.
         if pnl < 0:
             self.consecutive_losses += 1
             self.last_loss_ts = time.time()
@@ -3802,6 +3860,9 @@ class RiskAgent(Agent):
 
     def evaluate(self, job):
         """Run all pre-order checks. Returns (ok, checks)."""
+        # v59.69 — refresh from the one shared definition before any
+        # check reads it (see realized_pnl_today's docstring).
+        self.daily_pnl = realized_pnl_today(self.bus)
         sig, cfg = job["signal"], config.load()
         checks = []
         ok = True
@@ -4310,6 +4371,15 @@ class RiskAgent(Agent):
                 # is a REALIZED-P&L peak-to-current measure for display/
                 # trend purposes, not a second copy of the kill-switch's
                 # own trigger logic.
+                # v59.69 — refresh from the shared definition, and roll
+                # the peak tracker over at date change (it used to carry
+                # yesterday's peak into today, making the first hours of
+                # a session look like a drawdown from a phantom high).
+                self.daily_pnl = realized_pnl_today(self.bus)
+                _today = now_ist().strftime("%Y-%m-%d")
+                if getattr(self, "_peak_date", None) != _today:
+                    self._peak_date = _today
+                    self._peak_daily_pnl = 0.0
                 self._peak_daily_pnl = max(getattr(self, "_peak_daily_pnl", 0.0), self.daily_pnl)
                 drawdown = self._peak_daily_pnl - self.daily_pnl
                 history_point = {"ts": time.time(), "daily_pnl": self.daily_pnl,
@@ -4401,6 +4471,7 @@ class ExecutionAgent(Agent):
 
     def cycle(self):
         self._check_portfolio_kill_switch()
+        self._reconcile_broker()   # v59.69 — live-only, self-throttled
         if self._queue:
             self._enter(self._queue.popleft())
         self._monitor()
@@ -4457,6 +4528,23 @@ class ExecutionAgent(Agent):
             return {"error": "market is closed"}
         if time.time() < self.bus.get("portfolio_halt_until", 0):
             return {"error": "portfolio kill-switch cooldown active"}
+        # v59.69 (third-eye Tier 3) — the DAILY LOSS GATE, here. Futures
+        # entries never traverse RiskAgent.evaluate(), so on 2026-07-30
+        # futures kept opening all afternoon while the options path was
+        # correctly blocked — 19 futures trades lost ₹73,115 against a
+        # daily limit the gate never saw. Week 31's own journal showed
+        # the asymmetry: 357 risk decisions, 19 approvals, 129 closed
+        # trades. Same shared figure the options gate uses
+        # (realized_pnl_today), risked amount = the per-trade rupee cap
+        # this function already enforces below.
+        _day = realized_pnl_today(self.bus)
+        _risk_cap = float(cfg.get("futures_risk_per_trade_rupees", 2500))
+        _limit = abs(cfg.get("daily_loss_limit", 5000))
+        if _day - _risk_cap <= -_limit:
+            return {"error": f"daily loss limit: day P&L ₹{_day:.0f}, "
+                             f"risking ₹{_risk_cap:.0f} more would breach "
+                             f"-₹{_limit:.0f} — no futures entries for the "
+                             f"rest of the day"}
         futs = self.bus.get("futures_positions", {}) or {}
         if symbol in futs:
             return {"error": f"{symbol} already has an open futures "
@@ -4636,6 +4724,31 @@ class ExecutionAgent(Agent):
                     # stale post-close feed must not block EOD handling —
                     # same fix as the options stuck-open-past-close bug
                     self.exit_future(sym, "EOD square-off (no live feed)")
+                continue
+            # v59.69 (third-eye Tier 3) — same two guards the options
+            # monitor got: after close, square off and evaluate nothing
+            # (the 15:15 EOD branch below only ran if this loop reached
+            # it with a live-looking price); during hours, hold decisions
+            # on a stale quote instead of trailing stops off it. The ts
+            # key is new — futures quotes had no timestamp to check.
+            if not market_open():
+                p["ltp"] = ltp
+                sign = 1 if p["side"] == "LONG" else -1
+                p["pnl"] = round((ltp - p["entry"]) * sign
+                                 * p["lot_size"] * p["lots"], 2)
+                futs[sym] = p
+                self.bus.set("futures_positions", futs)
+                self.exit_future(sym, "market closed — squaring off")
+                continue
+            _fts = ohlc.get("ts")
+            _max_age = cfg.get("exit_quote_max_age_sec", 90)
+            if _fts and time.time() - _fts > _max_age:
+                if time.time() - getattr(self, "_fut_stale_log_ts", 0) > 60:
+                    self._fut_stale_log_ts = time.time()
+                    self.bus.log(self.name,
+                                 f"{sym} futures quote "
+                                 f"{time.time() - _fts:.0f}s old "
+                                 f"(>{_max_age}s) — holding exit decisions")
                 continue
             sign = 1 if p["side"] == "LONG" else -1
             gross = (ltp - p["entry"]) * sign * p["lot_size"] * p["lots"]
@@ -5104,6 +5217,82 @@ class ExecutionAgent(Agent):
         cooldown = cfg.get("portfolio_halt_cooldown_min", 60) * 60
         self.bus.set("portfolio_halt_until", time.time() + cooldown)
 
+    def _reconcile_broker(self):
+        """v59.69 (third-eye Tier 3) — close the book against broker
+        ground truth. `DhanOrders.positions()` had existed with ZERO
+        call sites: no order was ever confirmed, no position ever
+        checked, and a restart trusted open_state.json unconditionally —
+        a position squared off by the broker (or closed by hand in the
+        app) would be restored as open and SOLD A SECOND TIME on its
+        next exit. Live mode only: paper has no broker book to check.
+
+        Report-only: a mismatch raises a HIGH alert and is published on
+        the bus; nothing here mutates the book. Auto-correcting from a
+        possibly-partial broker read is how a transient API error would
+        wipe real positions.
+        """
+        cfg = config.load()
+        if cfg.get("paper_mode", True):
+            return
+        interval = int(cfg.get("broker_reconcile_interval_sec", 300) or 300)
+        if time.time() - getattr(self, "_last_reconcile_ts", 0) < interval:
+            return
+        self._last_reconcile_ts = time.time()
+        try:
+            orders = self.ctx["orders_factory"]()
+            if orders is None or not hasattr(orders, "positions"):
+                return
+            raw = orders.positions() or []
+        except Exception as e:
+            # Unverifiable is said out loud, not silently skipped —
+            # "could not check" must never read as "checked, clean".
+            self.bus.log(self.name, f"⚠ broker reconcile unavailable "
+                                    f"({type(e).__name__}: {e}) — book "
+                                    f"UNVERIFIED this interval")
+            return
+        rows = raw.get("data") if isinstance(raw, dict) else raw
+        broker = {}
+        for r in rows or []:
+            sid = str(r.get("securityId") or r.get("security_id") or "")
+            try:
+                qty = int(r.get("netQty", r.get("net_qty", 0)) or 0)
+            except (TypeError, ValueError):
+                continue
+            if sid:
+                broker[sid] = broker.get(sid, 0) + qty
+        mine = {}
+        for p in (self.bus.get("positions", {}) or {}).values():
+            sid = str(p.get("security_id") or "")
+            if sid:
+                mine[sid] = mine.get(sid, 0) + int(p.get("qty") or 0)
+        for sp in (self.bus.get("spreads", {}) or {}).values():
+            for leg in sp.get("legs", []):
+                sid = str(leg.get("security_id") or "")
+                if not sid:
+                    continue
+                q = int(sp.get("qty") or 0)
+                mine[sid] = mine.get(sid, 0) + \
+                    (q if leg.get("action") == "BUY" else -q)
+        for f in (self.bus.get("futures_positions", {}) or {}).values():
+            sid = str(f.get("security_id") or "")
+            if sid:
+                q = int(f.get("lots") or 0) * int(f.get("lot_size") or 0)
+                mine[sid] = mine.get(sid, 0) + \
+                    (q if f.get("side") == "LONG" else -q)
+        diffs = [(sid, mine.get(sid, 0), broker.get(sid, 0))
+                 for sid in sorted(set(broker) | set(mine))
+                 if broker.get(sid, 0) != mine.get(sid, 0)]
+        for sid, m, b in diffs[:6]:
+            self.bus.alert("high", self.name, sid,
+                           f"POSITION MISMATCH vs broker: book says {m}, "
+                           f"broker says {b} (securityId {sid}) — reconcile "
+                           f"manually before trusting any automated exit")
+        self.bus.set("broker_reconcile",
+                     {"at": time.time(),
+                      "checked": len(set(broker) | set(mine)),
+                      "mismatches": [{"security_id": s, "ours": m, "broker": b}
+                                     for s, m, b in diffs]})
+
     def _auto_spreads(self):
         """Server-side auto-deployment of enabled strategies. Runs whether
         or not the browser is open. Evaluates every symbol each minute.
@@ -5453,6 +5642,20 @@ class ExecutionAgent(Agent):
                 self.exit_spread(sid, "market closed — forced square-off (feed stale)")
                 continue
             if stale:
+                continue
+            # v59.69 (third-eye Tier 3) — hold spread exit decisions on
+            # a stale chain, same guard as _monitor_one. (Zero-checks
+            # above catch a MISSING price; this catches an OLD one.)
+            _cts = self.bus.get(f"chain_ts:{sp['symbol']}")
+            _max_age = cfg.get("exit_quote_max_age_sec", 90)
+            if market_open() and _cts and time.time() - _cts > _max_age:
+                if time.time() - getattr(self, "_spr_stale_log_ts", 0) > 60:
+                    self._spr_stale_log_ts = time.time()
+                    self.bus.log(self.name,
+                                 f"{sp['symbol']} chain "
+                                 f"{time.time() - _cts:.0f}s old "
+                                 f"(>{_max_age}s) — holding spread exit "
+                                 f"decisions")
                 continue
             # combined P&L per share: SELL leg profits as price falls
             pnl_ps = 0.0
@@ -6060,19 +6263,25 @@ class ExecutionAgent(Agent):
             self.bus.alert("medium", self.name, sym,
                            f"entry refused — already at exit: {_already}")
             return {"error": f"would exit immediately: {_already}"}
-        if cfg["paper_mode"]:
-            order_id = paper_order_id()
-            self.bus.log(self.name, f"📄 PAPER BUY {qty} x {label} @ ₹{fill}")
-        else:
-            orders = self.ctx["orders_factory"]()
-            if orders is None or not sig.get("security_id"):
-                self.bus.log(self.name, "⚠ cannot place live order "
-                                        "(no broker / security_id)")
-                return
-            resp = orders.place(sym, sig["security_id"], "BUY", qty, "MARKET")
-            order_id = resp.get("orderId", "?")
-            self.bus.log(self.name, f"🔴 LIVE BUY {qty} x {label} — "
-                                    f"order {order_id}")
+        # v59.69 (third-eye Tier 3) — ORDER OF OPERATIONS fixed. This
+        # used to run: place live order → build position dict → check
+        # duplicates. Two live-money defects in that sequence: a
+        # KeyError while building the dict AFTER a live fill left a
+        # live, untracked, un-stopped position (the literal reads
+        # sig["strike"]/sig["target1"]/… unguarded), and the duplicate
+        # check could "abandon" an entry whose order had ALREADY gone
+        # to the exchange. Now: duplicate check → build the position →
+        # place the order → register. The position exists locally
+        # before any money moves.
+        positions = self.bus.get("positions", {}) or {}
+        if sym in positions:
+            self.bus.log(self.name,
+                         f"⚠ {label}: entry ABANDONED — a position on {sym} "
+                         f"already exists (opened {positions[sym].get('opened')}). "
+                         f"Refusing to overwrite it.")
+            self.bus.alert("high", self.name, sym,
+                           f"duplicate entry abandoned — {sym} already open")
+            return {"error": f"position already open on {sym} — not overwritten"}
         pos = {
             "symbol": sym, "strike": sig["strike"], "leg": leg, "qty": qty,
             "lots": n_lots,
@@ -6089,7 +6298,7 @@ class ExecutionAgent(Agent):
             "initial_sl": sig["stoploss"],
             "target1": sig["target1"], "target2": sig["target2"],
             "spot_invalidation": sig.get("spot_invalidation"),
-            "security_id": sig.get("security_id"), "order_id": order_id,
+            "security_id": sig.get("security_id"), "order_id": None,
             "opened": now_ist().strftime("%H:%M:%S"), "opened_ts": time.time(), "ltp": fill,
             # Strategy 7 (v51): setup tag + candle-time entry stamp for
             # the structure-break exit (pivots are keyed on CANDLE time,
@@ -6136,19 +6345,45 @@ class ExecutionAgent(Agent):
                     pos["entry_liquidity_score"] = min(100, round(spread_pct * 50))
         except Exception:
             pass
+        if cfg["paper_mode"]:
+            pos["order_id"] = paper_order_id()
+            self.bus.log(self.name, f"📄 PAPER BUY {qty} x {label} @ ₹{fill}")
+        else:
+            orders = self.ctx["orders_factory"]()
+            if orders is None or not sig.get("security_id"):
+                self.bus.log(self.name, "⚠ cannot place live order "
+                                        "(no broker / security_id)")
+                return
+            try:
+                resp = orders.place(sym, sig["security_id"], "BUY", qty,
+                                    "MARKET")
+                # "UNCONFIRMED", not "?": a 200 with an unexpected body
+                # is a REAL order whose id we failed to read — the
+                # record must say that, not shrug.
+                pos["order_id"] = resp.get("orderId") or "UNCONFIRMED"
+            except Exception as e:
+                # A timeout does NOT mean the order failed — it may have
+                # reached the exchange after this call gave up. Track
+                # the position as open and demand a manual check;
+                # believing we are flat while the broker holds a fill is
+                # the unrecoverable direction.
+                pos["order_id"] = "UNCONFIRMED-ERROR"
+                self.bus.alert("high", self.name, sym,
+                               f"LIVE BUY status UNKNOWN "
+                               f"({type(e).__name__}: {e}) — position "
+                               f"tracked as open; verify at the broker NOW")
+            self.bus.log(self.name, f"🔴 LIVE BUY {qty} x {label} — "
+                                    f"order {pos['order_id']}")
+        # Defence in depth behind place()'s claim: re-read in case a
+        # position for this symbol appeared while the order was in
+        # flight. A silent overwrite is how 65 qty went untracked on
+        # 2026-08-06; an error is recoverable, a phantom position is not.
         positions = self.bus.get("positions", {}) or {}
-        # Defence in depth behind place()'s claim: if a position for this
-        # symbol appeared while this entry was in flight, REFUSE rather
-        # than replace. A silent overwrite is how 65 qty went untracked
-        # on 2026-08-06; an error is recoverable, a phantom position is
-        # not.
         if sym in positions:
-            self.bus.log(self.name,
-                         f"⚠ {label}: entry ABANDONED — a position on {sym} "
-                         f"already exists (opened {positions[sym].get('opened')}). "
-                         f"Refusing to overwrite it.")
             self.bus.alert("high", self.name, sym,
-                           f"duplicate entry abandoned — {sym} already open")
+                           f"RACE: a {sym} position appeared while the order "
+                           f"was in flight — new order {pos['order_id']} is "
+                           f"NOT tracked; verify at the broker")
             return {"error": f"position already open on {sym} — not overwritten"}
         positions[sym] = pos
         self.bus.set("positions", positions)
@@ -6247,6 +6482,35 @@ class ExecutionAgent(Agent):
             # Dhan sometimes returns no/0 LTP for a strike in a given
             # snapshot — skip this cycle rather than comparing None
             return f"{sym} {p['strike']} {p['leg']} — no LTP; retrying"
+        # --- v59.69 (third-eye Tier 3) exit-decision guards ------------
+        # 1. Market closed: the ONLY legitimate action is the square-off.
+        #    The EOD branch used to sit at the BOTTOM of the exit chain,
+        #    so after-hours remnant quotes kept the stop/target/ratchet
+        #    chain live — spreads "hit profit target" at 23:52 on
+        #    2026-07-30 through the same pattern. Value at the last price
+        #    and close; this subsumes the old bottom-of-chain EOD branch.
+        if not market_open():
+            p["ltp"] = ltp
+            p["pnl"] = round((ltp - p["entry"]) * p["qty"], 0)
+            positions = self.bus.get("positions", {}) or {}
+            if sym in positions:
+                positions[sym] = p
+                self.bus.set("positions", positions)
+            self.exit("market closing — squaring off intraday position",
+                      symbol=sym)
+            return f"{sym} {p['strike']} {p['leg']} — EOD square-off"
+        # 2. Stale quote: acting on an old price during a fast move is
+        #    worse than not acting (MarketDataAgent's failure backoff
+        #    reaches 300s). data_age_of() guarded the ENTRY gates only;
+        #    exits had no age check at all. Hold decisions — and don't
+        #    write the stale price into pnl/mfe/mae or the trail ratchet,
+        #    or the kill-switch sums it as if current.
+        _cts = self.bus.get(f"chain_ts:{sym}")
+        _max_age = cfg.get("exit_quote_max_age_sec", 90)
+        if _cts and time.time() - _cts > _max_age:
+            return (f"{sym} {p['strike']} {p['leg']} — quote "
+                    f"{time.time() - _cts:.0f}s old (>{_max_age}s) — "
+                    f"holding exit decisions until fresh data")
         p["ltp"] = ltp
         p["pnl"] = round((ltp - p["entry"]) * p["qty"], 0)
         p["mfe"] = max(p.get("mfe", 0), p["pnl"])
@@ -6355,8 +6619,9 @@ class ExecutionAgent(Agent):
             elapsed = (time.time() - p["opened_ts"]) / 60
             reason = (f"time stop ({elapsed:.0f}m ≥ {cfg['time_stop_minutes']}m) "
                      f"— neither target nor stop hit, forcing a decision")
-        elif not market_open():
-            reason = "market closing — squaring off intraday position"
+        # (the EOD square-off branch moved to the TOP of this function in
+        # v59.69 — a closed market must pre-empt the whole chain, not be
+        # its last resort)
 
         if not p["t1_hit"] and ltp >= p["target1"]:
             p["t1_hit"] = True
@@ -6520,17 +6785,43 @@ class ExecutionAgent(Agent):
                          f"{p['strike']} {p['leg']} @ ₹{p['ltp']} — {reason} "
                          f"· P&L ₹{p['pnl']:.0f}")
         else:
+            # v59.69 (third-eye Tier 3) — retry cooldown. A timed-out
+            # SELL may have reached the exchange; the old flow returned
+            # the error, left the position in the book, and _monitor_one
+            # re-hit the same exit reason 2 seconds later — firing a
+            # SECOND market SELL with the first one possibly filled (the
+            # kill-switch loop would amplify this into an order storm).
+            # There is no order_status() polling yet, so the safe floor
+            # is: after a failed/unknown placement, refuse to re-place
+            # for exit_retry_cooldown_sec and demand a manual check.
+            _cool = int(config.load().get("exit_retry_cooldown_sec", 30))
+            _last = p.get("exit_attempt_ts") or 0
+            if _last and time.time() - _last < _cool:
+                return {"error": f"exit retry cooling down "
+                                 f"({time.time() - _last:.0f}s of {_cool}s) — "
+                                 f"previous SELL status unknown, verify at "
+                                 f"the broker"}
             orders = self.ctx["orders_factory"]()
             if orders and p.get("security_id"):
+                p["exit_attempt_ts"] = time.time()
+                positions[symbol] = p
+                self.bus.set("positions", positions)
                 try:
                     resp = orders.place(p["symbol"], p["security_id"], "SELL",
                                         p["qty"], "MARKET")
                     self.bus.log(self.name, f"🔴 LIVE SELL — order "
-                                 f"{resp.get('orderId','?')} — {reason} "
+                                 f"{resp.get('orderId','UNCONFIRMED')} — {reason} "
                                  f"· est P&L ₹{p['pnl']:.0f}")
                 except Exception as e:
-                    self.bus.log(self.name, f"⚠ LIVE EXIT FAILED: {e} — "
-                                            "close manually on Dhan NOW")
+                    # An ALERT, not a log line: "close manually NOW" is
+                    # the single most urgent operational event this
+                    # system can produce, and it used to go to a feed
+                    # deque that rotates out in ~13 minutes.
+                    self.bus.alert("high", self.name, p["symbol"],
+                                   f"LIVE EXIT FAILED ({type(e).__name__}: {e}) "
+                                   f"— close {p['symbol']} {p.get('strike')} "
+                                   f"{p.get('leg')} manually on the broker NOW; "
+                                   f"auto-retry in {_cool}s")
                     return {"error": str(e)}
             else:
                 self.bus.log(self.name, "⚠ no broker for live exit — close "
