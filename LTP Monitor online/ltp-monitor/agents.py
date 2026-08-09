@@ -6823,14 +6823,24 @@ class LearningAgent(Agent):
                     p["wins"] += 1
             underperforming = []
             min_sample = 5
+            # v59.66 (third-eye Tier 1) — a raw win_rate < 35% on n=5 was
+            # a 5-sample decision rule suppressing whole signal classes:
+            # 1/5 wins is consistent with a 43%+ true rate. Flag only
+            # when the 95% Wilson UPPER bound sits below the threshold —
+            # i.e. when the data actually rules 35% out, not merely
+            # fails to reach it. At 0 wins that needs n≥10; at real
+            # mixtures, proportionally more.
+            from promotion_gate import wilson_upper
             for (bucket, inst_agree, regime), p in patterns.items():
                 if p["total"] < min_sample:
                     continue
                 win_rate = p["wins"] / p["total"]
-                if win_rate < 0.35:
+                if wilson_upper(p["wins"], p["total"]) < 0.35:
                     underperforming.append({
                         "confidence_bucket": bucket, "institutional_agreement": inst_agree,
                         "regime": regime, "win_rate": round(win_rate * 100),
+                        "wilson_upper_pct": round(
+                            wilson_upper(p["wins"], p["total"]) * 100),
                         "sample_size": p["total"]})
             self.bus.set("learned_underperforming_patterns", underperforming)
             if underperforming:
@@ -7045,6 +7055,9 @@ class BacktestAgent(Agent):
         newv = max(x["v"] for x in entry["versions"]) + 1
         new_trades = result["best_metrics"].get("trades") or 0
         new_pnl = result["best_metrics"].get("net_pnl") or 0
+        # v59.66 — "profitable" here decides only whether the sweep's
+        # winner becomes the ACTIVE paper version. Live is the gate's
+        # call, and a swept result is the definition of in-sample.
         new_profitable = new_trades >= min_conf and new_pnl > 0
         entry["versions"].append({
             "v": newv, "params": result["best_params"],
@@ -7057,11 +7070,20 @@ class BacktestAgent(Agent):
             "results": result["best_metrics"], "deployed": new_profitable})
         if new_profitable:
             entry["active"] = newv
-            entry["live_enabled"] = True
+            # v59.66 — a swept winner is in-sample by definition; the
+            # gate scores only its (still empty) out-of-sample window,
+            # so live_enabled starts False and is re-scored daily.
+            import promotion_gate
+            try:
+                _gok, _ = promotion_gate.evaluate_entry(
+                    name, symbol, result["best_metrics"])
+            except Exception:
+                _gok = False
+            entry["live_enabled"] = bool(_gok)
         backtester.save_versions(vers)
         self.summary = (f"{symbol} {name}: optimizer found v{newv} "
                        f"(₹{new_pnl:.0f}/{new_trades}t) — "
-                       f"{'activated' if new_profitable else 'proposed, review to activate'}")
+                       f"{'activated for paper' if new_profitable else 'proposed, review to activate'}")
         self.bus.alert("medium", self.name, f"{symbol}:{name}",
                        f"Optimizer proposed {symbol} {name} v{newv} "
                        f"(₹{new_pnl:.0f}, {len(result['tried'])} candidates "
@@ -7187,11 +7209,28 @@ class BacktestAgent(Agent):
                         ver["last_tested"] = backtester._now()
                 trades = m.get("trades") or 0
                 net_pnl = m.get("net_pnl") or 0
+                # v59.66 — the sign test steers only the TUNING flow from
+                # here on. It set live_enabled for a year and promoted 11
+                # of 11 strategies on noise (see is_live_enabled's
+                # docstring); the flag itself now comes from the
+                # statistical gate, scored on the out-of-sample window
+                # only, so the dashboard flag and the alerts below can no
+                # longer disagree with what is_live_enabled() would answer.
                 profitable_now = trades >= min_conf and net_pnl > 0
-                if entry.get("manually_disabled"):
-                    entry["live_enabled"] = False
-                else:
-                    entry["live_enabled"] = profitable_now
+                import promotion_gate
+                try:
+                    gate_ok, gate_d = promotion_gate.evaluate_entry(name, sym, m)
+                except Exception as e:
+                    gate_ok, gate_d = False, {"reason": f"gate error: {e}"}
+                entry["live_enabled"] = bool(gate_ok) and \
+                    not entry.get("manually_disabled")
+                if profitable_now and not gate_ok:
+                    why_not = gate_d.get("reason") or (
+                        f"headroom ₹{gate_d.get('headroom'):.0f}/trade"
+                        if gate_d.get("headroom") is not None else "gate denied")
+                    self.bus.log(self.name,
+                                 f"{sym} {name}: net ₹{net_pnl:.0f}/{trades}t "
+                                 f"in-sample, but live gate DENIED — {why_not}")
                 if not history.chain_days(sym):
                     continue   # spreads need real chain data; nothing to tune yet
                 if profitable_now:
@@ -7258,11 +7297,22 @@ class BacktestAgent(Agent):
                     "results": new_m, "deployed": new_profitable})
                 if new_profitable and not entry.get("manually_disabled"):
                     entry["active"] = newv
-                    entry["live_enabled"] = True
+                    # v59.66 — adoption is a PAPER decision; it no longer
+                    # implies live. A fresh candidate has zero out-of-
+                    # sample days by definition (it was fitted on
+                    # everything visible today), so the gate denies it
+                    # until the daily backtest attaches a walk-forward
+                    # window it survives.
+                    try:
+                        _gok, _ = promotion_gate.evaluate_entry(name, sym, new_m)
+                    except Exception:
+                        _gok = False
+                    entry["live_enabled"] = bool(_gok)
                     self.bus.alert("medium", self.name, f"{sym}:{name}",
-                                   f"{sym} {name} v{newv} is profitable "
-                                   f"(₹{new_pnl:.0f}/{new_trades}t) — "
-                                   "enabled for live trading")
+                                   f"{sym} {name} v{newv} adopted for paper "
+                                   f"(₹{new_pnl:.0f}/{new_trades}t in-sample) "
+                                   "— live stays gated on out-of-sample "
+                                   "evidence")
                 else:
                     self.bus.log(self.name,
                                  f"{sym} {name} v{newv} kept but NOT "
@@ -7301,8 +7351,24 @@ class BacktestAgent(Agent):
                         ver["last_tested"] = backtester._now()
                 trades = m.get("trades") or 0
                 net_pnl = m.get("net_pnl") or 0
+                # v59.66 — sign test steers tuning only; live_enabled
+                # comes from the statistical gate on the out-of-sample
+                # window. See the identical change in _revalidate above.
                 profitable_now = trades >= min_trades_for_confidence and net_pnl > 0
-                entry["live_enabled"] = profitable_now and not entry.get("manually_disabled")
+                import promotion_gate
+                try:
+                    gate_ok, gate_d = promotion_gate.evaluate_entry(name, sym, m)
+                except Exception as e:
+                    gate_ok, gate_d = False, {"reason": f"gate error: {e}"}
+                entry["live_enabled"] = bool(gate_ok) and \
+                    not entry.get("manually_disabled")
+                if profitable_now and not gate_ok:
+                    why_not = gate_d.get("reason") or (
+                        f"headroom ₹{gate_d.get('headroom'):.0f}/trade"
+                        if gate_d.get("headroom") is not None else "gate denied")
+                    self.bus.log(self.name,
+                                 f"{sym} {name}: net ₹{net_pnl:.0f}/{trades}t "
+                                 f"in-sample, but live gate DENIED — {why_not}")
                 if profitable_now:
                     # already working — don't keep tuning for more frequency
                     # at the risk of eroding a proven edge
@@ -7377,11 +7443,18 @@ class BacktestAgent(Agent):
                     "results": new_m, "deployed": new_profitable})
                 if new_profitable:
                     entry["active"] = newv
-                    entry["live_enabled"] = True
+                    # v59.66 — same as the spread tuner: adoption is a
+                    # paper decision, live waits for out-of-sample days.
+                    try:
+                        _gok, _ = promotion_gate.evaluate_entry(name, sym, new_m)
+                    except Exception:
+                        _gok = False
+                    entry["live_enabled"] = bool(_gok)
                     self.bus.alert("medium", self.name, f"{sym}:{name}",
-                                   f"{sym} {name} v{newv} is profitable "
-                                   f"(₹{new_pnl:.0f}/{new_trades}t) — "
-                                   "enabled for live trading")
+                                   f"{sym} {name} v{newv} adopted for paper "
+                                   f"(₹{new_pnl:.0f}/{new_trades}t in-sample) "
+                                   "— live stays gated on out-of-sample "
+                                   "evidence")
                 else:
                     self.bus.log(self.name,
                                  f"{sym} {name} v{newv} kept "

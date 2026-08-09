@@ -65,21 +65,48 @@ def main():
             rows.append(d)
 
     live_rows = [r for r in rows if r["live_now"]]
+    k_now = pg.deflation_k()
     print(f"\n  PROMOTION GATE — {len(live_rows)} live strategies")
-    print(f"  required = cost_bias + 2 x sd/sqrt(n),  "
-          f"sd = ₹{pg.PROXY_SD_PER_TRADE:,.0f}/trade (PROVISIONAL)\n")
-    hdr = (f"  {'strategy':22} {'symbol':10} {'n':>5} {'net/tr':>9} "
+    # v59.66 — this header used to print the SUPERSEDED quadrature form
+    # while the code below applied the calibrated one (third-eye Tier 1).
+    # It now prints what is actually applied, k included.
+    print(f"  required = cost_bias + k*sqrt(SE_edge² + sd²/cal_n)   [APPLIED]")
+    print(f"  k = {k_now:.2f} (deflated max-of-N, pre-commit floor "
+          f"{pg.PRECOMMITTED_K}) · sd = ₹{pg.PROXY_SD_PER_TRADE:,.0f}/trade "
+          f"(PROVISIONAL) · scored on the OUT-OF-SAMPLE window only\n")
+    hdr = (f"  {'strategy':22} {'symbol':10} {'n':>5} {'days':>5} {'net/tr':>9} "
            f"{'cost':>7} {'stat':>8} {'req':>9} {'headroom':>10}  verdict")
     print(hdr)
     print("  " + "-" * (len(hdr) - 2))
-    for r in sorted(live_rows, key=lambda x: -x["headroom"]):
+    # Denied entries carry headroom=None (a 0-trade live entry used to
+    # crash this sort and the row format); they sort last and render
+    # their denial reason instead of fake zeros.
+    for r in sorted(live_rows,
+                    key=lambda x: (-x["headroom"]
+                                   if x.get("headroom") is not None
+                                   else float("inf"))):
+        if r.get("required") is None:
+            print(f"  {(r.get('strategy') or '?'):22} "
+                  f"{(r.get('symbol') or '?'):10} "
+                  f"{(r.get('trades') or 0):>5}       DENIED — "
+                  f"{r.get('reason', 'no detail')}")
+            continue
         v = "PASS" if r["headroom"] > 0 else "FAIL"
         print(f"  {r['strategy']:22} {r['symbol']:10} {r['trades']:>5} "
+              f"{(r.get('n_days') or 0):>5} "
               f"{r['net_per_trade']:>9,.0f} {r['cost_bias']:>7,.0f} "
               f"{r['stat_margin']:>8,.0f} {r['required']:>9,.0f} "
               f"{r['headroom']:>+10,.0f}  {v}")
+    spread_live = [r for r in live_rows
+                   if r.get("strategy") in ("bull_put_spread",
+                                            "bear_call_spread")]
+    if spread_live:
+        print("\n  NOTE: spread verdicts above are ADVISORY — the spread "
+              "live path is disabled by design (_auto_spreads runs only "
+              "in paper_mode and enter_spread refuses live orders), so "
+              "this gate currently guards no spread order.")
 
-    npass = sum(1 for r in live_rows if r["headroom"] > 0)
+    npass = sum(1 for r in live_rows if (r.get("headroom") or 0) > 0)
     stat_only = sum(1 for r in live_rows if r["passes_stat_only"])
     print(f"\n  under the corrected gate : {npass}/{len(live_rows)} pass")
     print(f"  under the OLD gate       : "
@@ -89,7 +116,8 @@ def main():
           f"{stat_only}/{len(live_rows)} pass")
     print(f"    statistical margin + cost bias                    : "
           f"{npass}/{len(live_rows)} pass")
-    flips = [r for r in live_rows if r["passes_stat_only"] and r["headroom"] <= 0]
+    flips = [r for r in live_rows
+             if r["passes_stat_only"] and (r.get("headroom") or 0) <= 0]
     if flips:
         print("    disqualified BY THE COST CORRECTION only (weaker claim):")
         for r in flips:
@@ -160,7 +188,7 @@ def main():
     print(f"    {'strategy':22} {'symbol':10} {'net/tr':>8} {'superseded':>11} "
           f"{'APPLIED':>9}")
     _strict = 0
-    for r in sorted(live_rows, key=lambda x: -x["net_per_trade"]):
+    for r in sorted(live_rows, key=lambda x: -(x.get("net_per_trade") or 0)):
         lg = r.get("legacy_required")
         if lg is None:
             continue
@@ -196,7 +224,9 @@ def main():
     print(f"    that is itself indistinguishable from zero is the substitution")
     print(f"    we keep refusing. Shown so the next session sees how close it sits.")
     band = 2 * BIAS_SE
-    swamped = [r for r in live_rows if abs(r["net_per_trade"]) < band]
+    swamped = [r for r in live_rows
+               if r.get("net_per_trade") is not None
+               and abs(r["net_per_trade"]) < band]
     print(f"\n    the 2-SE bias band alone (+/-₹{band:.0f}) exceeds the entire")
     print(f"    net-per-trade figure of {len(swamped)}/{len(live_rows)} strategies.")
 

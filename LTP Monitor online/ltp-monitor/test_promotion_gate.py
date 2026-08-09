@@ -68,9 +68,16 @@ check("and says why rather than returning a number",
 # --- the applied form is the calibrated one (item 26) -------------------
 check("evaluate() reports the calibrated form",
       d.get("margin_form") == "calibrated", str(d.get("margin_form")))
-_cal = pg.required_margin_calibrated(355, 2886, "NIFTY")
-check("evaluate() agrees with required_margin_calibrated",
+# v59.66 — evaluate() defaults k to the DEFLATED max-of-N value, not
+# DEFAULT_K=2. Compare at the k evaluate actually reported, scraped from
+# its own payload — inventing a k here is the producer/consumer mismatch
+# CLAUDE.md warns about.
+_cal = pg.required_margin_calibrated(355, 2886, "NIFTY", k=d["k"])
+check("evaluate() agrees with required_margin_calibrated at its own k",
       abs(d["required"] - _cal) < 1e-6, f"{d['required']:.2f} vs {_cal:.2f}")
+check("default k is the deflated one, floored at the pre-commitment",
+      d["k"] >= pg.PRECOMMITTED_K and d.get("k_source", "").startswith("deflated"),
+      f"k={d['k']:.3f} ({d.get('k_source')})")
 check("the superseded form is kept for the record only",
       d.get("legacy_required") is not None
       and d["required"] > d["legacy_required"],

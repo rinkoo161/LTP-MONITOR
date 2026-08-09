@@ -24,6 +24,10 @@ these fields; handled as a genuine data gap (excluded from bucketed
 matching, not backfilled with guesses), not hidden.
 """
 
+# v59.66 — minimum matched trades before a bucket may emit a probability
+# at all. Below this the answer is "unavailable", not a smoothed number.
+MIN_SAMPLE = 5
+
 
 def _bucket_confidence(confidence):
     """Buckets confidence into 10-point bands (e.g. 70 -> "70-79") —
@@ -93,6 +97,17 @@ def estimate_probability(sig, decision, regime, closed_trades):
                         f"{inst_agreement}, regime {regime_label or 'unknown'})"),
                "confidence_in_estimate": "none", "unavailable": True}
 
+    # v59.66 (third-eye Tier 1) — below MIN_SAMPLE the bucket is reported
+    # as unavailable, not as a number. Laplace smoothing tempers a tiny
+    # sample but still let n=1 emit "33%" into unified_probability; a
+    # probability from that few observations is noise wearing a percent
+    # sign. unified_probability already drops unavailable components.
+    if n < MIN_SAMPLE:
+        return {"probability_pct": None, "sample_size": n,
+               "basis": (f"only {n} matching past trade(s) — below the "
+                         f"{MIN_SAMPLE}-trade minimum for a probability "
+                         f"estimate"),
+               "confidence_in_estimate": "insufficient", "unavailable": True}
     wins = sum(1 for t in matched if t.get("pnl", 0) > 0)
     # Laplace smoothing: (wins + 1) / (n + 2) pulls toward 50% for
     # small n, converges to the true win_count/total_count as n grows.

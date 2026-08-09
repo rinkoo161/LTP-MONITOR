@@ -268,6 +268,12 @@ DEFAULTS = {
     "max_spread_capital_pct": 60.0,
     "spread_reentry_cooldown_min": 15,
     "pa_min_trades_for_confidence": 15,  # min backtest trades before a version can go live
+    "gate_min_days": 10,   # v59.66 — min DISTINCT out-of-sample days before the
+                           # promotion gate will score a strategy at all. The day
+                           # is the independent observation (same-day trades share
+                           # one regime); below this the verdict is "cannot
+                           # evaluate", never "pass". Raising it tightens live
+                           # promotion only — paper trading is unaffected.
     "pa_tuning_improvement_threshold": 0.15,  # new version must improve P&L by this fraction
     "pa_tuning_max_attempts": 4,      # consecutive non-improving attempts before pausing
     "pa_retune_cooldown_days": 7,     # days to wait after exhausting attempts

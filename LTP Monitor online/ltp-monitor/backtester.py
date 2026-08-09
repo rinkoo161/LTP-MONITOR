@@ -249,6 +249,14 @@ def metrics(trades):
     wins = [p for p in pnls if p > 0]
     losses = [p for p in pnls if p <= 0]
     days = {t["day"] for t in trades}
+    # v59.66 — per-day P&L sums, for the promotion gate's clustered
+    # sampling term. Same-day trades on one index share one day's regime,
+    # so the DAY is the independent observation, not the trade (third-eye
+    # Tier 1: 313 trades over 17 days is ~17 observations, not 313).
+    by_day = {}
+    for t in trades:
+        by_day[t["day"]] = by_day.get(t["day"], 0) + t["pnl"]
+    daily_vals = list(by_day.values())
     return {
         "trades": len(trades),
         "days_tested": len(days),
@@ -263,6 +271,11 @@ def metrics(trades):
         # dispersion inside each bucket), which would make every gate
         # decision optimistic in exactly the direction that promotes.
         "pnl_sd": round(statistics.pstdev(pnls), 0) if len(pnls) > 1 else 0.0,
+        # v59.66 — dispersion of the per-DAY sums (see by_day above). The
+        # gate forms its standard error from this, not pnl_sd, so that
+        # correlated same-day trades cannot inflate the evidence count.
+        "pnl_sd_day": (round(statistics.pstdev(daily_vals), 0)
+                       if len(daily_vals) > 1 else 0.0),
         "max_win": round(max(pnls), 0),
         "max_loss": round(min(pnls), 0),
         "avg_risk_per_trade": round(statistics.mean(
@@ -834,10 +847,29 @@ def replay_pa(symbol, name, params=None, days=None, log=lambda m: None):
                                    "entry_spot": pos["entry_spot"], "exit_spot": spot})
                     pos = None
                 continue
-            ev = pa.evaluate(name, win,
-                             _resample(win, 5), _resample(win, 15),
-                             params=p, taken_today=taken,
-                             precomputed=precomputed)
+            if name == "sg_ema":
+                # v59.66 — sg_ema is NOT dispatched by pa.evaluate() (it
+                # has its own evaluate_sg_ema with a pivots argument), so
+                # this loop silently produced ZERO trades for it — the
+                # same bug replay_ew_reversal's docstring records for S8,
+                # surviving here because run_all() called this function
+                # for all six PA names. Pivots are recomputed from the
+                # TRUNCATED window per bar (no lookahead), default zigzag
+                # deviation — the identical call the live S7 loop makes
+                # (agents.py `structure.zigzag_series(pack["c1"])`).
+                # ai_bias is None, exactly live's state before the bias
+                # engine has computed — that gate reports "skipped", so
+                # the replay admits ≥ live entries on that one gate.
+                import structure
+                pivots = structure.zigzag_series(win)
+                ev, _gates = pa.evaluate_sg_ema(
+                    win, _resample(win, 5), _resample(win, 15),
+                    params=p, taken_today=taken, pivots=pivots)
+            else:
+                ev = pa.evaluate(name, win,
+                                 _resample(win, 5), _resample(win, 15),
+                                 params=p, taken_today=taken,
+                                 precomputed=precomputed)
             if ev:
                 pos = {"dir": ev["dir"], "entry": ev["entry_spot"],
                        "stop": ev["stop_spot"], "stop0": ev["stop_spot"],
@@ -1217,14 +1249,47 @@ def _now_ist_date():
 
 
 def run_all(symbol, log=lambda m: None):
-    """Backtest every strategy on all stored days → results dict."""
+    """Backtest every strategy on all stored days → results dict.
+
+    v59.66 (third-eye Tier 1) — two structural fixes:
+
+    * Every replay goes through _replay_for(), not the replay_* functions
+      directly. That (a) records each daily baseline evaluation in
+      trial_log so N for the deflated Sharpe stops undercounting — this
+      function was the one remaining path around the recorder — and
+      (b) dispatches ew_reversal/sg_ema to their real engines instead of
+      replay_pa, which cannot evaluate them and returned zero-trade
+      baselines that agents._tune_pa then wrote over real results.
+
+    * Each metrics dict carries an `oos` sub-dict: the same trades cut to
+      days STRICTLY AFTER the active version's adoption date. That is the
+      only slice promotion_gate.evaluate_entry() will score — the full-
+      sample numbers stay for display, but they are the in-sample optimum
+      of the parameter search and must never gate a live order.
+    """
+    vers = load_versions()
     out = {}
-    for name in ("bull_put_spread", "bear_call_spread"):
+    for name in (["bull_put_spread", "bear_call_spread", "momentum_buy"]
+                 + list(pa.PA_NAMES)):
         log(f"[backtest] {name} on {symbol}")
-        out[name] = metrics(replay_spreads(symbol, name, log=log))
-    log(f"[backtest] momentum_buy on {symbol}")
-    out["momentum_buy"] = metrics(replay_momentum(symbol, log=log))
-    for name in pa.PA_NAMES:
-        log(f"[backtest] {name} on {symbol}")
-        out[name] = metrics(replay_pa(symbol, name, log=log))
+        trades = _replay_for(name, symbol, None, source="daily_baseline")
+        m = metrics(trades)
+        entry = (vers.get(name, {}).get("symbols", {}) or {}).get(symbol) or {}
+        adopted = None
+        for ver in entry.get("versions") or []:
+            if ver.get("v") == entry.get("active"):
+                adopted = (ver.get("created") or "")[:10] or None
+        # No version entry (or no created stamp) means the params are the
+        # shipped defaults, never fitted to this archive — every day is
+        # out-of-sample for them.
+        oos_trades = (trades if not adopted
+                      else [t for t in trades if (t.get("day") or "") > adopted])
+        oos = metrics(oos_trades)
+        for heavy in ("trades_detail", "equity_curve"):
+            oos.pop(heavy, None)   # strategy_versions.json is 4 MB already
+        oos["window"] = ("all archived days (params never fitted/adopted)"
+                         if not adopted else
+                         f"days after {adopted} (v{entry.get('active')} adoption)")
+        m["oos"] = oos
+        out[name] = m
     return out

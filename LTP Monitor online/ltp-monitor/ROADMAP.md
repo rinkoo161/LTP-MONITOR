@@ -4,6 +4,87 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.66 — the promotion gate measures independent, out-of-sample evidence (2026-08-09)
+
+Resolves every Tier 1 (statistical validity) finding from the third-eye
+review of 2026-08-09. The theme across all five: the numbers that decided
+live promotion were in-sample, over-counted, and judged against a
+single-test bar while the family ran thousands of tests.
+
+**`live_enabled` is no longer a sign test.** `trades >= 15 and net_pnl > 0`
+still steers the tuning flow (relax vs tighten), but the flag itself — at
+all four setters: `_revalidate`, `_tune_pa`, candidate adoption, and the
+on-demand sweep — now comes from `promotion_gate.evaluate_entry()`, so
+the persisted flag, the dashboard, and the alerts can no longer disagree
+with what `is_live_enabled()` would answer. Adoption alerts now say
+"adopted for paper … live stays gated on out-of-sample evidence",
+because that is what happens.
+
+**Walk-forward out-of-sample scoring.** `run_all()` attaches an `oos`
+sub-dict to every result: the same replay cut to days STRICTLY AFTER the
+active version's adoption date. `evaluate_entry()` scores only that
+slice and DENIES when it is missing or empty. A freshly tuned version
+has zero OOS days by definition and earns live eligibility only by
+surviving days it was not fitted on. The full-sample numbers remain for
+display — they are the in-sample optimum of a 71-parameter search and
+must never gate an order. No holdout split was added inside the tuner
+itself: selection stays in-sample (inherent to fitting), but the gate
+now structurally cannot see the days selection saw.
+
+**The day is the observation unit.** `metrics()` records `pnl_sd_day`
+(dispersion of per-day P&L sums); the gate's sampling term is
+`day_sd·√n_days/trades`, which collapses to the per-trade SE when days
+are iid bundles and widens when same-day trades share a regime — the
+review's point that 313 trades over 17 days is ~17 observations. Fewer
+than `gate_min_days` (new config key, default 10) distinct OOS days is
+an automatic DENY: "cannot evaluate" must not read as "pass".
+
+**Multiple-testing deflation is applied, not printed.** `evaluate()`
+defaults k to `deflation_k()` = max(pre-committed 3.255, E[max|t|] of
+the recorded trial count) instead of 2.0. The pre-commitment is a floor
+the recorded count can only raise. `gate_report.py` used to print the
+superseded quadrature formula above a table computed with the calibrated
+one — it now prints the applied form with the resolved k, and no longer
+crashes on a live entry with zero trades (denial payloads now carry the
+full key set, and every sort/format is None-safe).
+
+**The trial recorder has no remaining bypass.** `run_all()` routes every
+baseline through `_replay_for(source="daily_baseline")` — it was the one
+path still calling `replay_*` directly, so every daily baseline across
+4 symbols × 9 strategies went uncounted. Same change fixes the
+zero-trade-baseline bug: `replay_pa` could not dispatch `sg_ema` (own
+`evaluate_sg_ema` with a pivots argument) or `ew_reversal`, so both got
+`{"trades": 0}` written over any real results every day and could never
+graduate. `replay_pa` now has an explicit `sg_ema` branch (truncated-
+window ZigZag pivots, same call as live; the AI-bias gate reports
+"skipped" exactly as live does before the bias engine has computed).
+`trial_log`'s "37 free parameters" was stale — the count is now
+`free_param_count()`, computed from the bounds dicts (71 today).
+
+**Small-n decision rules got confidence bounds.** `estimate_probability`
+returns "unavailable" below `MIN_SAMPLE = 5` matched trades instead of a
+Laplace-smoothed number from n=1 (`unified_probability` already drops
+unavailable components). The nightly underperforming-pattern flagger
+suppresses a signal class only when the 95% Wilson UPPER bound of its
+win rate sits below 35% — 0/5 wins no longer condemns a pattern that a
+43% true rate could easily produce.
+
+Expected operational effect: with `gate_min_days=10` and k≈3.26, no
+strategy passes the live gate today — correctly, per the review: the
+evidence base (17 days, one regime) cannot support promotion. Paper
+trading is untouched everywhere (both `is_live_enabled` call sites sit
+behind `not paper_mode`); the gates only decide live. The spread live
+path remains disabled by design; `gate_report` now says its spread
+verdicts are advisory instead of implying they guard orders.
+
+Tests: `test_gate_statistics.py` (new — behavioral, no source-grepping:
+deflation, clustering collapse/deny cases, OOS-only scoring, run_all
+routing via a stubbed `_replay_for`, Wilson bounds, MIN_SAMPLE guard);
+`test_promotion_gate.py` updated to compare `evaluate()` against
+`required_margin_calibrated` at the k evaluate itself reports.
+`test_ai_probability_visible_breakdown.py` could not run here
+(playwright not installed in the venv — pre-existing).
+
 ## v59.65 — IV series is now self-describing; the tenor fear was overstated (2026-08-09)
 
 `daily_atm_iv` stored `(symbol, date, atm_iv)` and nothing else, so a

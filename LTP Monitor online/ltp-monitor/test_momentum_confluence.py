@@ -192,9 +192,14 @@ print("\n8) integration: backtester.replay_pa() and run_all() already "
      "iterate pa.PA_NAMES generically — confirmed the new strategy is "
      "included without needing a separate wiring change there")
 src = open("backtester.py").read()
+# v59.66 — run_all()'s loop became `[...spreads, momentum] +
+# list(pa.PA_NAMES)` when it was routed through _replay_for, so the old
+# exact-line scrape went stale. Accept either spelling; the executable
+# guarantee (every PA name actually evaluated) lives in
+# test_gate_statistics.py's stubbed run_all check.
 check("run_all() iterates PA_NAMES generically (already includes the "
       "new strategy automatically)",
-      "for name in pa.PA_NAMES:" in src)
+      "for name in pa.PA_NAMES:" in src or "list(pa.PA_NAMES)" in src)
 
 print("\n9) config hygiene: the daily auto-tuner (_tune_pa) and the "
      "live pa_enabled default both iterate PA_NAMES generically too, "
