@@ -4,6 +4,25 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.77 — Users & Access panel in Settings (2026-08-09)
+
+The admin endpoints for account management (`/api/auth/users` list/
+create/delete, `/password`, `/mfa-reset`) existed since v58.75 with no
+UI calling them — "there is no such option" was literally true. The
+Settings page now carries a Users & Access card, rendered for admins
+only (via `/api/auth/status`), hidden entirely when auth is off or the
+viewer isn't an admin: account list (role, MFA state, lock state, last
+login), add-user with role, password reset, MFA reset, delete — all
+against the existing endpoints, no new server surface.
+
+The recovery boundary is unchanged and stated on the card itself: a
+locked-out sole admin is recovered from the HOST via
+`python3 manage_users.py`, never over HTTP.
+
+test_users_panel.py: field-parity by executing auth.list_users (the
+producer), UI↔endpoint parity, single-definition JS checks, and a
+TestClient assertion that anonymous list/create are refused (401).
+
 ## v59.76 — the reverse channel: Dhan order-update websocket (2026-08-09)
 
 Answering "what reverse link does Dhan need?": none. Dhan's order

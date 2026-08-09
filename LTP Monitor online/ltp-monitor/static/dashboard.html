@@ -523,7 +523,7 @@ hr{border:none;border-top:1px solid var(--line);}
   <div class="dashgrid">
     <div class="dc8">
       <div class="panel" style="margin-bottom:8px">
-        <h2>&#128200; Live Chart (TradingView Lightweight Charts) <span class="badge" style="font-weight:400">v59.76</span> <span class="sub" id="lwChartStatus">connecting...</span>
+        <h2>&#128200; Live Chart (TradingView Lightweight Charts) <span class="badge" style="font-weight:400">v59.77</span> <span class="sub" id="lwChartStatus">connecting...</span>
           <select id="lwChartSymbol" style="margin-left:auto" onchange="switchLwChart(this.value)"></select></h2>
         <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;flex-wrap:wrap">
           <button class="lwIntervalBtn active" data-interval="1" onclick="switchLwInterval('1')">1m</button>
@@ -1448,7 +1448,17 @@ hr{border:none;border-top:1px solid var(--line);}
     <div class="frow"><label>Alpha Vantage API key <span id="s_av_state" style="color:var(--dim)"></span></label><input type="password" id="s_av" placeholder="leave blank to keep current"></div>
     <div class="frow"><label>NewsAPI.org API key <span id="s_na_state" style="color:var(--dim)"></span></label><input type="password" id="s_na" placeholder="leave blank to keep current"></div>
 
-    
+
+    </div>
+    <div class="settings-card" id="usersCard" style="display:none">
+      <div class="settings-card-title">Users &amp; Access (admin)</div>
+      <div class="reasons" style="margin-bottom:10px">Accounts for this dashboard. New users pair an authenticator at their first sign-in. A locked-out sole admin is recovered from the host, not from here: <code>python3 manage_users.py</code> — filesystem access is the recovery boundary.</div>
+      <div id="usersList" class="reasons">loading…</div>
+      <div class="frow"><label>New username</label><input type="text" id="u_name" autocomplete="off"></div>
+      <div class="frow"><label>Password (min 8 chars)</label><input type="password" id="u_pw" autocomplete="new-password"></div>
+      <div class="frow"><label>Role</label><select id="u_role"><option value="user">user</option><option value="admin">admin</option></select></div>
+      <div class="actrow"><button class="act b-exec" onclick="userAdd()">Add user</button></div>
+      <div class="reasons" id="usersMsg"></div>
     </div>
     </div>
 
@@ -1830,7 +1840,78 @@ async function loadWatchPage_filings(sym){
   }catch(e){ el.innerHTML = '<div class="sub">filings failed: ' + e + '</div>'; }
 }
 
+// ---- Users & Access (v59.77) — UI over the EXISTING admin endpoints
+// (/api/auth/users*); manage_users.py on the host remains the recovery
+// path for a locked-out sole admin. Card renders for admins only.
+function _uesc(s){return String(s).replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/</g,'&lt;');}
+async function loadUsersPanel(){
+  var card=document.getElementById('usersCard');
+  if(!card) return;
+  try{
+    var st=await (await fetch('/api/auth/status')).json();
+    if(!st.enabled||st.role!=='admin'){card.style.display='none';return;}
+    card.style.display='';
+    var j=await (await fetch('/api/auth/users')).json();
+    var rows=(j.users||[]).map(function(u){
+      var n=_uesc(u.username);
+      return '<tr><td style="padding:2px 8px 2px 0"><b>'+n+'</b></td>'+
+        '<td style="padding:2px 8px 2px 0">'+u.role+'</td>'+
+        '<td style="padding:2px 8px 2px 0">'+(u.mfa?'MFA ok':'<b>no MFA</b>')+'</td>'+
+        '<td style="padding:2px 8px 2px 0">'+(u.locked?'<b>LOCKED</b>':'')+'</td>'+
+        '<td style="padding:2px 8px 2px 0">'+(u.last_login||'never')+'</td>'+
+        '<td><a href="#" onclick="userResetPw(\''+n+'\');return false">passwd</a> · '+
+        '<a href="#" onclick="userResetMfa(\''+n+'\');return false">mfa-reset</a> · '+
+        '<a href="#" onclick="userDelete(\''+n+'\');return false">delete</a></td></tr>';
+    }).join('');
+    document.getElementById('usersList').innerHTML=
+      '<table style="border-collapse:collapse">'+rows+'</table>';
+  }catch(e){card.style.display='none';}
+}
+async function userAdd(){
+  var name=document.getElementById('u_name').value.trim();
+  var pw=document.getElementById('u_pw').value;
+  var role=document.getElementById('u_role').value;
+  var m=document.getElementById('usersMsg');m.textContent='';
+  var r=await fetch('/api/auth/users',{method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({username:name,password:pw,role:role})});
+  var j={};try{j=await r.json();}catch(e){}
+  if(!r.ok){m.textContent=j.detail||('failed ('+r.status+')');return;}
+  m.textContent='created '+name+' — they pair an authenticator at first sign-in';
+  document.getElementById('u_name').value='';
+  document.getElementById('u_pw').value='';
+  loadUsersPanel();
+}
+async function userDelete(u){
+  if(!confirm('Delete account "'+u+'"?'))return;
+  var r=await fetch('/api/auth/users/'+encodeURIComponent(u),{method:'DELETE'});
+  var j={};try{j=await r.json();}catch(e){}
+  document.getElementById('usersMsg').textContent=
+    r.ok?('deleted '+u):(j.detail||('failed ('+r.status+')'));
+  loadUsersPanel();
+}
+async function userResetPw(u){
+  var pw=prompt('New password for '+u+' (min 8 chars):');
+  if(!pw)return;
+  var r=await fetch('/api/auth/users/'+encodeURIComponent(u)+'/password',
+    {method:'POST',headers:{'Content-Type':'application/json'},
+     body:JSON.stringify({password:pw})});
+  var j={};try{j=await r.json();}catch(e){}
+  document.getElementById('usersMsg').textContent=
+    r.ok?('password reset for '+u):(j.detail||('failed ('+r.status+')'));
+}
+async function userResetMfa(u){
+  if(!confirm('Clear MFA for "'+u+'"? They re-pair at next sign-in.'))return;
+  var r=await fetch('/api/auth/users/'+encodeURIComponent(u)+'/mfa-reset',
+    {method:'POST'});
+  var j={};try{j=await r.json();}catch(e){}
+  document.getElementById('usersMsg').textContent=
+    r.ok?('MFA cleared for '+u):(j.detail||('failed ('+r.status+')'));
+  loadUsersPanel();
+}
+
 async function loadSettings(){
+  loadUsersPanel();
   settings=await (await fetch("/api/settings")).json();
   applyTheme(settings.theme||"dark");
   const badge=document.getElementById("modeBadge");
