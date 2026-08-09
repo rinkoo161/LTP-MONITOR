@@ -4,6 +4,62 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.71 — Tier 4: failure domains isolated, errors are loud, the clock is the exchange's (2026-08-09)
+
+The code-robustness findings from the third-eye review, resolved:
+
+**The AI auto-exit swallow is gone (was CRITICAL).** All three advisory
+paths (option, spread, futures) had `self.exit*()` INSIDE the try whose
+handler writes "AI check unavailable" — any bug raised by the exit
+itself was relabelled as a cosmetic advice string while the position
+stayed open. The exit decision is now made inside the try and EXECUTED
+after it; an advice failure degrades quietly, an exit failure surfaces.
+Guarded by an AST test (no exit call may sit inside an advice-handling
+Try), not a string grep.
+
+**Failure domains are isolated and loud.** `ExecutionAgent.cycle` runs
+its eight steps individually — one deterministic exception in
+`_monitor()` used to skip spread/futures monitoring and auto-deploy
+every cycle forever; now each step fails alone and the first error is
+re-raised after all steps ran. `_monitor` isolates per position: a
+malformed position alerts HIGH ("its stop is NOT being enforced",
+throttled per symbol) and the others keep their protection. `Agent.run`
+alerts on the first crash and every 20th consecutive one — an agent
+error used to be one line in a 400-deep feed that rotates out in
+minutes, with nothing anywhere inspecting `status`; "quiet because
+broken" can no longer read as "quiet because idle".
+
+**The data layer runs on the exchange clock.** `store.IST` /
+`ist_now()` / `ist_today()` (in the one module everything imports and
+that imports nothing back); every naive `date.today()`/`datetime.now()`
+in history, broker_adapter, risk_engine, analyzer and config now goes
+through them. On a UTC host those resolved to the host's calendar —
+wrong for the whole IST evening — corrupting daily bucketing, retention
+cutoffs, fetch ranges and the ATM-IV day cache. agents.py was always
+IST-explicit; now both layers agree.
+
+**Bounded what grew forever.** In-memory `closed_trades` is a capped
+window (`closed_trades_memory_cap`, default 5000 — the full record
+stays in trades.jsonl); `option_reentry_block` prunes lapsed keys at
+the write site (every strike ever traded used to keep its key for the
+process lifetime); `activity.log` rotates past 10 MB (the live file
+had reached 12 MB with the operator rotating by hand). The unused
+`import risk_engine` hiding inside the entry-enrichment swallow — where
+a broken import would have been permanently invisible — is removed.
+
+**Verified already fine, no change:** `risk_engine.expected_loss`
+already excludes-and-counts malformed positions rather than treating
+them as risk-free; the Kotak master parse already uses narrow exception
+classes with `skipped_bad_expiry`/`method_counts` instrumentation; the
+Bus feed/alert deques were always bounded.
+
+Tests: `test_tier4_robustness.py` — 26 checks: the AST no-exit-in-
+swallow property, step isolation (order preserved, later steps run,
+first error re-raised, step named), per-position isolation, crash-alert
+throttling and accounting, IST helpers plus per-module naive-date
+sweeps, the capped trade window, and a real 11 MB rotation of the
+activity log.
+
 ## v59.70 — Tier 3 round 2: fills confirmed, staleness said out loud, all books prioritised (2026-08-09)
 
 Completeness pass over the execution-realism checklist ahead of the

@@ -17,9 +17,31 @@ broker_adapter and the news modules all import this at module scope, so
 it must not import any of them back.
 """
 import os
+from datetime import datetime as _datetime, timedelta as _timedelta, \
+    timezone as _timezone
 
 ENV_VAR = "LTP_MONITOR_HOME"
 DEFAULT = "~/.ltp-monitor"
+
+# v59.71 (third-eye Tier 4) — THE exchange clock, defined in the one
+# module everything already imports and that imports nothing back. The
+# agents layer was IST-explicit from the start, but the data layer
+# (history, broker_adapter, risk_engine, analyzer, config) used naive
+# date.today()/datetime.now(), which resolve to the HOST timezone: on a
+# UTC host — the default cloud VM — every date is wrong for the whole
+# IST evening after 18:30, and the 00:00–05:30 IST window mislabels
+# entire sessions.
+IST = _timezone(_timedelta(hours=5, minutes=30))
+
+
+def ist_now():
+    """The current time on the EXCHANGE clock, never the host's."""
+    return _datetime.now(IST)
+
+
+def ist_today():
+    """Today's date on the EXCHANGE clock, never the host's."""
+    return _datetime.now(IST).date()
 
 
 def home():

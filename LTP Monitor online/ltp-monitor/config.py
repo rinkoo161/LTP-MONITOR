@@ -268,6 +268,10 @@ DEFAULTS = {
     "max_spread_capital_pct": 60.0,
     "spread_reentry_cooldown_min": 15,
     "pa_min_trades_for_confidence": 15,  # min backtest trades before a version can go live
+    "closed_trades_memory_cap": 5000,  # v59.71 — in-memory closed_trades window
+                           # (full history stays in trades.jsonl). Rescanned by
+                           # five consumers per cycle; unbounded growth was a
+                           # slow leak wearing an audit trail's clothes.
     "slippage_impact_alpha": 0.5,  # v59.69 — size impact exponent on the bid-ask
                            # component: halfspread(n) = halfspread_1 × n^alpha.
                            # 0 = linear (no impact, the old assumption), 0.5 =
@@ -986,7 +990,7 @@ def _warn_dropped_keys(dropped):
         return
     try:
         import datetime
-        ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        ts = store.ist_now().strftime("%Y-%m-%d %H:%M:%S")   # v59.71 — IST
         with open(_LOG_FILE, "a") as f:
             f.write(f"[{ts}] [config] \u26a0 save() DROPPED unregistered "
                     f"key(s) — not persisted, will not survive a restart: "

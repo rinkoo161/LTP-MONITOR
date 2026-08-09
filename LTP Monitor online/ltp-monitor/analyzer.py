@@ -851,7 +851,8 @@ def analyze(chain: dict, momentum: dict | None = None,
         except (ValueError, TypeError):
             _ref = None
     if _ref is None:
-        _ref = _date.today()
+        import store as _store
+        _ref = _store.ist_today()   # v59.71 — exchange clock, not host
     if exp_str:
         try:
             y, m, d_ = (int(x) for x in exp_str.split("-"))

@@ -194,7 +194,7 @@ class DhanClient:
         if cached and time.time() - cached[0] < 55:
             return cached[1]
         import datetime as _dt
-        today = _dt.date.today()
+        today = store.ist_today()   # v59.71 — exchange clock, not host
         frm = (today - _dt.timedelta(days=4)).isoformat()  # covers weekends
         body = {
             "securityId": str(UNDERLYINGS[symbol]),
@@ -238,7 +238,7 @@ class DhanClient:
         if cached and time.time() - cached[0] < 6 * 3600:  # daily bars — long cache
             return cached[1]
         import datetime as _dt
-        today = _dt.date.today()
+        today = store.ist_today()   # v59.71 — exchange clock, not host
         frm = (today - _dt.timedelta(days=days_back)).isoformat()
         body = {
             "securityId": str(UNDERLYINGS[symbol]),
@@ -562,8 +562,8 @@ class ZerodhaClient:
         tok = {"NIFTY": 256265, "BANKNIFTY": 260105,
                "FINNIFTY": 257801, "SENSEX": 265}.get(symbol)
         from datetime import datetime, timedelta
-        frm = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
-        to = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        frm = (store.ist_now() - timedelta(days=1)).strftime("%Y-%m-%d")
+        to = store.ist_now().strftime("%Y-%m-%d %H:%M:%S")   # v59.71 — IST
         iv = {"1": "minute", "5": "5minute", "15": "15minute"}[interval]
         data = self._req(f"/instruments/historical/{tok}/{iv}",
                          {"from": frm, "to": to})
@@ -637,7 +637,7 @@ class KotakNeoClient:
         import csv, io, os
         from datetime import date
         cache = store.path("kotak_master_urls.json")
-        today = date.today().isoformat()
+        today = store.ist_today().isoformat()   # v59.71 — exchange clock
         urls = None
         if os.path.exists(cache):
             try:

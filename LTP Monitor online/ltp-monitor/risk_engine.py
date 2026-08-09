@@ -280,8 +280,9 @@ def backfill_iv_history(symbol, days_back=90):
     from datetime import datetime, timedelta
     processed = skipped_cached = skipped_no_data = skipped_incomplete = 0
     skipped_expiry_day = 0
-    cutoff = (datetime.now() - timedelta(days=days_back)).strftime("%Y-%m-%d")
-    today = datetime.now().strftime("%Y-%m-%d")
+    import store as _store
+    cutoff = (_store.ist_now() - timedelta(days=days_back)).strftime("%Y-%m-%d")
+    today = _store.ist_now().strftime("%Y-%m-%d")   # v59.71 — IST, not host
     for day in history.chain_days(symbol):
         if day < cutoff:
             continue

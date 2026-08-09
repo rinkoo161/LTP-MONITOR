@@ -1335,7 +1335,7 @@ def prune_non_market_session_candles(dry_run=True, batch_size=5000, log=print):
 def log_sync(symbol, detail):
     c = _conn()
     c.execute("INSERT INTO sync_log VALUES (?,?,?)",
-              (date.today().isoformat(), symbol, detail))
+              (store.ist_today().isoformat(), symbol, detail))   # v59.71 — IST
     c.commit(); c.close()
 
 
@@ -1346,7 +1346,7 @@ def recent_sync_log(days=14):
     market closed / N legs failed) was persisted here the whole time,
     just invisible."""
     c = _conn()
-    cutoff = (date.today() - timedelta(days=days)).isoformat()
+    cutoff = (store.ist_today() - timedelta(days=days)).isoformat()   # v59.71 — IST
     rows = c.execute(
         "SELECT day, symbol, detail FROM sync_log WHERE day >= ? "
         "ORDER BY day DESC, symbol", (cutoff,)).fetchall()
@@ -1613,9 +1613,9 @@ def sync_index_history(dhan, symbol, years=2, log=print):
     seg_kind, sec = SEG[symbol]
     upsert_instrument(sec, symbol, "idx")
     total = 0
-    to = date.today()
+    to = store.ist_today()   # v59.71 — exchange clock
     empty_chunks = 0
-    while (date.today() - to).days < years * 365 and empty_chunks < 3:
+    while (store.ist_today() - to).days < years * 365 and empty_chunks < 3:
         frm = to - timedelta(days=75)
         try:
             time.sleep(1.2)
@@ -1739,7 +1739,7 @@ def sync_futures_candles(dhan, symbol, day, log=print, n=3):
 def sync_day_chain(get_chain, dhan, symbol, log=print, progress=lambda m: None):
     """Archive today's chain: register instruments from the live chain and
     store 1m candles for each strike (paced)."""
-    day = date.today().isoformat()
+    day = store.ist_today().isoformat()   # v59.71 — exchange clock
     # market-closed guard: if the index printed no candles today there is
     # nothing to archive (weekends/holidays) — bail out fast. IMPORTANT:
     # a real API failure (502/500/DNS) must NOT be silently relabeled as

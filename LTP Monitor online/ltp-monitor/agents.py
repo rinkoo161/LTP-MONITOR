@@ -195,9 +195,31 @@ def load_persisted_trades():
     return out
 
 
+def _record_closed(bus, closed):
+    """Append to the in-memory closed_trades window, capped (v59.71,
+    third-eye Tier 4). The list is re-scanned by five consumers per
+    cycle and previously grew for the process lifetime; the FULL history
+    lives in trades.jsonl (written by _append_trade at every call site
+    of this), the bus carries the working window."""
+    import config as _cfg
+    trades = bus.get("closed_trades", [])
+    trades.append(closed)
+    cap = int(_cfg.load().get("closed_trades_memory_cap", 5000) or 5000)
+    bus.set("closed_trades", trades[-cap:])
+
+
 def _append_activity(line: str):
-    """Append a single activity-log line to disk (best-effort)."""
+    """Append a single activity-log line to disk (best-effort).
+
+    v59.71 (third-eye Tier 4) — size-capped: rotates to activity.log.1
+    past ~10 MB, one generation kept. The live file had reached 12 MB
+    with the operator rotating it by hand."""
     try:
+        try:
+            if os.path.getsize(LOG_FILE) > 10 * 1024 * 1024:
+                os.replace(LOG_FILE, LOG_FILE + ".1")
+        except OSError:
+            pass
         with open(LOG_FILE, "a") as f:
             f.write(line + "\n")
     except Exception:
@@ -1272,9 +1294,24 @@ class Agent(threading.Thread):
                 self.status = "running"
                 self.cycle()
                 self.status = "ok"
+                self._consec_errors = 0
             except Exception as e:
                 self.status = f"error: {e}"
                 self.bus.log(self.name, f"⚠ {e}")
+                # v59.71 (third-eye Tier 4) — an agent error used to be
+                # one line in a 400-deep feed that rotates out in
+                # minutes, and nothing anywhere inspected `status`. A
+                # crashing cycle IS an outage of everything this agent
+                # does. The first error and every 20th consecutive one
+                # reach the alert stream, so "quiet because broken" can
+                # no longer read as "quiet because idle".
+                n = getattr(self, "_consec_errors", 0) + 1
+                self._consec_errors = n
+                if n == 1 or n % 20 == 0:
+                    self.bus.alert("high", self.name, self.name.upper(),
+                                   f"agent cycle CRASHED "
+                                   f"({n} consecutive): "
+                                   f"{type(e).__name__}: {e}")
             self.last_run = now_ist().strftime("%H:%M:%S")
             self.stop_evt.wait(self.interval)
         self.status = "stopped"
@@ -4480,15 +4517,36 @@ class ExecutionAgent(Agent):
         self._entry_lock = threading.Lock()
 
     def cycle(self):
-        self._check_portfolio_kill_switch()
-        self._reconcile_broker()   # v59.69 — live-only, self-throttled
+        # v59.71 (third-eye Tier 4) — per-step isolation. These used to
+        # be bare calls in sequence: one deterministic exception in
+        # _monitor() skipped spread monitoring, futures monitoring and
+        # auto-deploy EVERY cycle, forever, with a feed line as the only
+        # witness. Each step now fails alone; the first error is
+        # re-raised after every step has had its chance, so run()'s
+        # crash accounting (status + HIGH alert) still fires.
+        first_err = None
+        for step in (self._check_portfolio_kill_switch,
+                     self._reconcile_broker,     # v59.69 — live-only, throttled
+                     self._drain_entry_queue,
+                     self._monitor,
+                     self._monitor_spreads,
+                     self._monitor_futures,      # S4 (v50)
+                     self._futures_signal_engine,  # S4 Phase 2 (v52)
+                     self._auto_spreads):
+            try:
+                step()
+            except Exception as e:
+                self.bus.log(self.name,
+                             f"⚠ step {step.__name__} failed: "
+                             f"{type(e).__name__}: {e}")
+                if first_err is None:
+                    first_err = e
+        if first_err is not None:
+            raise first_err
+
+    def _drain_entry_queue(self):
         if self._queue:
             self._enter(self._queue.popleft())
-        self._monitor()
-        self._monitor_spreads()
-        self._monitor_futures()      # S4 (v50) — futures position type
-        self._futures_signal_engine()  # S4 Phase 2 (v52) — auto entries
-        self._auto_spreads()
 
     # ------------------------------------------------------------------
     # S4 — FUTURES TRADING (v50, Phase 1: paper-only, manual/API driven)
@@ -4903,6 +4961,14 @@ class ExecutionAgent(Agent):
             return
         p["ai_ts"] = time.time()
         p["ai_last_pnl"] = p.get("pnl", 0)
+        # v59.71 (third-eye Tier 4) — the exit DECISION is made inside
+        # the advice try; the exit CALL runs after it. It used to sit
+        # inside: any bug raised by exit_future() — a KeyError on a
+        # restored position, a cost-model TypeError — was converted into
+        # the cosmetic string "AI check unavailable", and a position the
+        # system had decided to close silently stayed open. An advice
+        # failure may degrade quietly; an exit failure must surface.
+        _do_exit = None
         try:
             import llm, json as _json
             _t0 = time.time()
@@ -4939,9 +5005,11 @@ class ExecutionAgent(Agent):
                                      f"AI auto-exit ENABLED — closing {sym} "
                                      f"futures {p['side']} on AI advisory "
                                      f"({confidence}%): {why}")
-                        self.exit_future(sym, f"AI advisory EXIT ({confidence}%): {why}")
+                        _do_exit = f"AI advisory EXIT ({confidence}%): {why}"
         except Exception as e:
             p["ai_advice"] = f"AI check unavailable ({e})"
+        if _do_exit:
+            self.exit_future(sym, _do_exit)   # outside the try — see above
 
     def _futures_signal_engine(self, symbol=None):
         """S4 Phase 2 (v52) — futures entry-signal engine. Explicit
@@ -5176,9 +5244,7 @@ class ExecutionAgent(Agent):
                       cost_model=_c.get("model"),   # v59.68 — fallback is visible in the record
                       pnl=round(gross - fees - slippage, 0),   # NET of BOTH cost parts
                       reason=reason)
-        trades = self.bus.get("closed_trades", [])
-        trades.append(closed)
-        self.bus.set("closed_trades", trades)
+        _record_closed(self.bus, closed)   # capped window (v59.71)
         _append_trade(closed)
         self.bus.log(self.name, f"FUT exit {p['side']} {symbol} — {reason} — "
                      f"gross \u20b9{gross:.0f}, fees \u20b9{fees:.0f}, "
@@ -5929,6 +5995,7 @@ class ExecutionAgent(Agent):
         sp["ai_ts"] = time.time()
         sp["ai_last_pnl"] = sp.get("pnl", 0)
         _t0 = time.time()
+        _do_exit = None   # decided in the try, EXECUTED after it (v59.71)
         try:
             import llm, json as _json
             market_ctx = self._market_move_context(sp["symbol"])
@@ -5975,13 +6042,18 @@ class ExecutionAgent(Agent):
                                              chain.get("spot"),
                                              f"AI EXIT {sp['strategy']} ({confidence}%): {why}")
                     if cfg.get("spread_ai_auto_exit_enabled", False):
-                        sid = sp["id"]
                         self.bus.log(self.name,
                                      f"AI auto-exit ENABLED — closing {sp['strategy']} "
                                      f"{sp['symbol']} on AI advisory ({confidence}%): {why}")
-                        self.exit_spread(sid, f"AI advisory EXIT ({confidence}%): {why}")
+                        _do_exit = (sp["id"],
+                                    f"AI advisory EXIT ({confidence}%): {why}")
         except Exception as e:
             sp["ai_advice"] = f"AI check unavailable ({e})"
+        # v59.71 (third-eye Tier 4) — exit executes OUTSIDE the advice
+        # try, so an exit_spread() bug can no longer be relabelled
+        # "AI check unavailable" while the spread stays open.
+        if _do_exit:
+            self.exit_spread(*_do_exit)
 
     def exit_spread(self, sid, reason="manual exit"):
         spreads = self.bus.get("spreads", {}) or {}
@@ -6091,9 +6163,7 @@ class ExecutionAgent(Agent):
                             f"the day (spread_stop_after_consecutive_losses)")
         else:
             self._spread_consec_losses[pair_key] = 0
-        trades = self.bus.get("closed_trades", [])
-        trades.append(closed)
-        self.bus.set("closed_trades", trades)
+        _record_closed(self.bus, closed)   # capped window (v59.71)
         _append_trade(closed)
         self.bus.alert("high", "execution", sp["symbol"],
                        f"Spread closed — {reason} — net ₹{closed['pnl']:.0f}")
@@ -6409,7 +6479,9 @@ class ExecutionAgent(Agent):
             if entry_row:
                 entry_leg_data = entry_row.get(leg.lower()) or {}
                 pos["entry_gamma"] = entry_leg_data.get("gamma")
-                import risk_engine as _rengine
+                # (an unused `import risk_engine` sat here inside this
+                # swallow — a broken import would have been permanently
+                # invisible. Removed, v59.71.)
                 bid, ask = entry_leg_data.get("bid"), entry_leg_data.get("ask")
                 if bid and ask and ask > bid:
                     spread_pct = (ask - bid) / ((ask + bid) / 2) * 100
@@ -6501,7 +6573,25 @@ class ExecutionAgent(Agent):
             return
         summaries = []
         for sym, p in list(positions.items()):
-            r = self._monitor_one(p)
+            # v59.71 (third-eye Tier 4) — per-position isolation: one
+            # malformed position used to kill monitoring of every OTHER
+            # open position in the same cycle. The broken one alerts
+            # (throttled per symbol) — an unmonitorable position means
+            # its stop is not being enforced, which is HIGH by any
+            # definition — and the rest keep their protection.
+            try:
+                r = self._monitor_one(p)
+            except Exception as e:
+                _ts_map = getattr(self, "_mon_err_ts", {})
+                self._mon_err_ts = _ts_map
+                if time.time() - _ts_map.get(sym, 0) > 300:
+                    _ts_map[sym] = time.time()
+                    self.bus.alert("high", self.name, sym,
+                                   f"position monitor CRASHED for {sym} "
+                                   f"({type(e).__name__}: {e}) — its stop/"
+                                   f"target is NOT being enforced")
+                summaries.append(f"{sym} monitor error ({type(e).__name__})")
+                continue
             if r:
                 summaries.append(r)
         self.summary = " · ".join(summaries) if summaries else "idle"
@@ -6768,6 +6858,7 @@ class ExecutionAgent(Agent):
         p["ai_ts"] = time.time()
         p["ai_last_pnl"] = p.get("pnl", 0)
         _t0 = time.time()
+        _do_exit = None   # decided in the try, EXECUTED after it (v59.71)
         try:
             import llm, json as _json
             market_ctx = self._market_move_context(sym)
@@ -6840,9 +6931,14 @@ class ExecutionAgent(Agent):
                                      f"AI auto-exit ENABLED — closing {sym} "
                                      f"{p.get('strike')} {p.get('leg')} on AI "
                                      f"advisory ({confidence}%): {why}")
-                        self.exit(f"AI advisory EXIT ({confidence}%): {why}", symbol=sym)
+                        _do_exit = f"AI advisory EXIT ({confidence}%): {why}"
         except Exception as e:
             p["ai_advice"] = f"AI check unavailable ({e})"
+        # v59.71 (third-eye Tier 4) — exit executes OUTSIDE the advice
+        # try, so an exit() bug can no longer be relabelled "AI check
+        # unavailable" while the position stays open.
+        if _do_exit:
+            self.exit(_do_exit, symbol=sym)
 
     def exit(self, reason="manual exit", symbol=None):
         positions = self.bus.get("positions", {}) or {}
@@ -6934,9 +7030,7 @@ class ExecutionAgent(Agent):
             # code that reads a single "position" still gets something
             # useful rather than None while other trades remain open)
             self.bus.set("position", next(iter(positions.values())))
-        trades = self.bus.get("closed_trades", [])
-        trades.append(closed)
-        self.bus.set("closed_trades", trades)
+        _record_closed(self.bus, closed)   # capped window (v59.71)
         _append_trade(closed)          # persist to disk immediately
         # RE-ENTRY COOLDOWN — stamp symbol+strike+leg on the way out.
         # 2026-08-06: spreads, futures, broker failures and news
@@ -6948,6 +7042,12 @@ class ExecutionAgent(Agent):
         # damage of whatever causes an instant exit next.
         _cd = self.bus.get("option_reentry_block") or {}
         _cd[f"{p['symbol']}:{p['strike']}:{p['leg']}"] = time.time()
+        # v59.71 — prune lapsed entries while writing: every strike ever
+        # traded used to keep its key for the process lifetime. Kept for
+        # 2x the cooldown so a raised cooldown still honours older stamps.
+        _ttl = 2 * max(60, int(cfg.get("option_reentry_cooldown_sec", 180) or 180))
+        _now_prune = time.time()
+        _cd = {k: v for k, v in _cd.items() if _now_prune - v < _ttl}
         self.bus.set("option_reentry_block", _cd)
         self.bus.alert("high", "execution", p["symbol"],
                        f"Exited {p['strike']} {p['leg']} — {reason} — "
@@ -8730,7 +8830,10 @@ class Orchestrator:
         self.running = False
         # Restore historical trades so P&L view survives restarts/updates
         history = load_persisted_trades()
-        self.bus.set("closed_trades", history)
+        # v59.71 — same window cap the per-close append uses; the full
+        # record stays in trades.jsonl.
+        _cap = int(config.load().get("closed_trades_memory_cap", 5000) or 5000)
+        self.bus.set("closed_trades", history[-_cap:])
         # 2026-07-28 — one-time startup migration cleaning up duplicate
         # journal entries from before the journal_done-vs-restart fix
         # (see _dedupe_journal_file's own docstring for the root cause).
