@@ -4852,6 +4852,14 @@ class ExecutionAgent(Agent):
             if _st in ("REJECTED", "CANCELLED"):
                 return {"error": f"live futures order {_st} at the broker "
                                  f"\u2014 nothing tracked (see alert)"}
+            # v59.75 — real fill for the entry price; stops/targets stay
+            # as designed at the quote (the geometry the sizing was
+            # approved against), the ENTRY price is what actually traded.
+            _fpx, _ = self._actual_fill(orders, resp, lots * lot_size,
+                                        f"FUT {side} {symbol}")
+            if _fpx:
+                _quote_at_entry = ltp
+                ltp = _fpx
         # (stop/target geometry and the rupee cap were computed above,
         # BEFORE the order was placed — see the block after `lot_size`.
         # _sl_px/_tg_px are already bound here.)
@@ -5347,6 +5355,18 @@ class ExecutionAgent(Agent):
                     if _st in ("REJECTED", "CANCELLED"):
                         return {"error": f"FUT close {_st} at the broker — "
                                          f"position kept, verify manually"}
+                    # v59.75 — exit P&L from the REAL fill when the
+                    # trade book answers.
+                    _fpx, _ = self._actual_fill(
+                        orders, resp, p["lots"] * p["lot_size"],
+                        f"FUT close {symbol}")
+                    if _fpx:
+                        _sign = 1 if p["side"] == "LONG" else -1
+                        p["exit_fill_slippage"] = round(
+                            _fpx - (p.get("ltp") or _fpx), 2)
+                        p["ltp"] = _fpx
+                        p["pnl"] = round((_fpx - p["entry"]) * _sign
+                                         * p["lot_size"] * p["lots"], 2)
                 except Exception as e:
                     reason = f"{reason} [LIVE CLOSE ORDER FAILED: {e} — " \
                              f"verify position at the broker manually]"
@@ -5501,6 +5521,40 @@ class ExecutionAgent(Agent):
                          f"order {oid} status check unavailable "
                          f"({type(e).__name__}) — UNVERIFIED ({context})")
             return None
+
+    def _actual_fill(self, orders, resp, expect_qty=None, context=""):
+        """Best-effort REAL fill from the trade book (v59.75).
+
+        Third-eye Tier 0/3: 'actual fill prices are never learned —
+        entry is recorded as the pre-trade quote, exit as the last
+        monitored premium.' For LIVE orders this asks the broker what
+        actually traded (broker_adapter.parse_fills, the one fill
+        parser) and returns (avg_price or None, qty). None means
+        unverified — callers keep the quote and the record says so via
+        the absent fill fields; nothing is invented. A partial fill is
+        a HIGH alert: the book tracks intended qty and must be
+        reconciled by hand until order-splitting exists."""
+        oid = (resp or {}).get("orderId")
+        if not oid or not hasattr(orders, "trade_book"):
+            return None, 0
+        try:
+            import broker_adapter as _ba
+            px, qty = _ba.parse_fills(orders.trade_book(oid), order_id=oid)
+            if px:
+                self.bus.log(self.name,
+                             f"fill: order {oid} avg ₹{px} ×{qty} ({context})")
+                if expect_qty and qty and int(qty) != int(expect_qty):
+                    self.bus.alert("high", self.name, context,
+                                   f"PARTIAL FILL {qty}/{expect_qty} "
+                                   f"({context}) — the book tracks the "
+                                   f"intended qty; reconcile manually")
+            return px, qty
+        except Exception as e:
+            self.bus.log(self.name,
+                         f"fill lookup unavailable for {oid} "
+                         f"({type(e).__name__}) — keeping the quote "
+                         f"({context})")
+            return None, 0
 
     def _reconcile_broker(self):
         """v59.69 (third-eye Tier 3) — close the book against broker
@@ -6665,6 +6719,16 @@ class ExecutionAgent(Agent):
                                  f"broker — entry abandoned, nothing tracked")
                     return {"error": f"live BUY {pos['order_status']} at "
                                      f"the broker (see alert)"}
+                # v59.75 — book the REAL fill, not the pre-trade quote,
+                # and record the measured entry slippage alongside it.
+                _fpx, _ = self._actual_fill(orders, resp, qty,
+                                            f"BUY {sym} {sig.get('strike')}")
+                if _fpx:
+                    pos["quote_at_entry"] = fill
+                    pos["entry_fill_slippage"] = round(_fpx - fill, 2)
+                    pos["entry"] = _fpx
+                    pos["ltp"] = _fpx
+                    pos["capital_used"] = round(_fpx * qty, 0)
             except Exception as e:
                 # A timeout does NOT mean the order failed — it may have
                 # reached the exchange after this call gave up. Track
@@ -7155,6 +7219,16 @@ class ExecutionAgent(Agent):
                         return {"error": f"exit order {_st} at the broker "
                                          f"— position kept; retry after "
                                          f"cooldown"}
+                    # v59.75 — the exit P&L is computed from the REAL
+                    # fill when the trade book answers, not from the
+                    # last monitored premium.
+                    _fpx, _ = self._actual_fill(orders, resp, p["qty"],
+                                                f"SELL {p['symbol']}")
+                    if _fpx:
+                        p["exit_fill_slippage"] = round(
+                            _fpx - (p.get("ltp") or _fpx), 2)
+                        p["ltp"] = _fpx
+                        p["pnl"] = round((_fpx - p["entry"]) * p["qty"], 0)
                 except Exception as e:
                     # An ALERT, not a log line: "close manually NOW" is
                     # the single most urgent operational event this

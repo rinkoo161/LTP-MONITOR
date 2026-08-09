@@ -26,7 +26,7 @@ from agents import Orchestrator, compute_momentum
 import agents
 
 BASE = os.path.dirname(os.path.abspath(__file__))
-APP_VERSION = "v59.74"   # maintained per explicit request; last delivered was v49
+APP_VERSION = "v59.75"   # maintained per explicit request; last delivered was v49
 
 app = FastAPI(title="LTP Option Chain Monitor")
 
@@ -1795,6 +1795,11 @@ def api_engine():
     return h
 
 
+def _zero_bucket():
+    return {"realized": 0.0, "fees": 0.0, "slippage": 0.0,
+            "count": 0, "wins": 0}
+
+
 def _lifetime_trade_totals():
     """Lifetime realized/fees/slippage/count/wins from trades.jsonl,
     cached on the file's mtime.
@@ -1815,8 +1820,12 @@ def _lifetime_trade_totals():
     c = _LIFETIME_TOTALS_CACHE
     if c.get("mtime") == m and c.get("totals"):
         return c["totals"]
-    realized = fees = slippage = 0.0
-    count = wins = 0
+    # v59.75 — LIVE and PAPER are separate books. A live rupee and a
+    # simulated rupee must never be summed into one headline again;
+    # "combined" survives only for backward-compatible consumers and is
+    # labelled as such.
+    buckets = {"combined": _zero_bucket(), "paper": _zero_bucket(),
+               "live": _zero_bucket()}
     try:
         with open(path) as f:
             for line in f:
@@ -1827,17 +1836,23 @@ def _lifetime_trade_totals():
                     t = json.loads(line)
                 except ValueError:
                     continue          # torn final line after a crash
+                mode = "paper" if t.get("paper", True) else "live"
                 pnl = t.get("pnl") or 0
-                realized += pnl
-                fees += t.get("fees") or 0
-                slippage += t.get("slippage") or 0
-                count += 1
-                if pnl > 0:
-                    wins += 1
+                for b in (buckets["combined"], buckets[mode]):
+                    b["realized"] += pnl
+                    b["fees"] += t.get("fees") or 0
+                    b["slippage"] += t.get("slippage") or 0
+                    b["count"] += 1
+                    if pnl > 0:
+                        b["wins"] += 1
     except OSError:
         return None
-    totals = {"realized": round(realized, 0), "fees": round(fees, 0),
-              "slippage": round(slippage, 0), "count": count, "wins": wins}
+    for b in buckets.values():
+        b["realized"] = round(b["realized"], 0)
+        b["fees"] = round(b["fees"], 0)
+        b["slippage"] = round(b["slippage"], 0)
+    totals = {**buckets["combined"],
+              "paper": buckets["paper"], "live": buckets["live"]}
     c["mtime"], c["totals"] = m, totals
     return totals
 
@@ -1961,8 +1976,85 @@ def api_trades():
             "total_fees": total_fees,
             "total_slippage": round(total_slippage, 0),
             "total_costs": round(total_fees + total_slippage, 0),
+            # v59.75 — the separated books. The top-level figures above
+            # are the COMBINED record (backward compat, labelled by
+            # totals_scope); anything judging live performance must read
+            # these instead.
+            "paper": (lifetime or {}).get("paper"),
+            "live": (lifetime or {}).get("live"),
         },
     }
+
+
+@app.get("/api/live/pnl")
+def api_live_pnl():
+    """v59.75 — the BROKER's account of live P&L, kept strictly apart
+    from paper numbers and from this app's own computation. This is the
+    ground-truth panel the third-eye review said could not exist: broker
+    positions with the broker's own realized/unrealized figures, fund
+    limits, and the internal live book beside them so divergence is
+    visible instead of impossible to ask about. Every section degrades
+    to an explicit error string — an unreachable broker must read as
+    "UNVERIFIED", never as zeros."""
+    cfg = config.load()
+    out = {"paper_mode": cfg.get("paper_mode", True),
+           "note": ("paper_mode is ON — broker sections reflect any "
+                    "manual/live activity on the account, not this "
+                    "app's paper trades" if cfg.get("paper_mode", True)
+                    else "LIVE mode")}
+    try:
+        orders = orders_factory()
+    except Exception as e:
+        orders = None
+        out["broker_error"] = f"{type(e).__name__}: {e}"
+    if orders is not None:
+        try:
+            raw = orders.positions() or []
+            rows = raw.get("data") if isinstance(raw, dict) else raw
+            positions, realized, unrealized = [], 0.0, 0.0
+            for r in rows or []:
+                if not isinstance(r, dict):
+                    continue
+                rp = float(r.get("realizedProfit")
+                           or r.get("realized_profit") or 0)
+                up = float(r.get("unrealizedProfit")
+                           or r.get("unrealized_profit") or 0)
+                realized += rp
+                unrealized += up
+                positions.append({
+                    "security_id": r.get("securityId") or r.get("security_id"),
+                    "symbol": r.get("tradingSymbol") or r.get("trading_symbol"),
+                    "net_qty": r.get("netQty") or r.get("net_qty"),
+                    "realized": rp, "unrealized": up})
+            out["broker"] = {"positions": positions,
+                             "realized": round(realized, 2),
+                             "unrealized": round(unrealized, 2)}
+        except Exception as e:
+            out["broker"] = {"error": f"positions UNVERIFIED — "
+                                      f"{type(e).__name__}: {e}"}
+        try:
+            out["funds"] = orders.funds() if hasattr(orders, "funds") else \
+                {"error": "funds interface unavailable on this broker"}
+        except Exception as e:
+            out["funds"] = {"error": f"UNVERIFIED — {type(e).__name__}: {e}"}
+    # The app's own LIVE book (paper rows excluded), for side-by-side
+    # comparison with the broker's account of the same positions.
+    _live_open = []
+    for book, kind in (("positions", "option"), ("spreads", "spread"),
+                       ("futures_positions", "future")):
+        for p in (pilot.bus.get(book, {}) or {}).values():
+            if not p.get("paper", True):
+                _live_open.append({"kind": kind,
+                                   "symbol": p.get("symbol"),
+                                   "pnl": p.get("pnl"),
+                                   "order_id": p.get("order_id")})
+    out["internal_live_book"] = _live_open
+    _lt = _lifetime_trade_totals() or {}
+    out["internal_live_realized"] = (_lt.get("live") or {}).get("realized")
+    out["reconcile"] = pilot.bus.get("broker_reconcile") or \
+        {"note": "no reconcile pass yet (live mode only, every "
+                 f"{cfg.get('broker_reconcile_interval_sec', 300)}s)"}
+    return out
 
 
 def _s8_detector_summary(detectors):

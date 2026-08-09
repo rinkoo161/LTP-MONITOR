@@ -523,7 +523,7 @@ hr{border:none;border-top:1px solid var(--line);}
   <div class="dashgrid">
     <div class="dc8">
       <div class="panel" style="margin-bottom:8px">
-        <h2>&#128200; Live Chart (TradingView Lightweight Charts) <span class="badge" style="font-weight:400">v59.74</span> <span class="sub" id="lwChartStatus">connecting...</span>
+        <h2>&#128200; Live Chart (TradingView Lightweight Charts) <span class="badge" style="font-weight:400">v59.75</span> <span class="sub" id="lwChartStatus">connecting...</span>
           <select id="lwChartSymbol" style="margin-left:auto" onchange="switchLwChart(this.value)"></select></h2>
         <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;flex-wrap:wrap">
           <button class="lwIntervalBtn active" data-interval="1" onclick="switchLwInterval('1')">1m</button>
@@ -5818,7 +5818,9 @@ async function loadPnl(){
       '<div><label>Unrealized</label><b class="'+(s.unrealized_pnl>=0?"bull":"bear")+'">Rs '+fmt(s.unrealized_pnl)+'</b></div>'+
       '<div><label>Trades</label><b>'+s.count+'</b></div>'+
       '<div><label>Win rate</label><b>'+s.win_rate+'%</b></div>'+
-      '<div><label>Fees + slippage</label><b>Rs '+fmt(s.total_costs!=null?s.total_costs:(s.total_fees||0))+'</b></div>';
+      '<div><label>Fees + slippage</label><b>Rs '+fmt(s.total_costs!=null?s.total_costs:(s.total_fees||0))+'</b></div>'+
+      '<div><label>Paper P&amp;L</label><b>Rs '+fmt((s.paper&&s.paper.realized)!=null?s.paper.realized:0)+'</b></div>'+
+      '<div><label>Live P&amp;L</label><b>Rs '+fmt((s.live&&s.live.realized)!=null?s.live.realized:0)+'</b></div>';
     // 2026-07-28 — new Guardrails panel per the wireframe's P&L sheet:
     // shows the exact conditions the risk gate checks, as fill bars
     // toward each limit so proximity is legible before a halt fires

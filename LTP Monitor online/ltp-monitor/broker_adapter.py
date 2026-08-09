@@ -444,6 +444,124 @@ class DhanOrders:
         r.raise_for_status()
         return r.json()
 
+    # ------------------------------------------------------------------
+    # v59.75 — the LIVE-TEST interface set (third-eye: "no order was
+    # ever confirmed, no fill ever learned, no funds ever checked").
+    # Thin wrappers over the documented Dhan v2 endpoints. HONESTY NOTE:
+    # written against the published API reference with shape-tolerant
+    # parsing at the callers; the exact response shapes remain
+    # UNVERIFIED until the first authenticated live session exercises
+    # them (test_live_interfaces.py verifies the requests this code
+    # SENDS, which is all a test can verify without an account).
+    # ------------------------------------------------------------------
+    def orders(self) -> list:
+        """Today's order book — GET /orders."""
+        r = requests.get(API + "/orders", headers=self.c._h, timeout=15)
+        r.raise_for_status()
+        return r.json()
+
+    def order_by_correlation(self, correlation_id: str) -> dict:
+        """Find an order by the correlationId this app stamps on every
+        placement — the recovery path when place() timed out before an
+        orderId was returned."""
+        r = requests.get(API + f"/orders/external/{correlation_id}",
+                         headers=self.c._h, timeout=15)
+        r.raise_for_status()
+        return r.json()
+
+    def trade_book(self, order_id=None) -> list:
+        """Actual FILLS — GET /trades (whole day) or /trades/{order_id}.
+        This is the ground truth the review said the system never read:
+        traded price and traded quantity per execution, as the exchange
+        saw them, not as the pre-trade quote guessed them."""
+        path = f"/trades/{order_id}" if order_id else "/trades"
+        r = requests.get(API + path, headers=self.c._h, timeout=15)
+        r.raise_for_status()
+        return r.json()
+
+    def modify(self, order_id, order_type=None, qty=None, price=None,
+               validity="DAY") -> dict:
+        """Modify a pending order — PUT /orders/{order_id}."""
+        body = {"dhanClientId": str(self.c.client_id),
+                "orderId": str(order_id), "validity": validity}
+        if order_type is not None:
+            body["orderType"] = order_type
+        if qty is not None:
+            body["quantity"] = int(qty)
+        if price is not None:
+            body["price"] = float(price)
+        r = requests.put(API + f"/orders/{order_id}", json=body,
+                         headers=self.c._h, timeout=15)
+        try:
+            j = r.json()
+        except Exception:
+            j = {"raw": r.text}
+        if r.status_code not in (200, 201):
+            raise RuntimeError(f"Dhan modify rejected [{r.status_code}]: {j}")
+        return j
+
+    def cancel(self, order_id) -> dict:
+        """Cancel a pending order — DELETE /orders/{order_id}."""
+        r = requests.delete(API + f"/orders/{order_id}",
+                            headers=self.c._h, timeout=15)
+        try:
+            j = r.json()
+        except Exception:
+            j = {"raw": r.text}
+        if r.status_code not in (200, 202):
+            raise RuntimeError(f"Dhan cancel rejected [{r.status_code}]: {j}")
+        return j
+
+    def funds(self) -> dict:
+        """Fund limits — GET /fundlimit: available balance, utilised
+        margin, collateral. The margin figures sizing has been assuming
+        from config constants become checkable against this."""
+        r = requests.get(API + "/fundlimit", headers=self.c._h, timeout=15)
+        r.raise_for_status()
+        return r.json()
+
+
+def parse_fills(book, order_id=None):
+    """(avg_price, total_qty) from a trade-book payload, or (None, 0).
+
+    Module-level and shape-tolerant (list of fills, dict-wrapped "data",
+    single dict) because Dhan wraps responses inconsistently across
+    endpoints and this parser is the ONE place fills are interpreted —
+    the same single-definition rule every other drift pair here has
+    eventually needed. Field names per the v2 docs: tradedPrice /
+    tradedQuantity (with fallbacks for the snake_case variants)."""
+    if book is None:
+        return None, 0
+    rows = book
+    if isinstance(rows, dict):
+        rows = rows.get("data", rows)
+    if isinstance(rows, dict):
+        rows = [rows]
+    if not isinstance(rows, list):
+        return None, 0
+    tot_qty = 0
+    tot_val = 0.0
+    for f in rows:
+        if not isinstance(f, dict):
+            continue
+        if order_id is not None and str(f.get("orderId")
+                                        or f.get("order_id") or "") \
+                not in ("", str(order_id)):
+            continue
+        try:
+            q = int(f.get("tradedQuantity") or f.get("traded_quantity")
+                    or f.get("filledQty") or 0)
+            px = float(f.get("tradedPrice") or f.get("traded_price")
+                       or f.get("price") or 0)
+        except (TypeError, ValueError):
+            continue
+        if q > 0 and px > 0:
+            tot_qty += q
+            tot_val += q * px
+    if tot_qty <= 0:
+        return None, 0
+    return round(tot_val / tot_qty, 2), tot_qty
+
 
 # ===================== multi-broker support =====================
 # Common interface every adapter implements:

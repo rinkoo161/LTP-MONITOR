@@ -4,6 +4,55 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.75 — the live-test interface: real fills, separated books, broker ground truth (2026-08-09)
+
+Prepares the LIVE pilot the review said is the only way to close the
+remaining measurement gaps (real charges vs the cost model, the impact
+alpha, Dhan's actual response shapes). Three pieces:
+
+**The full Dhan v2 order-lifecycle interface** (`broker_adapter`):
+`orders()` (order book), `trade_book()` / `trade_book(order_id)`
+(actual fills), `order_by_correlation()` (recovery for timed-out
+placements via the correlationId every order carries since v59.70),
+`modify()`, `cancel()`, `funds()` (fund limits — the margin figures
+sizing assumes from config become checkable). HONESTY NOTE, in the code
+too: written against the published API reference with shape-tolerant
+parsing; response shapes remain UNVERIFIED until the first
+authenticated session. `parse_fills()` is the ONE fill parser
+(list / data-wrapped / single-dict tolerant, weighted average across
+partials).
+
+**Real fills, not quotes** — the Tier 0 finding "actual fill prices
+are never learned" closed for live orders: after every confirmed live
+placement (option BUY/SELL, futures entry/close), `_actual_fill()`
+reads the trade book and books the position/exit at the BROKER's
+average traded price, recording `entry_fill_slippage` /
+`exit_fill_slippage` (quote − fill: the number that finally calibrates
+the slippage model and the impact alpha against reality). A partial
+fill is a HIGH alert — the book tracks intended qty until
+order-splitting exists. Nothing is invented: an unreachable trade book
+keeps the quote and logs UNVERIFIED.
+
+**Live and paper are separate books.** A live rupee and a simulated
+rupee are never summed into one headline again: `_lifetime_trade_totals`
+splits by each trade's `paper` flag (missing flag = paper, the
+conservative reading), `/api/trades` exposes `paper` and `live` blocks
+(top-level stays combined for backward compatibility, labelled by
+`totals_scope`), and the dashboard P&L panel shows Paper P&L and Live
+P&L as separate rows. New `/api/live/pnl` is the ground-truth panel the
+review said could not exist: the broker's OWN positions with the
+broker's realized/unrealized figures, fund limits, the internal live
+book beside them, and the latest reconcile result — every section
+degrading to an explicit UNVERIFIED error, never zeros.
+
+Live-pilot runbook (when something passes the gate on paper): fresh
+Dhan token in Settings → `paper_mode` off (+ `futures_live_enabled`
+only if futures) → 1 lot, one strategy → watch `/api/live/pnl` and the
+reconcile alerts → after the first session, compare recorded
+fees+slippage per trade against the broker contract note and set
+`slippage_impact_alpha` / `opt_halfspread_points` from the measured
+`*_fill_slippage` fields. Risk keys are already coherent at 1 lot.
+
 ## v59.74 — the first real new-code backtest run crashed; fixed and isolated (2026-08-09)
 
 The 15:45 daily run — the FIRST time run_all executed the corrected
