@@ -60,7 +60,8 @@ Layers below the agents:
   `short-covering`, `long-unwinding`). Backtest/replay paths must call it, never reimplement it.
 - `history.py` — SQLite at `~/.ltp-monitor/history.db`, WAL mode, schema created once per process.
   Tables: `candles`, `instruments`, `daily_ohlc`, `volume_profile`, `chain_snapshots` (per-strike,
-  60s, 5-day retention), `future_oi_snapshots`, `risk_decisions`, `ta_calibration`, `daily_atm_iv`.
+  60s, tiered retention: 90d full → 2y thinned to 5-min grid → daily close, `chain_tier*` config
+  keys), `future_oi_snapshots`, `risk_decisions`, `ta_calibration`, `daily_atm_iv`.
 - `sizing.py`, `risk_engine.py`, `bs_greeks.py`, `backtester.py`, `regression.py` — sizing, portfolio
   risk, greeks, replay, adverse-scenario stress tests.
 - `news_engine.py` — the single fetch-and-classify pipeline shared by both `NewsAgent` (bus key

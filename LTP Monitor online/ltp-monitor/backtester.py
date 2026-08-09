@@ -415,7 +415,8 @@ def replay_spreads(symbol, name, params=None, days=None, log=lambda m: None):
                         # spread crosses that spread FOUR times.
                         _fee = _ag.realistic_fees(
                             "option", symbol, 1, open_sp["credit"],
-                            max(0.0, open_sp["credit"] - pnl_ps), cfg, legs=2)
+                            _ag.spread_exit_value(open_sp["credit"], pnl_ps),
+                            cfg, legs=2)
                         trades.append({"day": day, "strategy": name,
                                        "pnl": round(pnl_ps * lot - _fee, 0),
                                        "risk": open_sp["max_loss"] * lot,
@@ -637,7 +638,8 @@ def replay_portfolio(symbols=None, names=None, days=None, log=lambda m: None):
                 if reason:
                     _fee = _ag.realistic_fees(
                         "option", sp["symbol"], 1, sp["credit"],
-                        max(0.0, sp["credit"] - pnl_ps), cfg, legs=2)
+                        _ag.spread_exit_value(sp["credit"], pnl_ps),
+                        cfg, legs=2)
                     pnl = round(tot - _fee, 0)
                     trades.append({"day": day, "symbol": sp["symbol"],
                                    "strategy": sp["strategy"], "pnl": pnl,

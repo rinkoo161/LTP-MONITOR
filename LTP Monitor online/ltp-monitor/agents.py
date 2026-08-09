@@ -373,6 +373,24 @@ def symbol_paused(symbol, cfg=None):
     return str(symbol).upper() in {str(x).upper() for x in paused}
 
 
+def spread_exit_value(credit, pnl_ps):
+    """The spread's VALUE at exit — the `premium_out` the cost model needs.
+
+    P&L/share = credit − value  ⇒  value = credit − pnl_ps, floored at 0
+    (a defined-risk spread's value cannot be negative).
+
+    v59.68 (third-eye Tier 0) — the live exit passed pnl_per_share ITSELF
+    as the exit premium, so on a losing spread the cost model received a
+    NEGATIVE sell notional and STT became a rebate: the live charge on a
+    loser ran ~20% below what the backtester charged for the identical
+    trade (₹224 vs ₹280 on a credit-150 loser at −60/share), and the two
+    disagreed on every spread. ONE definition now, called by the live
+    exit and both backtester replays — the same collapse
+    spread_exit_reason() below went through on 2026-08-06.
+    """
+    return max(0.0, float(credit or 0) - float(pnl_ps or 0))
+
+
 def spread_exit_reason(sp, pnl_ps, spot, cfg, now_ts, market_is_open,
                        log=lambda m: None, alert=lambda *a: None):
     """The spread exit decision — ONE definition, used live AND in replay.
@@ -555,8 +573,23 @@ def _cost_parts(kind, symbol, lots, premium_in, premium_out, cfg,
     try:
         if kind == "future":
             import futures_costs
-            r = futures_costs.cost_round_trip(
-                float(premium_in), float(premium_out), lot, cfg=cfg)
+            # v59.68 (third-eye Tier 0) — this used to call
+            # cost_round_trip(premium_in, premium_out, lot) POSITIONALLY
+            # into a (symbol, entry, exit_px, ...) signature: the entry
+            # price landed in `symbol`, .upper() raised AttributeError,
+            # the except below swallowed it, and EVERY live/paper futures
+            # round trip fell back to the flat model — ₹80 charged where
+            # the notional model says ~₹602 (7.5x understatement), for
+            # the exact defect futures_costs.py's own header was written
+            # to prevent. breakdown() is used instead of cost_round_trip()
+            # because this caller needs the statutory/slippage split and
+            # cost_round_trip returns a single float (a second reason the
+            # old call could never have worked).
+            b = futures_costs.breakdown(symbol, float(premium_in),
+                                        float(premium_out), lots=1,
+                                        cfg=cfg, lot=lot)
+            r = {"statutory": b["statutory_rupees"],
+                 "spread": b["items"]["slippage"]}
         else:
             import options_costs
             r = options_costs.cost_round_trip(
@@ -565,8 +598,10 @@ def _cost_parts(kind, symbol, lots, premium_in, premium_out, cfg,
         stat = float(r.get("statutory", 0)) * lots
         slip = float(r.get("spread", 0)) * lots
         if stat + slip > 0:
+            # "model" makes a silent fallback OBSERVABLE downstream: the
+            # trade record shows which cost model actually priced it.
             return {"fees": round(stat, 0), "slippage": round(slip, 0),
-                    "total": round(stat + slip, 0)}
+                    "total": round(stat + slip, 0), "model": "notional"}
     except Exception as e:
         if log:
             log(f"cost model unavailable for {symbol} ({type(e).__name__}) "
@@ -584,7 +619,7 @@ def _cost_parts(kind, symbol, lots, premium_in, premium_out, cfg,
     # The flat model has no notion of a spread, so all of it is booked
     # as fees rather than inventing a slippage split.
     t = round(flat * lots * 2 * max(1, legs), 0)
-    return {"fees": t, "slippage": 0.0, "total": t}
+    return {"fees": t, "slippage": 0.0, "total": t, "model": "flat-fallback"}
 
 
 def instant_exit_reason(pos, ltp, spot):
@@ -5007,6 +5042,7 @@ class ExecutionAgent(Agent):
                       closed_date=now.strftime("%Y-%m-%d"),
                       closed_at=now.isoformat(),
                       gross_pnl=gross, fees=fees, slippage=slippage,
+                      cost_model=_c.get("model"),   # v59.68 — fallback is visible in the record
                       pnl=round(gross - fees - slippage, 0),   # NET of BOTH cost parts
                       reason=reason)
         trades = self.bus.get("closed_trades", [])
@@ -5679,9 +5715,14 @@ class ExecutionAgent(Agent):
         if not sp:
             return {"error": "spread not found"}
         cfg = config.load()
-        # fees: per lot per transaction; 2 legs x 2 transactions = 4
+        # fees: per lot per transaction; 2 legs x 2 transactions = 4.
+        # premium_out is the spread's exit VALUE via spread_exit_value()
+        # — NOT pnl_per_share, which fed the cost model a negative sell
+        # notional on losers (v59.68, third-eye Tier 0).
         _c = realistic_costs("option", sp.get("symbol"), sp.get("lots"),
-                             sp.get("credit"), sp.get("pnl_per_share", 0),
+                             sp.get("credit"),
+                             spread_exit_value(sp.get("credit"),
+                                               sp.get("pnl_per_share", 0)),
                              cfg, legs=2,
                              log=lambda m: self.bus.log(self.name, m))
         fees, slippage = _c["fees"], _c["slippage"]
@@ -5731,6 +5772,7 @@ class ExecutionAgent(Agent):
             "closed_at": now.isoformat(),
             "opened": sp["opened"], "opened_ts": sp.get("opened_ts"), "paper": True,
             "gross_pnl": gross, "fees": fees, "slippage": slippage,
+            "cost_model": _c.get("model"),   # v59.68 — fallback visible in the record
             "mfe": sp.get("mfe", 0), "mae": sp.get("mae", 0),
             "pnl": round(gross - fees - slippage, 0),
             "reason": f"[{sp['strategy']}] {reason}",
@@ -6502,6 +6544,9 @@ class ExecutionAgent(Agent):
                              cfg, legs=1,
                              log=lambda m: self.bus.log(self.name, m))
         fees, slippage = _c["fees"], _c["slippage"]
+        # v59.68 — this was the one exit path WITHOUT the zero-fee tripwire
+        # (futures and spreads both had it), and it is the highest-volume one.
+        warn_zero_fees(self.bus, self.name, "option", lots, fees)
         gross = p.get("pnl", 0)
         closed = dict(p,
                       closed=now.strftime("%H:%M:%S"),
@@ -6510,6 +6555,7 @@ class ExecutionAgent(Agent):
                       gross_pnl=gross,
                       fees=fees,
                       slippage=slippage,
+                      cost_model=_c.get("model"),   # v59.68 — fallback visible in the record
                       pnl=round(gross - fees - slippage, 0),   # NET of BOTH cost parts
                       reason=reason)
         self.bus.set("position", None)
@@ -8350,6 +8396,44 @@ class Orchestrator:
                          f"restored {len(open_positions)} open position(s) and "
                          f"{len(open_spreads)} open spread(s) from before restart "
                          f"— re-validating live prices on next cycle")
+        # v59.68 (third-eye Tier 0) — lot-size reconciliation AT STARTUP,
+        # not only in LearningAgent's daily-maintenance slot, where it was
+        # nested inside the chain-prune guard: skipped whenever the prune
+        # had already run that day, skipped when the prune threw first,
+        # and its report went to a log line nobody is required to read.
+        # A stale lot size rescales every P&L figure by exactly its ratio
+        # (the 2026-08-01 NIFTY 75→65 / FINNIFTY 65→60 drift did), so a
+        # mismatch is a HIGH alert on every boot, before any agent trades.
+        # Still report-only by design — writing config would silently
+        # rescale open positions' notional (see reconcile_lot_sizes).
+        try:
+            import futures_costs as _fc
+            _mismatches = _fc.reconcile_lot_sizes()
+            for m in _mismatches:
+                if m.get("scrip") is None:
+                    self.bus.alert("high", "orchestrator", m.get("symbol", "?"),
+                                   f"LOT SIZE UNVERIFIABLE at startup: config "
+                                   f"says {m.get('config')} but the scrip "
+                                   f"master could not answer ({m.get('error')})")
+                    continue
+                self.bus.alert("high", "orchestrator", m.get("symbol", "?"),
+                               f"LOT SIZE MISMATCH at startup: config says "
+                               f"{m.get('config')}, scrip master says "
+                               f"{m.get('scrip')} ({m.get('pct')}% off) — "
+                               f"every rupee figure for this symbol is "
+                               f"scaled by that ratio until fixed in Settings")
+            if _mismatches:
+                self.bus.set("lot_size_mismatches", _mismatches)
+            else:
+                self.bus.log("orchestrator",
+                             "lot sizes reconciled against scrip master — clean")
+        except Exception as e:
+            # Unavailable scrip master must not block startup, but it is
+            # still said out loud — an unverifiable contract size is a
+            # measurement risk, not a routine condition.
+            self.bus.log("orchestrator",
+                         f"⚠ lot-size reconciliation unavailable at startup "
+                         f"({type(e).__name__}: {e}) — contract sizes UNVERIFIED")
 
     def start(self, symbol="NIFTY", symbols=None):
         symbols = [s.upper() for s in (symbols or

@@ -530,6 +530,20 @@ DEFAULTS = {
     "fut_exchange_txn_pct": 0.0000173,
     "fut_sebi_turnover_pct": 0.000001,
     "fut_stamp_duty_pct": 0.00002,
+    # v59.68 (third-eye Tier 0) — the OPTION cost rates. options_costs.py
+    # claimed "config-driven with read-time clamping" but none of its
+    # seven opt_* keys were registered here, so config.save() silently
+    # dropped any tuned value and the module defaults always won — the
+    # half-spread (the largest single component) was untunable in
+    # practice. Defaults mirror options_costs.py's own; the read-time
+    # clamps there still bound whatever is set here.
+    "opt_brokerage_per_order": 20.0,
+    "opt_stt_sell_pct": 0.001,        # sell-side premium
+    "opt_exchange_txn_pct": 0.0005,
+    "opt_sebi_turnover_pct": 0.000001,
+    "opt_stamp_duty_pct": 0.00003,    # buy side
+    "opt_gst_pct": 0.18,
+    "opt_halfspread_points": 0.5,     # per leg per transaction; measured median 0.325
     "fut_gst_pct": 0.18,
     "fut_slippage_points": 1.0,
     "auth_enabled": False,

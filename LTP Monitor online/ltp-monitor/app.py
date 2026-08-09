@@ -26,7 +26,7 @@ from agents import Orchestrator, compute_momentum
 import agents
 
 BASE = os.path.dirname(os.path.abspath(__file__))
-APP_VERSION = "v59.67"   # maintained per explicit request; last delivered was v49
+APP_VERSION = "v59.68"   # maintained per explicit request; last delivered was v49
 
 app = FastAPI(title="LTP Option Chain Monitor")
 
@@ -932,6 +932,14 @@ class SettingsIn(BaseModel):
     ollama_timeout: int | None = None
     pa_min_trades_for_confidence: int | None = None
     gate_min_days: int | None = None   # v59.66 — min OOS days before the live gate scores
+    # v59.68 — option cost rates (now registered in DEFAULTS; see config.py)
+    opt_brokerage_per_order: float | None = None
+    opt_stt_sell_pct: float | None = None
+    opt_exchange_txn_pct: float | None = None
+    opt_sebi_turnover_pct: float | None = None
+    opt_stamp_duty_pct: float | None = None
+    opt_gst_pct: float | None = None
+    opt_halfspread_points: float | None = None
     pa_retune_cooldown_days: int | None = None
     pa_tuning_improvement_threshold: float | None = None
     pa_tuning_max_attempts: int | None = None
@@ -1794,6 +1802,12 @@ def api_trades():
     pos = pilot.bus.get("position")   # legacy single-position mirror
     realized = sum(t.get("pnl", 0) for t in closed)
     total_fees = sum(t.get("fees", 0) for t in closed)
+    # v59.68 (third-eye Tier 0) — slippage is booked per trade under its
+    # own name (agents._cost_parts) but was never AGGREGATED, so the
+    # "Fees paid" figure understated the real round-trip cost by the
+    # entire bid-ask component (~48% of an option round trip). Summed
+    # separately + combined, so the display can show both honestly.
+    total_slippage = sum(t.get("slippage") or 0 for t in closed)
     wins = sum(1 for t in closed if t.get("pnl", 0) > 0)
     unrealized = sum(p.get("pnl", 0) for p in positions.values()) + \
         sum(s.get("pnl", 0) for s in spreads.values()) + \
@@ -1867,9 +1881,14 @@ def api_trades():
             "losses": len(closed) - wins,
             "win_rate": round(wins / len(closed) * 100, 1) if closed else 0,
             "realized_pnl": realized,
+            # NOTE: unrealized sums the positions' GROSS pnl fields —
+            # costs are only known at exit. Labelled here so a consumer
+            # doesn't read it as net (third-eye Tier 0, minor).
             "unrealized_pnl": unrealized,
             "total_pnl": realized + unrealized,
             "total_fees": total_fees,
+            "total_slippage": round(total_slippage, 0),
+            "total_costs": round(total_fees + total_slippage, 0),
         },
     }
 

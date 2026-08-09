@@ -4,6 +4,81 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.68 — Tier 0: the cost models actually run, and the record is restated (2026-08-09)
+
+Verification and fixes for every Tier 0 (measurement integrity) finding
+from the third-eye review, config-drift excluded by operator decision
+(config can change at any time; measurement must be correct regardless).
+
+**Futures costs were dead code — fixed and restated.** `_cost_parts`
+called `futures_costs.cost_round_trip(premium_in, premium_out, lot)`
+positionally into a `(symbol, entry, exit_px, …)` signature; the
+`AttributeError` was swallowed and EVERY live/paper futures round trip
+fell back to the flat model (₹80 charged where the notional model says
+~₹606 — and `cost_round_trip` returns a float, so the old call could
+never have produced the statutory/slippage split either). Now calls
+`futures_costs.breakdown()`; verified by execution. The cost dict (and
+every closed-trade record) carries `cost_model` — "notional" vs
+"flat-fallback" — so a silent fallback is visible in the data instead
+of only in a log line. The one exit path without the zero-fee tripwire
+(single-leg options, the highest-volume one) got `warn_zero_fees` too.
+
+**Spread exits fed P&L to the cost model — fixed and restated.** The
+live exit passed `pnl_per_share` as `premium_out`; on losers the sell
+notional went negative and STT became a rebate (₹224 charged where the
+corrected model says ₹280 on a credit-150 loser at −60/share), and live
+disagreed with the backtester on every spread. `spread_exit_value()`
+(value = credit − pnl/share, floored at 0) is now the ONE definition,
+called by the live exit and both backtester replays — the same collapse
+`spread_exit_reason` went through on 2026-08-06.
+
+**`restate_costs.py`** recomputed the persisted record using each
+trade's own recorded contract size (period-appropriate — lot sizes
+changed 2026-08-01): 58 futures + 194 spreads restated, 61 rows
+untouched (single-leg options were always costed correctly, plus one
+kill-switch close with no exit price, which is flagged rather than
+invented). Fees +₹63,860, slippage +₹16,246, **net P&L −₹80,106: the
+record now reads −₹235,963**, not −₹155,857. Every restated row keeps
+its previous numbers under `restated_v5968_from`. Backup:
+`trades.pre-notional-restate-20260809-121133.jsonl`. (The 2026-08-06
+restatement had re-applied the FLAT model to futures — this is why
+"restated once" is not the same as "restated correctly, and why the
+cost_model stamp now travels with every row.)
+
+**The seven `opt_*` cost rates are registered** in `config.DEFAULTS`
+and `SettingsIn` — they were documented as "config-driven" but
+`config.save()` silently dropped them, so the half-spread (the largest
+single option cost component) was untunable in practice. Verified by
+execution that setting `opt_halfspread_points` moves the charge.
+
+**Dashboard totals include slippage.** `/api/trades` stats now carry
+`total_slippage` and `total_costs`; the P&L page label reads
+"Fees + slippage" (the old "Fees paid" omitted ~48% of the option round
+trip). `unrealized_pnl` is annotated as gross-of-costs at the source.
+
+**Lot sizes are reconciled at STARTUP** with a HIGH alert per mismatch
+(and an explicit "UNVERIFIED" log when the scrip master is unreadable) —
+the daily LearningAgent check remains, but it was nested inside the
+chain-prune guard and skippable; a stale lot size rescales every rupee
+figure by exactly its ratio, so it is now checked before any agent
+trades. Still report-only: writing config would silently rescale open
+positions (see `reconcile_lot_sizes`).
+
+**Verified already fixed, no change needed:** chain-snapshot retention
+became tiered thinning in v59.0 item 18 (90d full → 2y at 5-min grid →
+daily close, `chain_tier*` config keys) — the review saw a ~10-day span
+because the tiering was new, not because data was being deleted;
+CLAUDE.md's stale "5-day retention" note corrected. The PA-replay
+0.5-delta proxy remains by design: its measured error feeds the
+promotion gate's margin (v59.66), and repricing history from real
+premiums becomes possible as the tier-1 archive deepens.
+
+Tests: `test_tier0_costs.py` — all by execution: the futures notional
+path (and the labelled fallback under a forced failure), the
+spread-exit-value truth table and the loser-cost inequality, opt_* key
+registration and effect, and `restate()`'s stamps/audit-trail/purity/
+refusal to invent missing prices.
+
 ## v59.67 — versions are only created for positive, improved results; store pruned (2026-08-09)
 
 Operator report: every Backtest-page run/Optimize was creating a new
