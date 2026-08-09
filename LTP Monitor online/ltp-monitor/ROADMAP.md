@@ -4,6 +4,43 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.70 — Tier 3 round 2: fills confirmed, staleness said out loud, all books prioritised (2026-08-09)
+
+Completeness pass over the execution-realism checklist ahead of the
+next review round — the items v59.69 left open:
+
+**Orders are confirmed after placement.** `_confirm_order()` finally
+uses `order_status()` (zero call sites before): one best-effort poll
+after every live placement — option BUY/SELL, futures entry and close.
+REJECTED/CANCELLED (margin, freeze quantity, circuit) is a HIGH alert;
+an unreachable status API logs UNVERIFIED rather than reading as OK.
+The remaining `orderId '?'` remnants became "UNCONFIRMED", and a failed
+LIVE futures close is now a HIGH alert like the option equivalent.
+
+**The kill-switch says when its inputs are stale.** Every fresh pnl
+update stamps `pnl_ts` (seeded at entry); when any open exposure has no
+fresh pnl in 2× `exit_quote_max_age_sec` during market hours, a
+throttled alert states that the combined unrealized figure is
+UNVERIFIED. The switch still cannot distinguish flat from unknown —
+but it no longer guards silently on numbers nobody is updating.
+
+**Fetch priority covers all three books.** MarketDataAgent's
+"open trades first" rotation only counted single-leg option positions;
+a symbol whose only exposure was a spread or futures contract got the
+SLOWEST data — exactly the trades their monitors were watching.
+Spreads and futures now count as open.
+
+Verified already handled, no change: EOD square-off paths, restart
+seeding of open state (reconciled against the broker since v59.69 when
+live), freeze-quantity splitting (current sizes are an order of
+magnitude below the limits — noted for when sizing grows), and the
+trail/ratchet protections all log when they arm.
+
+Tests: `test_tier3_execution.py` extended to 31 checks — the
+confirm-order matrix (REJECTED alert / TRADED log / API-down
+UNVERIFIED / no-id no-op), the stale-input kill-switch alert, and the
+three-book fetch priority.
+
 ## v59.69 — Tier 3: the risk stack bounds the day; exits act only on real, fresh prices (2026-08-09)
 
 Verification and fixes for the third-eye review's execution-realism

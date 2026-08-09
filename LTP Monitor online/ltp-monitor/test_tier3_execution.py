@@ -217,6 +217,59 @@ rex2._reconcile_broker()     # paper mode (default config) → no-op
 check("paper mode skips reconciliation entirely",
       not rex2.bus.alerts and rex2.bus.get("broker_reconcile") is None)
 
+# --- round 2: order confirmation ---------------------------------------
+class _StatusOrders:
+    def __init__(self, status=None, boom=False):
+        self._s, self._boom = status, boom
+    def order_status(self, oid):
+        if self._boom:
+            raise RuntimeError("api down")
+        return {"data": {"orderStatus": self._s}}
+
+cex = object.__new__(agents.ExecutionAgent)
+cex.name = "execution"
+cex.bus = FakeBus()
+st = cex._confirm_order(_StatusOrders("REJECTED"), {"orderId": "42"}, "BUY X")
+check("a broker-side REJECTED raises a HIGH alert",
+      st == "REJECTED" and any(s == "high" and "REJECTED" in m
+                               for s, m in cex.bus.alerts))
+cex.bus = FakeBus()
+st = cex._confirm_order(_StatusOrders("TRADED"), {"orderId": "42"}, "BUY X")
+check("a TRADED status is logged, not alerted",
+      st == "TRADED" and not cex.bus.alerts and cex.bus.logs)
+cex.bus = FakeBus()
+st = cex._confirm_order(_StatusOrders(boom=True), {"orderId": "42"}, "BUY X")
+check("an unreachable status API says UNVERIFIED and never raises",
+      st is None and any("UNVERIFIED" in m for m in cex.bus.logs))
+check("no order id means nothing to confirm",
+      cex._confirm_order(_StatusOrders("TRADED"), {}, "X") is None)
+
+# --- round 2: kill-switch says when its inputs are stale ---------------
+kex = object.__new__(agents.ExecutionAgent)
+kex.name = "execution"
+kex.ctx = {}
+kex.bus = FakeBus({"positions": {"NIFTY": {"pnl": -100, "pnl_ts": 1.0}},
+                   "spreads": {}, "futures_positions": {}})
+_orig_load = config.load
+_orig_open2 = agents.market_open
+try:
+    config.load = lambda: {**_base_cfg, "portfolio_max_drawdown": 10 ** 9,
+                           "exit_quote_max_age_sec": 90,
+                           "portfolio_kill_switch_enabled": True}
+    agents.market_open = lambda: True
+    kex._check_portfolio_kill_switch()
+finally:
+    config.load = _orig_load
+    agents.market_open = _orig_open2
+check("stale kill-switch inputs raise an UNVERIFIED alert",
+      any("UNVERIFIED" in m for _, m in kex.bus.alerts), str(kex.bus.alerts))
+
+# --- round 2: open-trade fetch priority covers all three books ---------
+import inspect
+_md_src = inspect.getsource(agents.MarketDataAgent.cycle)
+check("market-data priority counts spreads and futures as open trades",
+      "spreads" in _md_src and "futures_positions" in _md_src)
+
 # --- config keys registered --------------------------------------------
 for k in ("exit_quote_max_age_sec", "broker_reconcile_interval_sec",
           "exit_retry_cooldown_sec", "slippage_impact_alpha"):

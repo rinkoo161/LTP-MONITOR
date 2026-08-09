@@ -1316,7 +1316,17 @@ class MarketDataAgent(Agent):
         # the user is looking at a different tab. Stale price data on an
         # open trade is how profit turns into a missed stoploss.
         positions = self.bus.get("positions", {}) or {}
-        open_syms = list(positions.keys())
+        # v59.70 (third-eye Tier 3, round 2) — "open trades first" only
+        # counted single-leg option positions. A symbol whose only open
+        # exposure was a SPREAD or a FUTURES contract fell back to the
+        # slow background rotation, so exactly the trades the spread/
+        # futures monitors were watching got the stalest data. All three
+        # books count as open now.
+        open_syms = list(dict.fromkeys(
+            list(positions.keys())
+            + [sp.get("symbol") for sp in
+               (self.bus.get("spreads", {}) or {}).values() if sp.get("symbol")]
+            + list((self.bus.get("futures_positions", {}) or {}).keys())))
         i = self.bus.get("_md_idx", 0)
         self.bus.set("_md_idx", i + 1)
         if open_syms:
@@ -4665,9 +4675,10 @@ class ExecutionAgent(Agent):
             resp = orders.place(symbol, front["security_id"],
                                 "BUY" if side == "LONG" else "SELL",
                                 lots * lot_size, order_type)
-            order_id = resp.get("orderId", "?")
+            order_id = resp.get("orderId") or "UNCONFIRMED"
             self.bus.log(self.name, f"\U0001f534 LIVE FUT {side} {symbol} "
                          f"\u00d7{lots} lot(s) @ {ltp} \u2014 order {order_id}")
+            self._confirm_order(orders, resp, f"FUT {side} {symbol}")
         # (stop/target geometry and the rupee cap were computed above,
         # BEFORE the order was placed — see the block after `lot_size`.
         # _sl_px/_tg_px are already bound here.)
@@ -4686,7 +4697,7 @@ class ExecutionAgent(Agent):
                "sl": _sl_px, "target": _tg_px,
                "atr_at_entry": round(_atr, 1) if _atr else None,
                "peak": ltp,           # best price seen IN THE TRADE'S FAVOUR
-               "pnl": 0.0, "margin": need,
+               "pnl": 0.0, "pnl_ts": time.time(), "margin": need,
                "opened": now_ist().strftime("%H:%M:%S"),
                "opened_date": now_ist().strftime("%Y-%m-%d"),
                "expiry": self.bus.get(f"future_expiry:{symbol}"),
@@ -4753,6 +4764,7 @@ class ExecutionAgent(Agent):
             sign = 1 if p["side"] == "LONG" else -1
             gross = (ltp - p["entry"]) * sign * p["lot_size"] * p["lots"]
             p["pnl"] = round(gross, 2)
+            p["pnl_ts"] = time.time()   # v59.70 — freshness stamp
             p["ltp"] = ltp
             p["mfe"] = max(p.get("mfe", 0), gross)
             p["mae"] = min(p.get("mae", 0), gross)
@@ -5126,12 +5138,18 @@ class ExecutionAgent(Agent):
                         "SELL" if p["side"] == "LONG" else "BUY",
                         p["lots"] * p["lot_size"], "MARKET")
                     self.bus.log(self.name, f"\U0001f534 LIVE FUT close order "
-                                 f"{symbol} — {resp.get('orderId', '?')}")
+                                 f"{symbol} — "
+                                 f"{resp.get('orderId') or 'UNCONFIRMED'}")
+                    self._confirm_order(orders, resp, f"FUT close {symbol}")
                 except Exception as e:
                     reason = f"{reason} [LIVE CLOSE ORDER FAILED: {e} — " \
                              f"verify position at the broker manually]"
-                    self.bus.log(self.name, f"\u26a0 LIVE FUT close order "
-                                 f"FAILED for {symbol}: {e}")
+                    # v59.70 — an ALERT, not only a feed line: same
+                    # urgency class as the option exit failure.
+                    self.bus.alert("high", self.name, symbol,
+                                   f"LIVE FUT close FAILED for {symbol} "
+                                   f"({type(e).__name__}: {e}) — close "
+                                   f"manually at the broker NOW")
             else:
                 reason = f"{reason} [no broker/security_id for live close " \
                          f"— verify position at the broker manually]"
@@ -5195,6 +5213,26 @@ class ExecutionAgent(Agent):
                            + sum(s.get("pnl", 0) for s in spreads.values())
                            + sum(f.get("pnl", 0) for f in futures.values()))
         limit = cfg.get("portfolio_max_drawdown", 15000)
+        # v59.70 (third-eye Tier 3, round 2) — the sum above is only as
+        # fresh as its inputs, and each pnl freezes at its last value
+        # (or the 0.0 seeded at entry) when the feed dies. The switch
+        # cannot distinguish "flat" from "unknown"; it CAN say so out
+        # loud instead of silently guarding on numbers nobody is
+        # updating. Throttled; market hours only (a weekend book is
+        # legitimately unmonitored).
+        _max_age = 2 * int(cfg.get("exit_quote_max_age_sec", 90) or 90)
+        _now = time.time()
+        _stale_n = sum(1 for book in (positions, spreads, futures)
+                       for x in book.values()
+                       if _now - (x.get("pnl_ts") or 0) > _max_age)
+        if _stale_n and market_open() and \
+                _now - getattr(self, "_ks_stale_alert_ts", 0) > 300:
+            self._ks_stale_alert_ts = _now
+            self.bus.alert("medium", self.name, "PORTFOLIO",
+                           f"kill-switch input STALE for {_stale_n} open "
+                           f"exposure(s) (no fresh pnl in {_max_age}s) — "
+                           f"combined unrealized ₹{total_unrealized:.0f} is "
+                           f"UNVERIFIED until the feed recovers")
         if not (positions or spreads or futures) or total_unrealized > -abs(limit):
             return
         # breach — force-close everything, no waiting for individual
@@ -5216,6 +5254,38 @@ class ExecutionAgent(Agent):
             self.exit_future(sym, f"portfolio kill-switch (combined ₹{total_unrealized:.0f})")
         cooldown = cfg.get("portfolio_halt_cooldown_min", 60) * 60
         self.bus.set("portfolio_halt_until", time.time() + cooldown)
+
+    def _confirm_order(self, orders, resp, context):
+        """Best-effort post-placement status check (v59.70, third-eye
+        Tier 3 round 2). `order_status()` had ZERO call sites: no order
+        was ever confirmed after placement, so a broker-side rejection —
+        margin shortfall, freeze-quantity breach, circuit limit — left
+        the book believing in a fill that never happened. One poll,
+        immediately after placing; never raises; REJECTED/CANCELLED is a
+        HIGH alert. Returns the status string or None (= unverified,
+        which is logged as such, never read as OK)."""
+        oid = (resp or {}).get("orderId")
+        if not oid or not hasattr(orders, "order_status"):
+            return None
+        try:
+            st = orders.order_status(str(oid)) or {}
+            data = st.get("data") if isinstance(st.get("data"), dict) else st
+            status = str((data or {}).get("orderStatus")
+                         or (data or {}).get("status") or "").upper()
+            if status in ("REJECTED", "CANCELLED"):
+                self.bus.alert("high", self.name, context,
+                               f"order {oid} {status} at the broker — the "
+                               f"book does NOT reflect a fill; check margin/"
+                               f"freeze-quantity/circuit limits ({context})")
+            elif status:
+                self.bus.log(self.name,
+                             f"order {oid} status: {status} ({context})")
+            return status or None
+        except Exception as e:
+            self.bus.log(self.name,
+                         f"order {oid} status check unavailable "
+                         f"({type(e).__name__}) — UNVERIFIED ({context})")
+            return None
 
     def _reconcile_broker(self):
         """v59.69 (third-eye Tier 3) — close the book against broker
@@ -5600,7 +5670,7 @@ class ExecutionAgent(Agent):
                 credit * loss_mult,
                 spread["max_loss"]), 2),
             "opened": now_ist().strftime("%H:%M:%S"), "opened_ts": time.time(),
-            "pnl": 0.0, "paper": True, "ai_advice": None, "ai_ts": 0,
+            "pnl": 0.0, "pnl_ts": time.time(), "paper": True, "ai_advice": None, "ai_ts": 0,
         }
         spreads[sid] = pos
         self.bus.set("spreads", spreads)
@@ -5666,6 +5736,7 @@ class ExecutionAgent(Agent):
                 pnl_ps += d
             sp["pnl"] = round(pnl_ps * sp["qty"], 0)
             sp["pnl_per_share"] = round(pnl_ps, 2)
+            sp["pnl_ts"] = time.time()   # v59.70 — freshness stamp
             sp["mfe"] = max(sp.get("mfe", 0), sp["pnl"])
             sp["mae"] = min(sp.get("mae", 0), sp["pnl"])
             spot = chain.get("spot")
@@ -6307,7 +6378,7 @@ class ExecutionAgent(Agent):
             "setup": sig.get("setup") or sig.get("source"),
             "entry_ts": ((self.bus.get(f"pa_candles:{sym}") or {}).get("c1") or [{}])[-1].get("time"),
             "s7_gates": sig.get("s7_gates"),
-            "pnl": 0.0, "t1_hit": False, "paper": cfg["paper_mode"],
+            "pnl": 0.0, "pnl_ts": time.time(), "t1_hit": False, "paper": cfg["paper_mode"],
             "manual": manual, "capital_used": round(fill * qty, 0),
             # AI Probability Engine (Feature #8) — decision-context
             # snapshot at ENTRY time, needed to bucket this trade's
@@ -6361,6 +6432,8 @@ class ExecutionAgent(Agent):
                 # is a REAL order whose id we failed to read — the
                 # record must say that, not shrug.
                 pos["order_id"] = resp.get("orderId") or "UNCONFIRMED"
+                pos["order_status"] = self._confirm_order(
+                    orders, resp, f"BUY {sym} {sig.get('strike')} {leg}")
             except Exception as e:
                 # A timeout does NOT mean the order failed — it may have
                 # reached the exchange after this call gave up. Track
@@ -6513,6 +6586,7 @@ class ExecutionAgent(Agent):
                     f"holding exit decisions until fresh data")
         p["ltp"] = ltp
         p["pnl"] = round((ltp - p["entry"]) * p["qty"], 0)
+        p["pnl_ts"] = time.time()   # v59.70 — freshness stamp; the kill-switch checks it
         p["mfe"] = max(p.get("mfe", 0), p["pnl"])
         p["mae"] = min(p.get("mae", 0), p["pnl"])
         spot = chain["spot"]
@@ -6812,6 +6886,9 @@ class ExecutionAgent(Agent):
                     self.bus.log(self.name, f"🔴 LIVE SELL — order "
                                  f"{resp.get('orderId','UNCONFIRMED')} — {reason} "
                                  f"· est P&L ₹{p['pnl']:.0f}")
+                    self._confirm_order(orders, resp,
+                                        f"SELL {p['symbol']} "
+                                        f"{p.get('strike')} {p.get('leg')}")
                 except Exception as e:
                     # An ALERT, not a log line: "close manually NOW" is
                     # the single most urgent operational event this
