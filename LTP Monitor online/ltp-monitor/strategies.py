@@ -222,6 +222,22 @@ def evaluate(name, analysis, regime, candles=None, params=None):
                                       f"(<{credit_min_frac*100:.0f}% of ₹{width:.0f} width)"]}
     reasons.append(f"credit ₹{credit} vs max loss ₹{max_loss} "
                    f"({credit / width * 100:.0f}% of width)")
+    # v59.73 (third-eye Tier 2) — STRUCTURAL FEASIBILITY. The designed
+    # exit captures `profit_capture` of the credit; if that capture
+    # cannot clear min_edge_cost_ratio × the modelled round trip, the
+    # trade pays the exchange to express an edge it cannot keep (the
+    # restated record: spread costs 2.2× gross edge). Placed HERE — the
+    # ONE admission function live and replay share — so the backtest
+    # cannot admit trades the live system refuses, or vice versa.
+    import edge_feasibility
+    _capture = _p.get("profit_capture",
+                      cfg.get("spread_profit_target_pct", 18) / 100.0)
+    _lot = (cfg.get("lot_sizes") or {}).get(analysis.get("symbol"), 75)
+    _edge_ok, _edge_detail = edge_feasibility.spread_feasible(
+        credit, _capture, _lot, cfg=cfg)
+    if not _edge_ok:
+        return {"eligible": False, "reasons": reasons + [_edge_detail]}
+    reasons.append(_edge_detail)
     return {
         "eligible": True, "name": name, "symbol": analysis["symbol"],
         "legs": [

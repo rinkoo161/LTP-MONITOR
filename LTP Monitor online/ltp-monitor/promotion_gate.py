@@ -434,6 +434,25 @@ def evaluate_entry(name, symbol, m, k=None, cfg=None):
     """
     if not m or not m.get("trades"):
         return _deny("no trades", name, symbol)
+    # v59.73 (third-eye Tier 2) — the pre-registration rule, structural:
+    # results for a strategy with NO stated economic mechanism (who is
+    # on the other side, and why they accept negative EV) are
+    # exploratory by definition and cannot support a live promotion,
+    # whatever their statistics say. Stating one is a deliberate edit
+    # to mechanisms.py, made BEFORE looking at fresh results.
+    try:
+        import mechanisms
+        if not mechanisms.stated(name):
+            return _deny("no economic mechanism registered — results are "
+                         "exploratory (Tier 2). State the counterparty "
+                         "and why they accept negative EV in "
+                         "mechanisms.py before this strategy can be "
+                         "considered for live",
+                         name, symbol, trades=m.get("trades"),
+                         net_pnl=m.get("net_pnl"))
+    except ImportError:
+        return _deny("mechanism registry unavailable — failing closed",
+                     name, symbol)
     oos = m.get("oos") if isinstance(m.get("oos"), dict) else None
     if oos is None:
         return _deny("results carry no out-of-sample window — pre-v59.66 "

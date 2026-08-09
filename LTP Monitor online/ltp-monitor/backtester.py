@@ -802,6 +802,19 @@ def replay_momentum(symbol, params=None, days=None, log=lambda m: None):
     return trades
 
 
+def _edge_ok_pa(ev, lot, fee, cfg):
+    """Tier 2 feasibility for the spot-proxy replays (v59.73): designed
+    gross = |t1 − entry| × 0.5Δ × lot against this replay's own
+    round-trip cost. Same ratio and config key as the live gates
+    (edge_feasibility.min_ratio) — the admission bar must match live or
+    the replay measures a different strategy (the 2026-08-06 lesson,
+    entry-side)."""
+    import edge_feasibility as ef
+    designed = abs(float(ev.get("t1_spot") or 0)
+                   - float(ev.get("entry_spot") or 0)) * 0.5 * lot
+    return ef.feasible(designed, fee, cfg)[0]
+
+
 def _bar_exit(pos, bar, is_last):
     """Intrabar exit resolution for the spot-proxy replays (v59.69,
     third-eye Tier 3). The old test compared CLOSES only: a bar that
@@ -957,6 +970,8 @@ def replay_pa(symbol, name, params=None, days=None, log=lambda m: None):
                                  _resample(win, 5), _resample(win, 15),
                                  params=p, taken_today=taken,
                                  precomputed=precomputed)
+            if ev and not _edge_ok_pa(ev, lot, fee, cfg):
+                ev = None             # Tier 2: designed edge below cost
             if ev:
                 pending = ev          # fills next bar — see above
     return trades
@@ -1036,6 +1051,8 @@ def replay_ew_reversal(symbol, params=None, days=None, log=lambda m: None):
             ev, _det = ew_reversal.evaluate(win, _resample(win, 5),
                                             _resample(win, 15), params=p,
                                             taken_today=taken, pivots=pivots)
+            if ev and not _edge_ok_pa(ev, lot, fee, cfg):
+                ev = None             # Tier 2: designed edge below cost
             if ev:
                 pending = ev          # fills next bar
     return trades
@@ -1109,6 +1126,8 @@ def replay_ta_elliott(symbol, params=None, days=None, log=lambda m: None):
             pivots = structure.zigzag_series(win, dev)
             ev, _conf = _tae.evaluate(state, win, params=p,
                                       taken_today=taken, pivots=pivots)
+            if ev and not _edge_ok_pa(ev, lot, fee, cfg):
+                ev = None             # Tier 2: designed edge below cost
             if ev:
                 pending = ev          # fills next bar
     return trades

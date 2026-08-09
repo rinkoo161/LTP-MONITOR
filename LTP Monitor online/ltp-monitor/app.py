@@ -26,7 +26,7 @@ from agents import Orchestrator, compute_momentum
 import agents
 
 BASE = os.path.dirname(os.path.abspath(__file__))
-APP_VERSION = "v59.72"   # maintained per explicit request; last delivered was v49
+APP_VERSION = "v59.73"   # maintained per explicit request; last delivered was v49
 
 app = FastAPI(title="LTP Option Chain Monitor")
 
@@ -937,6 +937,8 @@ class SettingsIn(BaseModel):
     exit_retry_cooldown_sec: int | None = None  # v59.69 — cooldown after failed live SELL
     slippage_impact_alpha: float | None = None  # v59.69 — size impact exponent on spread cost
     closed_trades_memory_cap: int | None = None  # v59.71 — in-memory trade window size
+    min_edge_cost_ratio: float | None = None  # v59.73 — designed edge vs cost admission bar
+    exit_min_cost_coverage: float | None = None  # v59.73 — profit-lock cost coverage
     # v59.68 — option cost rates (now registered in DEFAULTS; see config.py)
     opt_brokerage_per_order: float | None = None
     opt_stt_sell_pct: float | None = None

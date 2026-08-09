@@ -4,6 +4,72 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.73 — Tier 2: structural feasibility as code; mechanisms are pre-registered (2026-08-09)
+
+Tier 2 (economic mechanism) cannot be "fixed" by code — no change here
+conjures an edge. What this release does is make the Tier 2 arithmetic
+ENFORCEABLE, so the system can no longer pay to express edges it cannot
+keep, and make the mechanism question a gate instead of a footnote.
+The numbers that forced this: on the restated record, spread costs ran
+2.2× gross edge (₹398 vs ₹184/trade) and the August window grossed
+₹158/trade against ₹176 of friction at a 12-minute median hold.
+
+**The edge-feasibility gate** (`edge_feasibility.py`, ONE definition):
+a trade is admissible only when its DESIGNED gross edge — what its own
+target would deliver — is at least `min_edge_cost_ratio` (default 2×,
+per the review reference) times the modelled round-trip cost. Wired
+into every admission path:
+  * spreads — inside `strategies.evaluate()`, the single function live
+    and replay share, so backtest and live admission cannot diverge:
+    credit × profit_capture × lot must clear 2× the notional round
+    trip. At today's typical credits this refuses the thin-capture
+    entries that made up most of the 194-spread record;
+  * option buys — a new RiskAgent check: (target1 − entry) × lot vs the
+    premium round trip;
+  * futures — `enter_future()` refuses targets whose designed edge
+    cannot clear the notional round trip even when they WIN;
+  * the three PA replays — same ratio, same config key, against the
+    replay's own cost (`_edge_ok_pa`), so tuning cannot re-admit what
+    live refuses.
+Expected effect is fewer, larger-edge, longer-hold trades — the only
+shape the arithmetic admits. Trade counts will drop sharply; that is
+the point, and the tuner's frequency trigger will push parameters
+toward setups that clear the bar rather than around it.
+
+**Cost-covering exits**: the spread profit-lock floor arms only when
+the banked amount covers `exit_min_cost_coverage` (default 1×) of its
+own modelled round trip — the fixed ₹250 minimum stays as the floor of
+the floor. An exit that banks less than its costs is a donation with a
+green P&L cell.
+
+**Mechanism pre-registration** (`mechanisms.py`): every strategy id
+carries a registry entry answering "WHO takes the other side, and WHY
+do they accept negative EV". The promotion gate DENIES any strategy
+whose entry is missing or `unstated` — the reference's rule that
+results without a stated mechanism are exploratory and cannot support
+promotion, made structural. The registry is honest: the two credit
+spreads are registered as risk-transfer (with the recorded caveat that
+the captured premium has not yet beaten friction); every PA, Elliott,
+OI and futures strategy is `unstated`, because "momentum persists" and
+"the indicator crossed" are correlations, not counterparties. Stating
+a mechanism is a deliberate edit made BEFORE looking at fresh results.
+
+What this release deliberately does NOT claim: that any current
+strategy has an edge. The measurement stack (v59.66–72) is now
+trustworthy; the feasibility gate stops structurally impossible trades;
+the mechanism register says where an edge could even come from. Whether
+the admitted, cost-clearing trades are net profitable is now a question
+the system can answer honestly — over the next weeks of out-of-sample
+days, not by assertion.
+
+Tests: `test_tier2_economics.py` — 22 checks, all by execution: the
+ratio rule (incl. unpriceable ⇒ refused), per-instrument designs
+against the real cost models, `strategies.evaluate` refusing/admitting
+on capture design, replay parity via a stubbed `replay_pa`, the
+cost-covering profit-lock floor (a ₹286 floor above the old ₹250
+minimum but below its ₹382 round trip no longer exits), and the
+mechanism gate (orb denied on perfect stats; bull_put proceeds).
+
 ## v59.72 — round-2 review findings fixed; the fixed code is finally RUNNING (2026-08-09)
 
 The second third-eye review verified the v59.66–71 remediation by

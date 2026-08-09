@@ -105,29 +105,29 @@ check("every denial payload carries the full key set", not _missing,
 # --- evaluate_entry scores ONLY the out-of-sample window ----------------
 full = {"trades": 300, "net_pnl": 300 * 900.0, "pnl_sd": 2886,
         "pnl_sd_day": 4000.0, "days_tested": 17}
-ok1, e1 = pg.evaluate_entry("x", "NIFTY", dict(full))
+ok1, e1 = pg.evaluate_entry("bull_put_spread", "NIFTY", dict(full))
 check("no oos window is DENIED even when the full sample looks great",
       not ok1 and "out-of-sample" in (e1.get("reason") or ""),
       e1.get("reason", ""))
-ok2, e2 = pg.evaluate_entry("x", "NIFTY",
+ok2, e2 = pg.evaluate_entry("bull_put_spread", "NIFTY",
                             dict(full, oos={"trades": 0, "window": "days after 2026-08-09"}))
 check("an EMPTY oos window is DENIED",
       not ok2 and "out-of-sample" in (e2.get("reason") or ""))
 good_oos = {"trades": 120, "net_pnl": 120 * 900.0, "pnl_sd": 2886,
             "pnl_sd_day": 3000.0, "days_tested": 15,
             "window": "days after 2026-07-01 (v3 adoption)"}
-ok3, e3 = pg.evaluate_entry("x", "NIFTY", dict(full, oos=good_oos))
+ok3, e3 = pg.evaluate_entry("bull_put_spread", "NIFTY", dict(full, oos=good_oos))
 check("a strong oos window can pass", ok3,
       f"headroom {e3.get('headroom')}")
 check("and the verdict is computed from the oos numbers, not the full set",
       e3.get("trades") == 120 and e3.get("window") == good_oos["window"])
 bad_oos = dict(good_oos, net_pnl=120 * 5.0)
-ok4, _ = pg.evaluate_entry("x", "NIFTY", dict(full, oos=bad_oos))
+ok4, _ = pg.evaluate_entry("bull_put_spread", "NIFTY", dict(full, oos=bad_oos))
 check("a weak oos window fails regardless of the in-sample number", not ok4)
 
 # --- v59.72 (R2 findings M1/M2/M5/L1): the fail-open holes are closed ---
 _no_days = {k: v for k, v in good_oos.items() if k != "days_tested"}
-okD, dD = pg.evaluate_entry("x", "NIFTY", dict(full, oos=_no_days))
+okD, dD = pg.evaluate_entry("bull_put_spread", "NIFTY", dict(full, oos=_no_days))
 check("missing days_tested DENIES — no silent per-trade fallback (M1)",
       not okD and "day-clustered fields" in (dD.get("reason") or ""),
       dD.get("reason", ""))

@@ -268,6 +268,16 @@ DEFAULTS = {
     "max_spread_capital_pct": 60.0,
     "spread_reentry_cooldown_min": 15,
     "pa_min_trades_for_confidence": 15,  # min backtest trades before a version can go live
+    "min_edge_cost_ratio": 2.0,   # v59.73 (Tier 2) — a trade is admissible only
+                           # when its DESIGNED gross edge (its own target) is at
+                           # least this multiple of the modelled round-trip
+                           # cost. The restated record ran costs at 2.2× gross
+                           # edge; below ~2× the counterparty is exchange
+                           # infrastructure, and it always wins. Applied
+                           # identically live and in the replays.
+    "exit_min_cost_coverage": 1.0,  # v59.73 (Tier 2) — a profit-lock exit may
+                           # only arm when the banked amount covers at least
+                           # this multiple of its own round-trip cost.
     "closed_trades_memory_cap": 5000,  # v59.71 — in-memory closed_trades window
                            # (full history stays in trades.jsonl). Rescanned by
                            # five consumers per cycle; unbounded growth was a

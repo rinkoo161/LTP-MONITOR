@@ -504,8 +504,24 @@ def spread_exit_reason(sp, pnl_ps, spot, cfg, now_ts, market_is_open,
 
     if pnl_ps >= sp["profit_target"]:
         return f"captured ₹{pnl_ps:.1f} of ₹{sp['credit']} credit"
-    if sp.get("profit_floor", 0) > 0 and pnl_ps <= sp["profit_floor"]             and (sp["profit_floor"] * sp["qty"]) >= cfg.get(
-                "spread_profit_lock_min_rupees", 250):
+    # v59.73 (third-eye Tier 2) — the floor must clear the ROUND TRIP,
+    # not just a fixed ₹250: an exit that banks less than its own costs
+    # is a donation with a green P&L cell. Modelled with the same
+    # options_costs table the exit will actually be charged with, so
+    # the arming bar tracks contract size and premium level.
+    _lock_min = cfg.get("spread_profit_lock_min_rupees", 250)
+    try:
+        import options_costs as _oc
+        _rt = _oc.cost_round_trip(
+            sp["credit"],
+            spread_exit_value(sp["credit"], sp.get("profit_floor", 0)),
+            int(sp.get("qty") or 1), legs=2, cfg=cfg)["total"]
+        _lock_min = max(_lock_min,
+                        _rt * float(cfg.get("exit_min_cost_coverage", 1.0)
+                                    or 0.0))
+    except Exception:
+        pass          # cost model unavailable → the fixed ₹ floor still holds
+    if sp.get("profit_floor", 0) > 0 and pnl_ps <= sp["profit_floor"]             and (sp["profit_floor"] * sp["qty"]) >= _lock_min:
         # Absolute-₹ guard: the floor must be worth exiting for. Without
         # it the ratchet fired on ₹0.1-2/share peaks where fees exceeded
         # the entire gain — 26 such exits netted ₹62 total across the
@@ -4296,6 +4312,17 @@ class RiskAgent(Agent):
             * cfg["lot_sizes"].get(job["symbol"], 75) * cfg["lots_per_trade"]
         check(self.daily_pnl - max_loss > -abs(cfg.get("daily_loss_limit", 5000)),
               f"daily loss limit (risking ₹{max_loss:.0f}, day P&L ₹{self.daily_pnl:.0f})")
+        # v59.73 (third-eye Tier 2) — structural feasibility: the trade's
+        # own FIRST target must clear min_edge_cost_ratio × the modelled
+        # round trip. The August record grossed ₹158/trade against ₹176
+        # of friction — trades designed below their own costs are not
+        # marginal, they are structurally impossible, and no downstream
+        # tuning fixes that.
+        import edge_feasibility
+        _edge_ok, _edge_detail = edge_feasibility.option_buy_feasible(
+            sig.get("entry", 0), sig.get("target1", 0),
+            cfg["lot_sizes"].get(job["symbol"], 75), cfg)
+        check(_edge_ok, _edge_detail)
         profit_target = cfg.get("daily_profit_target", 0)
         if profit_target > 0:
             # Bug found 2026-07-24 from live logs: check() logs its label
@@ -4743,6 +4770,18 @@ class ExecutionAgent(Agent):
         else:
             _sl_px = round(ltp * (1 - sign * sl_pct / 100), 2)
             _tg_px = round(ltp * (1 + sign * tgt_pct / 100), 2)
+
+        # v59.73 (third-eye Tier 2) — structural feasibility: the target
+        # this entry is designed around must clear min_edge_cost_ratio ×
+        # the notional round trip, or the trade cannot be net-positive
+        # even when it WINS as designed.
+        import edge_feasibility
+        _edge_ok, _edge_detail = edge_feasibility.future_feasible(
+            symbol, ltp, _tg_px, lot_size, lots, cfg)
+        if not _edge_ok:
+            self.bus.log(self.name,
+                         f"⛔ {symbol} FUT {side} REFUSED — {_edge_detail}")
+            return {"error": f"edge below cost: {_edge_detail}"}
 
         _capped, _cap_why = _sz.cap_by_rupee_risk(cfg, symbol, ltp, _sl_px, lots)
         if _capped < lots:
