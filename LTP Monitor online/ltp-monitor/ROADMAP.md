@@ -4,6 +4,37 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.76 — the reverse channel: Dhan order-update websocket (2026-08-09)
+
+Answering "what reverse link does Dhan need?": none. Dhan's order
+events arrive over a websocket the CLIENT connects out to
+(`wss://api-order-update.dhan.co`) — no postback URL, no public
+exposure of a machine whose config holds plaintext keys. If the token
+page shows a Postback/Redirect URL field, it stays blank.
+
+`dhan_order_ws.py` wraps the protocol demonstrated by the first-party
+package's own `orderupdate.py` (auth frame and `order_alert` envelope
+copied from its installed source, same provenance discipline as
+dhan_ws.py) in the lifecycle that class lacks: own thread, reconnect
+with backoff, stop event, status dict. `normalize_event()` is the ONE
+place event fields are interpreted.
+
+ExecutionAgent manages it live-only (`_order_ws_manage`, every cycle:
+connect when paper_mode is off + `order_update_ws_enabled` + Dhan
+creds; disconnect otherwise). The handler does three report-and-repair
+jobs, none order-placing: resolves UNCONFIRMED order ids the moment
+Dhan answers (by order id, else by security_id), raises a HIGH PHANTOM
+alert on REJECTED/CANCELLED tracked orders, and books real fills with
+measured slippage on still-open entries. Everything it does is a BELT
+on top of the v59.75 polling confirm and the reconciler — losing the
+socket degrades to polling, never below it. Health + last 20 events on
+`/api/live/pnl` (`order_ws`, `order_updates`).
+
+UNVERIFIED-until-live caveat applies to the wire protocol, as with the
+REST wrappers; the recv loop's stop-poll can in principle drop an
+in-flight frame, acceptable because no consumer treats the socket as
+the only source of truth.
+
 ## v59.75 — the live-test interface: real fills, separated books, broker ground truth (2026-08-09)
 
 Prepares the LIVE pilot the review said is the only way to close the

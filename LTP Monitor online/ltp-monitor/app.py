@@ -26,7 +26,7 @@ from agents import Orchestrator, compute_momentum
 import agents
 
 BASE = os.path.dirname(os.path.abspath(__file__))
-APP_VERSION = "v59.75"   # maintained per explicit request; last delivered was v49
+APP_VERSION = "v59.76"   # maintained per explicit request; last delivered was v49
 
 app = FastAPI(title="LTP Option Chain Monitor")
 
@@ -935,6 +935,7 @@ class SettingsIn(BaseModel):
     exit_quote_max_age_sec: int | None = None  # v59.69 — max quote age for exit decisions
     broker_reconcile_interval_sec: int | None = None  # v59.69 — live position reconcile cadence
     exit_retry_cooldown_sec: int | None = None  # v59.69 — cooldown after failed live SELL
+    order_update_ws_enabled: bool | None = None  # v59.76 — Dhan order-update websocket
     slippage_impact_alpha: float | None = None  # v59.69 — size impact exponent on spread cost
     closed_trades_memory_cap: int | None = None  # v59.71 — in-memory trade window size
     min_edge_cost_ratio: float | None = None  # v59.73 — designed edge vs cost admission bar
@@ -2054,6 +2055,9 @@ def api_live_pnl():
     out["reconcile"] = pilot.bus.get("broker_reconcile") or \
         {"note": "no reconcile pass yet (live mode only, every "
                  f"{cfg.get('broker_reconcile_interval_sec', 300)}s)"}
+    # v59.76 — the push channel's health, and its recent events.
+    out["order_ws"] = pilot.bus.get("order_ws") or {"state": "off"}
+    out["order_updates"] = (pilot.bus.get("order_update_feed") or [])[-20:]
     return out
 
 

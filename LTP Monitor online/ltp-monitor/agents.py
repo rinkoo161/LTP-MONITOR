@@ -4618,7 +4618,8 @@ class ExecutionAgent(Agent):
                                f"kill-switch UNAVAILABLE "
                                f"({type(e).__name__}: {e}) — new entries "
                                f"halted until it runs again")
-        steps = [self._reconcile_broker]     # v59.69 — live-only, throttled
+        steps = [self._reconcile_broker,     # v59.69 — live-only, throttled
+                 self._order_ws_manage]      # v59.76 — live-only lifecycle
         if guard_err is None:
             steps.append(self._drain_entry_queue)
         steps += [self._monitor,
@@ -5521,6 +5522,102 @@ class ExecutionAgent(Agent):
                          f"order {oid} status check unavailable "
                          f"({type(e).__name__}) — UNVERIFIED ({context})")
             return None
+
+    def _order_ws_manage(self):
+        """v59.76 — lifecycle for the Dhan order-update websocket.
+
+        Runs every cycle, cheap: connect only when live (paper mode has
+        no broker orders to hear about), `order_update_ws_enabled`, the
+        broker is Dhan and credentials exist; disconnect the moment any
+        of that stops being true. The socket is a BELT on top of the
+        polling confirm and the reconciler — losing it degrades to the
+        v59.75 behaviour, never below it."""
+        cfg = config.load()
+        want = (not cfg.get("paper_mode", True)
+                and cfg.get("order_update_ws_enabled", True)
+                and cfg.get("broker", "dhan") == "dhan"
+                and cfg.get("dhan_client_id")
+                and cfg.get("dhan_access_token"))
+        client = getattr(self, "_order_ws", None)
+        if want and client is None:
+            import dhan_order_ws
+            client = dhan_order_ws.OrderUpdateClient(
+                cfg.get("dhan_client_id"), cfg.get("dhan_access_token"),
+                on_event=self._on_order_event,
+                log=lambda m: self.bus.log(self.name, m))
+            client.start()
+            self._order_ws = client
+            self.bus.log(self.name, "order-update websocket starting "
+                                    "(live mode)")
+        elif not want and client is not None:
+            client.stop()
+            self._order_ws = None
+            self.bus.log(self.name, "order-update websocket stopped "
+                                    "(paper mode / disabled)")
+        self.bus.set("order_ws",
+                     client.status() if client else {"state": "off"})
+
+    def _on_order_event(self, msg):
+        """Order-alert consumer (runs on the websocket thread).
+
+        v59.76 — three jobs, all report-and-repair, none order-placing:
+          * resolve UNCONFIRMED order ids the moment Dhan answers
+            (matched by order_id, else by security_id on a position
+            whose id is still UNCONFIRMED*);
+          * REJECTED/CANCELLED on a tracked order → HIGH alert — the
+            book holds a phantom until reconciled;
+          * a traded price on a still-open entry with no recorded fill
+            → book the real fill (same fields _actual_fill writes).
+        Writes are per-symbol against a fresh bus read (the H4 rule)."""
+        import dhan_order_ws
+        ev = dhan_order_ws.normalize_event(msg)
+        if ev is None:
+            return
+        feed = self.bus.get("order_update_feed", [])
+        feed.append({**{k: ev[k] for k in
+                        ("order_id", "status", "security_id",
+                         "traded_qty", "avg_price")},
+                     "ts": time.time()})
+        self.bus.set("order_update_feed", feed[-100:])
+        self.bus.log(self.name,
+                     f"order update: {ev.get('order_id')} "
+                     f"{ev.get('status')} qty {ev.get('traded_qty')} "
+                     f"@ {ev.get('avg_price')}")
+        for book in ("positions", "futures_positions"):
+            cur = self.bus.get(book, {}) or {}
+            for sym, p in list(cur.items()):
+                oid = str(p.get("order_id") or "")
+                matched = (ev["order_id"] and oid == ev["order_id"]) or \
+                          (oid.startswith("UNCONFIRMED")
+                           and ev["security_id"]
+                           and str(p.get("security_id") or "")
+                           == ev["security_id"])
+                if not matched:
+                    continue
+                if oid.startswith("UNCONFIRMED") and ev["order_id"]:
+                    p["order_id"] = ev["order_id"]
+                    self.bus.log(self.name,
+                                 f"order id resolved via feed: {sym} → "
+                                 f"{ev['order_id']}")
+                if ev["status"]:
+                    p["order_status"] = ev["status"]
+                if ev["status"] in dhan_order_ws.TERMINAL_BAD:
+                    self.bus.alert("high", self.name, sym,
+                                   f"order {ev['order_id']} {ev['status']} "
+                                   f"at the broker — the tracked {sym} "
+                                   f"position may be a PHANTOM; reconcile "
+                                   f"before trusting any exit")
+                elif ev["avg_price"] and not p.get("entry_fill_slippage") \
+                        and p.get("entry"):
+                    p["quote_at_entry"] = p.get("quote_at_entry",
+                                                p["entry"])
+                    p["entry_fill_slippage"] = round(
+                        ev["avg_price"] - p["quote_at_entry"], 2)
+                    p["entry"] = ev["avg_price"]
+                fresh = self.bus.get(book, {}) or {}
+                if sym in fresh:
+                    fresh[sym] = p
+                    self.bus.set(book, fresh)
 
     def _actual_fill(self, orders, resp, expect_qty=None, context=""):
         """Best-effort REAL fill from the trade book (v59.75).

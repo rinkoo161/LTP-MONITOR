@@ -292,6 +292,10 @@ DEFAULTS = {
                            # refuse to re-place for this long (the first order
                            # may have filled; a 2s-cadence re-fire was a
                            # duplicate-order generator)
+    "order_update_ws_enabled": True,  # v59.76 — Dhan order-update websocket
+                           # (wss://api-order-update.dhan.co, client connects
+                           # OUT — no postback URL needed). Live mode only; a
+                           # belt on top of the polling confirm + reconciler.
     "broker_reconcile_interval_sec": 300,  # v59.69 — how often the LIVE book is
                            # compared against the broker's actual positions
                            # (paper mode: skipped, nothing to reconcile)
