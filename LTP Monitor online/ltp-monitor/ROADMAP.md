@@ -85,6 +85,17 @@ routing via a stubbed `_replay_for`, Wilson bounds, MIN_SAMPLE guard);
 `test_ai_probability_visible_breakdown.py` could not run here
 (playwright not installed in the venv — pre-existing).
 
+Full-suite follow-up (same day): `gate_min_days` added to `SettingsIn`
+(test_settings_model_sync requires every DEFAULTS key in the schema —
+the review's own "registered in every place" check, caught by the
+suite); `test_trial_log`'s recorded params now carry a per-run marker
+so its distinct-config delta survives a rerun against the same store —
+it failed only on the suite's second pass, a test whose verdict
+depended on how many times it had run before. Suite failures beyond
+these are environmental: 11 playwright-based UI tests (module not
+installed) and the two deliberately gated live-connection diagnostics
+(test_dhan_ws, test_kotak).
+
 ## v59.65 — IV series is now self-describing; the tenor fear was overstated (2026-08-09)
 
 `daily_atm_iv` stored `(symbol, date, atm_iv)` and nothing else, so a

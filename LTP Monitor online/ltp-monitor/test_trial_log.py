@@ -48,9 +48,19 @@ print("1) the recorder works and counts EVERY row, not just accepted ones")
 # it is not testing what it claims.
 base = trial_log.count()
 base_distinct = trial_log.summary()["n_distinct_configs"]
-trial_log.record("bull_put_spread", "NIFTY", {"wall_gap_frac": 2.0},
+# v59.66 — the params carry a per-run marker for the same reason the
+# counts above are deltas: distinctness is judged on the params JSON, so
+# a SECOND run of this test against the same store re-recorded literals
+# the distinct set already contained, and the +2 check below failed only
+# on rerun. A test whose verdict depends on how many times it has run
+# before is the same class of bug the comment above describes.
+import time as _time
+_run_tag = round(_time.time(), 3)
+trial_log.record("bull_put_spread", "NIFTY",
+                 {"wall_gap_frac": 2.0, "_test_run": _run_tag},
                  {"trades": 5, "net_pnl": -100}, "unit", accepted=False)
-trial_log.record("bull_put_spread", "NIFTY", {"wall_gap_frac": 2.5},
+trial_log.record("bull_put_spread", "NIFTY",
+                 {"wall_gap_frac": 2.5, "_test_run": _run_tag},
                  {"trades": 7, "net_pnl": 250}, "unit", accepted=True)
 check("both rows are counted", trial_log.count() == base + 2,
       f"{base} -> {trial_log.count()}")

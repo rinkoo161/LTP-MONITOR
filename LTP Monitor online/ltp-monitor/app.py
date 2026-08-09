@@ -931,6 +931,7 @@ class SettingsIn(BaseModel):
     ollama_num_thread: int | None = None
     ollama_timeout: int | None = None
     pa_min_trades_for_confidence: int | None = None
+    gate_min_days: int | None = None   # v59.66 — min OOS days before the live gate scores
     pa_retune_cooldown_days: int | None = None
     pa_tuning_improvement_threshold: float | None = None
     pa_tuning_max_attempts: int | None = None
