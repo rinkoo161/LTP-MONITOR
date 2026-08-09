@@ -1593,7 +1593,16 @@ def day_index_candles(symbol, day, for_compute=False):
     rows = c.execute("SELECT ts,o,h,l,c FROM candles WHERE security_id=? "
                      "AND ts>=? AND ts<? ORDER BY ts", (sec[0], t0, t1)).fetchall()
     c.close()
-    out = [{"ts": r[0], "open": r[1], "high": r[2], "low": r[3], "close": r[4]}
+    # "time" (v59.74) — structure.zigzag_series() and the chart pack key
+    # candles by "time"; these rows carried only "ts", so the FIRST real
+    # run of replay_ew_reversal/sg_ema through run_all (2026-08-09
+    # 15:45, once v59.66 fixed their dispatch) raised KeyError('time')
+    # and — because run_all wrapped a whole SYMBOL in one try — voided
+    # every strategy's results for the day. Carrying both keys makes an
+    # archived candle shape-identical to the live pa_candles pack, which
+    # is what replay parity wanted all along.
+    out = [{"ts": r[0], "time": r[0],
+            "open": r[1], "high": r[2], "low": r[3], "close": r[4]}
            for r in rows]
     if for_compute:
         import agents

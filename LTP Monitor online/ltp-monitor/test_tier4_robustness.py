@@ -223,6 +223,38 @@ check("option_reentry_block prunes lapsed keys when writing",
 check("closed_trades_memory_cap registered in DEFAULTS",
       "closed_trades_memory_cap" in config.DEFAULTS)
 
+# --- v59.74: archived candles are shape-identical to the live pack -----
+# zigzag_series keys candles by "time"; day_index_candles rows carried
+# only "ts", so the FIRST real ew_reversal/sg_ema run through run_all
+# (2026-08-09 15:45) raised KeyError('time') and voided every symbol's
+# daily results. Executable against the real loader + real zigzag, via
+# the isolated store's own DB.
+import history
+import structure
+from datetime import datetime as _dtdt
+_day = "2026-01-05"
+_t0 = int(_dtdt.fromisoformat(_day).timestamp())
+_c = history._conn()
+_c.execute("INSERT OR REPLACE INTO instruments(security_id, symbol, kind) "
+           "VALUES ('999001', 'TESTIDX', 'idx')")
+for _i in range(40):
+    _px = 100 + (_i % 7)
+    _c.execute("INSERT OR REPLACE INTO candles(security_id, ts, o, h, l, c) "
+               "VALUES ('999001', ?, ?, ?, ?, ?)",
+               (_t0 + 34200 + _i * 60, _px, _px + 1, _px - 1, _px + 0.5))
+_c.commit()
+_rows = history.day_index_candles("TESTIDX", _day)
+check("archived candles carry BOTH 'ts' and 'time'",
+      _rows and all("ts" in r and "time" in r and r["ts"] == r["time"]
+                    for r in _rows), f"{len(_rows)} rows")
+try:
+    _pivots = structure.zigzag_series(_rows)
+    check("zigzag_series accepts archived candles (the 15:45 crash shape)",
+          isinstance(_pivots, list))
+except KeyError as e:
+    check("zigzag_series accepts archived candles (the 15:45 crash shape)",
+          False, f"KeyError: {e}")
+
 print()
 if FAILED:
     print(f"{len(FAILED)} FAILED: {', '.join(FAILED)}")

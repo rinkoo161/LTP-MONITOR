@@ -4,6 +4,38 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.74 — the first real new-code backtest run crashed; fixed and isolated (2026-08-09)
+
+The 15:45 daily run — the FIRST time run_all executed the corrected
+dispatch over the real archive — raised `KeyError('time')` in
+`structure.zigzag_series` for every symbol: `day_index_candles` rows
+carry `ts`, zigzag keys candles by `time`, and the ew_reversal/sg_ema
+replays had NEVER actually run through run_all before v59.66 fixed
+their dispatch (the crash was latent behind the zero-trade bug the
+whole time). Because run_all wrapped a whole SYMBOL in one try, one
+strategy's crash voided every strategy's results — spreads included —
+and the caller logged it through `log=lambda m: None`, so the only
+visible symptom was every `live_enabled` flag going false against empty
+results while `last_tested` quietly stopped advancing.
+
+Three layers fixed:
+  * `day_index_candles` rows now carry BOTH `ts` and `time` — an
+    archived candle is shape-identical to the live pa_candles pack,
+    which is what replay parity wanted anyway;
+  * run_all isolates per STRATEGY: a broken replay yields an error stub
+    (`trades: None`, `replay_error: …`) that the refresh guard cannot
+    mistake for real results, and the failure is logged loudly;
+  * the tuners skip-and-ALERT on error stubs instead of tuning against
+    an empty dict, and BacktestAgent feeds run_all's log into the bus
+    instead of a lambda that discarded it.
+
+Verified end-to-end: all three previously-crashing replays run clean on
+the real archive (sg_ema produced its first genuine replay trade), and
+a manual backtest run after restart attaches the oos windows. The
+regression test exercises the REAL loader + REAL zigzag against the
+isolated store's own DB — the tier-3 stubs that masked this bug
+deliberately don't count.
+
 ## v59.73 — Tier 2: structural feasibility as code; mechanisms are pre-registered (2026-08-09)
 
 Tier 2 (economic mechanism) cannot be "fixed" by code — no change here

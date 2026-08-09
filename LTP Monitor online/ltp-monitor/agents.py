@@ -7866,7 +7866,10 @@ class BacktestAgent(Agent):
                 if _fee_warn:
                     self.bus.log(self.name, _fee_warn)
                     self.bus.alert("high", self.name, sym, "Backtest costs disabled")
-                results[sym] = backtester.run_all(sym, log=lambda m: None)
+                # v59.74 — errors inside run_all used to vanish into a
+                # lambda that discarded them; the feed gets them now.
+                results[sym] = backtester.run_all(
+                    sym, log=lambda m: self.bus.log(self.name, m))
             except Exception as e:
                 self.bus.log(self.name, f"backtest {sym}: {str(e)[:70]}")
         json.dump({"at": now_ist().isoformat(), "results": results},
@@ -7900,6 +7903,14 @@ class BacktestAgent(Agent):
             for name in ("bull_put_spread", "bear_call_spread"):
                 m = m_by_name.get(name) or {}
                 entry = backtester._symbol_entry(vers, name, sym)
+                if m.get("replay_error"):
+                    # v59.74 — a replay that CRASHED is not a replay that
+                    # found zero trades: don't refresh results, don't
+                    # tune against it, and say so where it will be seen.
+                    self.bus.alert("high", self.name, f"{sym}:{name}",
+                                   f"replay FAILED — {m['replay_error']} — "
+                                   f"results/tuning skipped this run")
+                    continue
                 for ver in entry["versions"]:
                     if ver["v"] == entry["active"] and m.get("trades") is not None:
                         ver["results"] = m
@@ -8045,6 +8056,14 @@ class BacktestAgent(Agent):
             for name in pa.PA_NAMES:
                 m = (results.get(sym) or {}).get(name) or {}
                 entry = backtester._symbol_entry(vers, name, sym)
+                if m.get("replay_error"):
+                    # v59.74 — a replay that CRASHED is not a replay that
+                    # found zero trades: don't refresh results, don't
+                    # tune against it, and say so where it will be seen.
+                    self.bus.alert("high", self.name, f"{sym}:{name}",
+                                   f"replay FAILED — {m['replay_error']} — "
+                                   f"results/tuning skipped this run")
+                    continue
                 # keep the active version's stored results current, so the
                 # dashboard never shows "not yet backtested" once we have
                 # real numbers, and so the profitability check below uses

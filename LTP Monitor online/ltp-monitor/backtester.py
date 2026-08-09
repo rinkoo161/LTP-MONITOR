@@ -1400,7 +1400,22 @@ def run_all(symbol, log=lambda m: None):
     for name in (["bull_put_spread", "bear_call_spread", "momentum_buy"]
                  + list(pa.PA_NAMES)):
         log(f"[backtest] {name} on {symbol}")
-        trades = _replay_for(name, symbol, None, source="daily_baseline")
+        # v59.74 — per-STRATEGY isolation. One try wrapped the whole
+        # symbol at the caller, so ew_reversal's KeyError('time') on
+        # 2026-08-09 voided every strategy's results for every symbol —
+        # spreads included — and the tuner marched on against empty
+        # dicts. A broken replay now yields an ERROR STUB whose
+        # trades=None keeps the refresh guard from overwriting real
+        # persisted results, and the failure is in the log, not
+        # swallowed into an all-or-nothing symbol error.
+        try:
+            trades = _replay_for(name, symbol, None, source="daily_baseline")
+        except Exception as e:
+            log(f"[backtest] {name} on {symbol} FAILED: "
+                f"{type(e).__name__}: {e}")
+            out[name] = {"trades": None,
+                         "replay_error": f"{type(e).__name__}: {e}"}
+            continue
         m = metrics(trades)
         entry = (vers.get(name, {}).get("symbols", {}) or {}).get(symbol) or {}
         adopted = None
