@@ -119,7 +119,7 @@ def promotion_gate_table():
         "headline": ("No strategy's edge is distinguishable from zero, and "
                      "measurement uncertainty is wide enough that one could "
                      "plausibly be above it."),
-        "formula": "required = cost_bias + 2 x sqrt(own_sd^2/n + 1143^2/74)",
+        "formula": "required = cost_bias + k*sqrt(SE_edge^2 + 1143^2/74), k = deflated max-of-N (>= 3.255), scored on the out-of-sample window",
         # Rendered as a visible footnote — see module docstring.
         "sd_provenance": pg.PROXY_SD_PROVENANCE,
         "cost_provenance": pg.COST_PROVENANCE if hasattr(pg, "COST_PROVENANCE")

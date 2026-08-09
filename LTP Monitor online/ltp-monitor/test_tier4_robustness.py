@@ -84,15 +84,48 @@ for name in ("_reconcile_broker", "_drain_entry_queue", "_monitor",
     setattr(ex, name, (lambda n=name: ran.append(n)))
 try:
     agents.ExecutionAgent.cycle(ex)
-    check("cycle re-raises the first step error", False, "no exception")
+    check("cycle re-raises the guard error", False, "no exception")
 except RuntimeError:
-    check("cycle re-raises the first step error", True)
-check("every later step still ran despite the first one crashing",
-      ran == ["kill_switch", "_reconcile_broker", "_drain_entry_queue",
-              "_monitor", "_monitor_spreads", "_monitor_futures",
-              "_futures_signal_engine", "_auto_spreads"], str(ran))
+    check("cycle re-raises the guard error", True)
+# v59.72 (R2 finding H1) — a crashing GUARD must not be treated like a
+# crashing monitor: monitors/exits still run, but the entry-generating
+# steps are SKIPPED and the shared halt flag is raised.
+check("monitors still run when the guard crashes",
+      ran == ["kill_switch", "_reconcile_broker", "_monitor",
+              "_monitor_spreads", "_monitor_futures"], str(ran))
+check("entry-generating steps are SKIPPED when the guard crashes",
+      "_drain_entry_queue" not in ran and "_auto_spreads" not in ran
+      and "_futures_signal_engine" not in ran)
+check("a crashing guard raises the shared entry-halt flag",
+      (ex.bus.get("portfolio_halt_until") or 0) > 0)
+check("the guard failure reaches the alert stream",
+      any(s == "high" and "kill-switch UNAVAILABLE" in m
+          for s, m in ex.bus.alerts), str(ex.bus.alerts))
 check("the failing step is named in the log",
       any("_check_portfolio_kill_switch" in m for m in ex.bus.logs))
+# and a NON-guard step failure still lets everything else run:
+ran2 = []
+ex2s = object.__new__(agents.ExecutionAgent)
+ex2s.name = "execution"
+ex2s.bus = FakeBus()
+ex2s._check_portfolio_kill_switch = lambda: ran2.append("guard")
+def _mon_boom():
+    ran2.append("_monitor")
+    raise KeyError("monitor bug")
+_mon_boom.__name__ = "_monitor"
+ex2s._monitor = _mon_boom
+for name in ("_reconcile_broker", "_drain_entry_queue", "_monitor_spreads",
+             "_monitor_futures", "_futures_signal_engine", "_auto_spreads"):
+    setattr(ex2s, name, (lambda n=name: ran2.append(n)))
+try:
+    agents.ExecutionAgent.cycle(ex2s)
+    check("monitor error still re-raised", False)
+except KeyError:
+    check("monitor error still re-raised", True)
+check("a monitor crash skips nothing else",
+      ran2 == ["guard", "_reconcile_broker", "_drain_entry_queue",
+               "_monitor", "_monitor_spreads", "_monitor_futures",
+               "_futures_signal_engine", "_auto_spreads"], str(ran2))
 
 # --- per-position isolation in _monitor --------------------------------
 mex = object.__new__(agents.ExecutionAgent)

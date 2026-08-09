@@ -68,6 +68,14 @@ def restate(trades, cfg=None):
                       "fees_delta": 0.0, "slip_delta": 0.0, "pnl_delta": 0.0}
     for t in trades:
         t = dict(t)
+        if str(t.get("cost_model") or "").endswith("restated-v59.68"):
+            # v59.72 (R2 finding L3) — already restated: recomputing is
+            # idempotent in value but would overwrite restated_v5968_from
+            # with the already-restated numbers, destroying the audit
+            # baseline. Skip.
+            stats["skipped"] += 1
+            out.append(t)
+            continue
         try:
             if _is_future(t) and t.get("lot_size") and t.get("lots") \
                     and t.get("entry") and t.get("ltp"):

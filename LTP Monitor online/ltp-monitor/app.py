@@ -26,7 +26,7 @@ from agents import Orchestrator, compute_momentum
 import agents
 
 BASE = os.path.dirname(os.path.abspath(__file__))
-APP_VERSION = "v59.71"   # maintained per explicit request; last delivered was v49
+APP_VERSION = "v59.72"   # maintained per explicit request; last delivered was v49
 
 app = FastAPI(title="LTP Option Chain Monitor")
 
@@ -1793,6 +1793,56 @@ def api_engine():
     return h
 
 
+def _lifetime_trade_totals():
+    """Lifetime realized/fees/slippage/count/wins from trades.jsonl,
+    cached on the file's mtime.
+
+    v59.72 (third-eye R2 finding M6) — the bus closed_trades became a
+    capped window in v59.71, so summing it for "lifetime" headline
+    figures would silently DROP the oldest trades once the record grows
+    past the cap (the totals would decrease as new trades arrive). The
+    disk file is the full record; one parse per change is cheap.
+    Returns None when the file is unreadable — callers fall back to the
+    window and label the scope."""
+    import store as _store
+    path = _store.path("trades.jsonl")
+    try:
+        m = os.path.getmtime(path)
+    except OSError:
+        return None
+    c = _LIFETIME_TOTALS_CACHE
+    if c.get("mtime") == m and c.get("totals"):
+        return c["totals"]
+    realized = fees = slippage = 0.0
+    count = wins = 0
+    try:
+        with open(path) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    t = json.loads(line)
+                except ValueError:
+                    continue          # torn final line after a crash
+                pnl = t.get("pnl") or 0
+                realized += pnl
+                fees += t.get("fees") or 0
+                slippage += t.get("slippage") or 0
+                count += 1
+                if pnl > 0:
+                    wins += 1
+    except OSError:
+        return None
+    totals = {"realized": round(realized, 0), "fees": round(fees, 0),
+              "slippage": round(slippage, 0), "count": count, "wins": wins}
+    c["mtime"], c["totals"] = m, totals
+    return totals
+
+
+_LIFETIME_TOTALS_CACHE = {"mtime": None, "totals": None}
+
+
 @app.get("/api/trades")
 def api_trades():
     """Closed + open positions for the P&L dashboard."""
@@ -1805,15 +1855,24 @@ def api_trades():
     # since its pnl was never included in the sum below either.
     futures_positions = pilot.bus.get("futures_positions", {}) or {}
     pos = pilot.bus.get("position")   # legacy single-position mirror
-    realized = sum(t.get("pnl", 0) for t in closed)
-    total_fees = sum(t.get("fees", 0) for t in closed)
+    # v59.72 (R2 finding M6) — headline totals come from the FULL disk
+    # record, not the bus list: the in-memory closed_trades became a
+    # capped window in v59.71, so bus-summed "lifetime" figures would
+    # silently shrink once trades.jsonl passes the cap. mtime-cached;
+    # falls back to the window (labelled) if the file is unreadable.
+    lifetime = _lifetime_trade_totals()
+    realized = (lifetime["realized"] if lifetime
+                else sum(t.get("pnl", 0) for t in closed))
+    total_fees = (lifetime["fees"] if lifetime
+                  else sum(t.get("fees", 0) for t in closed))
     # v59.68 (third-eye Tier 0) — slippage is booked per trade under its
     # own name (agents._cost_parts) but was never AGGREGATED, so the
     # "Fees paid" figure understated the real round-trip cost by the
-    # entire bid-ask component (~48% of an option round trip). Summed
-    # separately + combined, so the display can show both honestly.
-    total_slippage = sum(t.get("slippage") or 0 for t in closed)
-    wins = sum(1 for t in closed if t.get("pnl", 0) > 0)
+    # entire bid-ask component (~48% of an option round trip).
+    total_slippage = (lifetime["slippage"] if lifetime
+                      else sum(t.get("slippage") or 0 for t in closed))
+    wins = (lifetime["wins"] if lifetime
+            else sum(1 for t in closed if t.get("pnl", 0) > 0))
     unrealized = sum(p.get("pnl", 0) for p in positions.values()) + \
         sum(s.get("pnl", 0) for s in spreads.values()) + \
         sum(f.get("pnl", 0) for f in futures_positions.values())
@@ -1881,10 +1940,16 @@ def api_trades():
         "daily": daily,
         "guardrails": guardrails,
         "stats": {
-            "count": len(closed),
+            "count": (lifetime["count"] if lifetime else len(closed)),
             "wins": wins,
-            "losses": len(closed) - wins,
-            "win_rate": round(wins / len(closed) * 100, 1) if closed else 0,
+            "losses": ((lifetime["count"] - wins) if lifetime
+                       else len(closed) - wins),
+            "win_rate": (round(wins / lifetime["count"] * 100, 1)
+                         if lifetime and lifetime["count"]
+                         else (round(wins / len(closed) * 100, 1)
+                               if closed else 0)),
+            "totals_scope": "lifetime (trades.jsonl)" if lifetime
+                            else "in-memory window",
             "realized_pnl": realized,
             # NOTE: unrealized sums the positions' GROSS pnl fields —
             # costs are only known at exit. Labelled here so a consumer

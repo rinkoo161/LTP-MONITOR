@@ -97,7 +97,8 @@ def clean(v):
                 kept.append(ver)
             # The active pointer must survive by construction; assert
             # rather than silently shipping an orphaned entry.
-            if vers and not any(k.get("v") == active for k in kept):
+            if vers and active is not None and \
+                    not any(k.get("v") == active for k in kept):
                 raise AssertionError(
                     f"{name}/{sym}: active v{active} not in kept set")
             entry["versions"] = kept

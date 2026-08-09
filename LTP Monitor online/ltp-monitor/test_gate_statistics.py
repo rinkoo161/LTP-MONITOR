@@ -125,6 +125,36 @@ bad_oos = dict(good_oos, net_pnl=120 * 5.0)
 ok4, _ = pg.evaluate_entry("x", "NIFTY", dict(full, oos=bad_oos))
 check("a weak oos window fails regardless of the in-sample number", not ok4)
 
+# --- v59.72 (R2 findings M1/M2/M5/L1): the fail-open holes are closed ---
+_no_days = {k: v for k, v in good_oos.items() if k != "days_tested"}
+okD, dD = pg.evaluate_entry("x", "NIFTY", dict(full, oos=_no_days))
+check("missing days_tested DENIES — no silent per-trade fallback (M1)",
+      not okD and "day-clustered fields" in (dD.get("reason") or ""),
+      dD.get("reason", ""))
+okZ, dZ = pg.evaluate("x", "NIFTY", 60, 60 * 900.0, own_sd=2886,
+                      n_days=20, day_sd=0.0)
+check("a zero day_sd DENIES rather than zeroing the dispersion term (M2)",
+      not okZ and "zero" in (dZ.get("reason") or ""), dZ.get("reason", ""))
+_hand_2n = (math.sqrt(2 * math.log(2000))
+            - (math.log(math.log(2000)) + math.log(4 * math.pi))
+            / (2 * math.sqrt(2 * math.log(2000))))
+check("E[max|t|] folds both tails (2n Gumbel form, L1)",
+      abs(pg.expected_max_abs_t(1000) - _hand_2n) < 1e-9
+      and pg.expected_max_abs_t(1000) > 3.25,
+      f"{pg.expected_max_abs_t(1000):.4f}")
+_d0 = trial_log.distinct_count()
+import time as _time
+_p = {"p": round(_time.time(), 3)}   # unique per run — a rerun against the
+                                     # same store must not find this config
+                                     # already in the distinct set
+trial_log.record("x", "NIFTY", _p, {"trades": 1, "net_pnl": 0},
+                 "daily_baseline")
+trial_log.record("x", "NIFTY", _p, {"trades": 1, "net_pnl": 0},
+                 "daily_baseline")
+check("re-testing the SAME config does not inflate the deflation N (M5)",
+      trial_log.distinct_count() == _d0 + 1,
+      f"{_d0} -> {trial_log.distinct_count()} after 2 identical rows")
+
 # --- metrics() emits the day-clustered field ----------------------------
 import backtester as bt
 m = bt.metrics([{"day": "2026-08-01", "pnl": 100.0, "reason": "target", "risk": 50},

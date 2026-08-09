@@ -9,6 +9,7 @@ construction would drag in threads.
 """
 import os
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import store
@@ -172,12 +173,49 @@ if trades:
           t["reason"] == "stop" and t["exit_spot"] == round(101.4 - 3, 2),
           f"{t['reason']} @ {t['exit_spot']}")
 
+# v59.72 (R2 finding M3) — the FILL BAR's own range must be inspected:
+# a fill bar whose low pierces the stop exits on THAT bar at the level.
+CANDLES2 = [dict(c) for c in CANDLES]
+CANDLES2[13]["low"] = 90.0
+class _H2(_H):
+    @staticmethod
+    def day_index_candles(sym, day, for_compute=False):
+        return [dict(c) for c in CANDLES2]
+_orig_hist2, _orig_eval3 = bt.history, bt.pa.evaluate
+try:
+    bt.history = _H2
+    bt.pa.evaluate = _stub_eval
+    trades2 = bt.replay_pa("NIFTY", "momentum_confluence",
+                           params={"max_trades_per_day": 1})
+finally:
+    bt.history = _orig_hist2
+    bt.pa.evaluate = _orig_eval3
+check("a stop pierced on the FILL BAR exits on the fill bar at the level",
+      len(trades2) == 1 and trades2[0]["reason"] == "stop"
+      and trades2[0]["exit_spot"] == round(101.4 - 3, 2)
+      and trades2[0]["exit_ts"] == CANDLES2[13]["ts"],
+      str(trades2[:1]))
+
 # --- size-aware slippage ------------------------------------------------
 cfg = config.load()
 r1 = agents.realistic_costs("option", "NIFTY", 1, 150.0, 140.0, cfg)
 r5 = agents.realistic_costs("option", "NIFTY", 5, 150.0, 140.0, cfg)
-check("statutory charges scale linearly with lots",
-      abs(r5["fees"] - 5 * r1["fees"]) <= 5)
+# v59.72 (R2) — brokerage is per ORDER: notional charges scale with
+# lots, the ₹20×2 brokerage (+18% GST) is charged once. 5 lots must be
+# 5× the statutory MINUS the 4 extra brokerage-with-GST the old linear
+# scaling over-charged.
+_brk = 20.0 * 2 * 1 * 1.18
+check("statutory scales per-order: notional x lots, brokerage once",
+      abs(r5["fees"] - (5 * r1["fees"] - 4 * _brk)) <= 6,
+      f"{r5['fees']} vs {5 * r1['fees'] - 4 * _brk:.0f}")
+_f1 = agents.realistic_costs("future", "NIFTY", 1, 25000.0, 25050.0, cfg)
+_f5 = agents.realistic_costs("future", "NIFTY", 5, 25000.0, 25050.0, cfg)
+import futures_costs as _fc
+_b5 = _fc.breakdown("NIFTY", 25000.0, 25050.0, lots=5, cfg=cfg,
+                    lot=(cfg.get("lot_sizes") or {}).get("NIFTY", 75))
+check("futures multi-lot statutory matches breakdown(lots=n) exactly",
+      abs(_f5["fees"] - round(_b5["statutory_rupees"], 0)) <= 1,
+      f"{_f5['fees']} vs {_b5['statutory_rupees']:.0f}")
 check("spread cost scales super-linearly (n^1.5 at alpha=0.5)",
       abs(r5["slippage"] / r1["slippage"] - 5 ** 1.5) < 0.2,
       f"ratio {r5['slippage'] / r1['slippage']:.2f} vs {5 ** 1.5:.2f}")
@@ -243,6 +281,61 @@ check("an unreachable status API says UNVERIFIED and never raises",
       st is None and any("UNVERIFIED" in m for m in cex.bus.logs))
 check("no order id means nothing to confirm",
       cex._confirm_order(_StatusOrders("TRADED"), {}, "X") is None)
+
+# v59.72 (R2 finding H3) — Dhan returns a JSON ARRAY; the old .get()
+# on a list made the whole feature a silent no-op.
+class _ListOrders:
+    def order_status(self, oid):
+        return [{"orderStatus": "REJECTED"}]
+class _DataListOrders:
+    def order_status(self, oid):
+        return {"data": [{"orderStatus": "TRADED"}]}
+cex.bus = FakeBus()
+st = cex._confirm_order(_ListOrders(), {"orderId": "42"}, "BUY X")
+check("a LIST response is parsed (Dhan's real shape) and REJECTED alerts",
+      st == "REJECTED" and any(s == "high" for s, _ in cex.bus.alerts),
+      f"status={st}")
+cex.bus = FakeBus()
+check("a data-wrapped LIST response is parsed too",
+      cex._confirm_order(_DataListOrders(), {"orderId": "42"}, "X") == "TRADED")
+
+# v59.72 (R2 finding H4) — two futures open at the close must square
+# off exactly ONCE each: the old loop wrote a stale local dict back to
+# the bus and resurrected the first-closed position.
+class FakeBus2(FakeBus):
+    def publish(self, topic, msg):
+        self.state.setdefault("_pub", []).append(topic)
+
+def _mk_fut(sym, e):
+    return {"symbol": sym, "side": "LONG", "lots": 1, "lot_size": 65,
+            "entry": e, "ltp": e, "sl": e - 100, "target": e + 100,
+            "peak": e, "pnl": 0.0, "pnl_ts": time.time(), "paper": True,
+            "mfe": 0, "mae": 0, "opened": "10:00:00",
+            "opened_ts": time.time(), "margin": 0}
+
+fex = object.__new__(agents.ExecutionAgent)
+fex.name = "execution"
+fex.ctx = {}
+fex.bus = FakeBus2({
+    "futures_positions": {"NIFTY": _mk_fut("NIFTY", 25000.0),
+                          "BANKNIFTY": _mk_fut("BANKNIFTY", 57000.0)},
+    "closed_trades": [],
+    "future_ohlc:NIFTY": {"close": 25010.0, "ts": time.time()},
+    "future_ohlc:BANKNIFTY": {"close": 57010.0, "ts": time.time()}})
+_orig_open3 = agents.market_open
+try:
+    agents.market_open = lambda: False
+    agents.ExecutionAgent._monitor_futures(fex)
+    agents.ExecutionAgent._monitor_futures(fex)   # 2nd cycle: must no-op
+finally:
+    agents.market_open = _orig_open3
+_closed_syms = [t.get("symbol") for t in fex.bus.get("closed_trades", [])]
+check("two futures at the close square off exactly once each",
+      sorted(_closed_syms) == ["BANKNIFTY", "NIFTY"],
+      f"closed: {_closed_syms}")
+check("no position is resurrected after its close",
+      not fex.bus.get("futures_positions"),
+      str(fex.bus.get("futures_positions")))
 
 # --- round 2: kill-switch says when its inputs are stale ---------------
 kex = object.__new__(agents.ExecutionAgent)

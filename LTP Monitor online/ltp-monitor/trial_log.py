@@ -109,6 +109,17 @@ def count():
     return len(read_all())
 
 
+def distinct_count():
+    """DISTINCT configurations evaluated — the N a deflated Sharpe
+    actually needs. count() (raw rows) double-counts the daily baseline
+    re-evaluations of unchanged params (source=daily_baseline), which
+    would inflate the deflation bar with calendar time rather than with
+    searching (v59.72, third-eye R2 finding M5)."""
+    return len({(r.get("strategy"), r.get("symbol"),
+                 json.dumps(r.get("params"), sort_keys=True))
+                for r in read_all()})
+
+
 def free_param_count():
     """Tunable parameters across every bounds dict, computed live so the
     number cannot go stale the way the hand-written '37' did. Families

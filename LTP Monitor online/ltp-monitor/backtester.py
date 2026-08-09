@@ -919,6 +919,20 @@ def replay_pa(symbol, name, params=None, days=None, log=lambda m: None):
                        "entry_spot": fill}
                 pending = None
                 taken += 1
+                # v59.72 (R2 finding M3) — inspect the FILL BAR's own
+                # range immediately: a stop pierced on the fill bar was
+                # carried unobserved (one flattering bar per trade), and
+                # a fill on the day's last bar vanished with no EOD exit.
+                exit_px, why = _bar_exit(pos, win[-1], i == len(c1) - 1)
+                if exit_px is not None:
+                    pts = pos["dir"] * (exit_px - pos["entry"])
+                    trades.append({"day": day, "strategy": name,
+                                   "pnl": round(pts * 0.5 * lot - fee, 0),
+                                   "risk": abs(pos["entry"] - pos["stop0"]) * 0.5 * lot,
+                                   "reason": why,
+                                   "entry_ts": pos["entry_ts"], "exit_ts": win[-1]["ts"],
+                                   "entry_spot": pos["entry_spot"], "exit_spot": exit_px})
+                    pos = None
                 continue
             if name == "sg_ema":
                 # v59.66 — sg_ema is NOT dispatched by pa.evaluate() (it
@@ -1002,6 +1016,21 @@ def replay_ew_reversal(symbol, params=None, days=None, log=lambda m: None):
                        "subtype": pending.get("setup_subtype")}
                 pending = None
                 taken += 1
+                # v59.72 (R2 finding M3) — inspect the FILL BAR's own
+                # range immediately: a stop pierced on the fill bar was
+                # carried unobserved (one flattering bar per trade), and
+                # a fill on the day's last bar vanished with no EOD exit.
+                exit_px, why = _bar_exit(pos, win[-1], i == len(c1) - 1)
+                if exit_px is not None:
+                    pts = pos["dir"] * (exit_px - pos["entry"])
+                    trades.append({"day": day, "strategy": "ew_reversal",
+                                   "subtype": pos.get("subtype"),
+                                   "pnl": round(pts * 0.5 * lot - fee, 0),
+                                   "risk": abs(pos["entry"] - pos["stop0"]) * 0.5 * lot,
+                                   "reason": why,
+                                   "entry_ts": pos["entry_ts"], "exit_ts": win[-1]["ts"],
+                                   "entry_spot": pos["entry_spot"], "exit_spot": exit_px})
+                    pos = None
                 continue
             pivots = structure.zigzag_series(win, dev)
             ev, _det = ew_reversal.evaluate(win, _resample(win, 5),
@@ -1058,6 +1087,20 @@ def replay_ta_elliott(symbol, params=None, days=None, log=lambda m: None):
                        "entry_spot": fill}
                 pending = None
                 taken += 1
+                # v59.72 (R2 finding M3) — inspect the FILL BAR's own
+                # range immediately: a stop pierced on the fill bar was
+                # carried unobserved (one flattering bar per trade), and
+                # a fill on the day's last bar vanished with no EOD exit.
+                exit_px, why = _bar_exit(pos, win[-1], i == len(c1) - 1)
+                if exit_px is not None:
+                    pts = pos["dir"] * (exit_px - pos["entry"])
+                    trades.append({"day": day, "strategy": "ta_elliott",
+                                   "pnl": round(pts * 0.5 * lot - fee, 0),
+                                   "risk": abs(pos["entry"] - pos["stop0"]) * 0.5 * lot,
+                                   "reason": why,
+                                   "entry_ts": pos["entry_ts"], "exit_ts": win[-1]["ts"],
+                                   "entry_spot": pos["entry_spot"], "exit_spot": exit_px})
+                    pos = None
                 continue
             c5w, c15w = _resample(win, 5), _resample(win, 15)
             if len(c5w) < int(p.get("bb_period", 20)) + 3:
@@ -1345,6 +1388,14 @@ def run_all(symbol, log=lambda m: None):
         for ver in entry.get("versions") or []:
             if ver.get("v") == entry.get("active"):
                 adopted = (ver.get("created") or "")[:10] or None
+                # v59.72 (R2 finding M8) — v1 "initial" carries the
+                # shipped DEFAULTS; its auto-stamped created date is
+                # entry-creation, not a fit. Treating it as an adoption
+                # collapsed a 60-day archive to "3 OOS days" for
+                # never-tuned strategies. Defaults were never fitted:
+                # every archived day is out-of-sample for them.
+                if ver.get("v") == 1 and                         str(ver.get("reason") or "").startswith("initial"):
+                    adopted = None
         # No version entry (or no created stamp) means the params are the
         # shipped defaults, never fitted to this archive — every day is
         # out-of-sample for them.

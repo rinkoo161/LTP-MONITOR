@@ -636,19 +636,39 @@ def _cost_parts(kind, symbol, lots, premium_in, premium_out, cfg,
             # because this caller needs the statutory/slippage split and
             # cost_round_trip returns a single float (a second reason the
             # old call could never have worked).
-            b = futures_costs.breakdown(symbol, float(premium_in),
-                                        float(premium_out), lots=1,
-                                        cfg=cfg, lot=lot)
-            r = {"statutory": b["statutory_rupees"],
-                 "spread": b["items"]["slippage"]}
-            # v59.69 — same square-root size impact as the options
-            # branch below (the ×lots after this block stays linear;
-            # this factor is the EXTRA walk into the book per lot).
+            # v59.72 (R2 findings L4 + verifier) — breakdown(lots=lots)
+            # scales correctly by construction: brokerage is per ORDER
+            # and charged once; notional charges scale with qty. The old
+            # per-1-lot × lots multiplied brokerage and the tax on it by the lot count
+            # (~₹330 overcharge at 8 lots) and disagreed with
+            # futures_costs.cost_round_trip on the same trade. Contract
+            # size comes from the scrip master (the authority its own
+            # docstring mandates); the config map is the fallback, said
+            # out loud, when the master is unreadable.
+            try:
+                b = futures_costs.breakdown(symbol, float(premium_in),
+                                            float(premium_out), lots=lots,
+                                            cfg=cfg)
+            except Exception:
+                if log:
+                    log(f"scrip master unavailable for {symbol} lot size — "
+                        f"using config lot {lot} for the cost model")
+                b = futures_costs.breakdown(symbol, float(premium_in),
+                                            float(premium_out), lots=lots,
+                                            cfg=cfg, lot=lot)
+            stat = float(b["statutory_rupees"])
+            slip = float(b["items"]["slippage"])
             if lots > 1:
+                # v59.69 square-root size impact — the EXTRA walk into
+                # the book per lot, applied to the (already lot-scaled)
+                # linear slippage.
                 _alpha = max(0.0, min(1.0, float(
                     cfg.get("slippage_impact_alpha", 0.5) or 0.0)))
                 if _alpha > 0:
-                    r["spread"] *= lots ** _alpha
+                    slip *= lots ** _alpha
+            if stat + slip > 0:
+                return {"fees": round(stat, 0), "slippage": round(slip, 0),
+                        "total": round(stat + slip, 0), "model": "notional"}
         else:
             import options_costs
             # v59.69 (third-eye Tier 3) — size-aware spread. The
@@ -664,12 +684,28 @@ def _cost_parts(kind, symbol, lots, premium_in, premium_out, cfg,
                 _alpha = max(0.0, min(1.0, float(
                     cfg.get("slippage_impact_alpha", 0.5) or 0.0)))
                 if _alpha > 0:
-                    _hs1 = float(cfg.get("opt_halfspread_points", 0.5) or 0.5)
-                    _kw["halfspread"] = _hs1 * (lots ** _alpha)
+                    # v59.72 (R2 finding M4 sub-item) — `or 0.5` used to
+                    # clobber a DELIBERATE opt_halfspread_points of 0
+                    # (spread modelling off) back to 0.5 for multi-lot
+                    # only. None → default; 0 → honoured (no impact on
+                    # a zero spread).
+                    _hs1_raw = cfg.get("opt_halfspread_points", 0.5)
+                    _hs1 = 0.5 if _hs1_raw is None else float(_hs1_raw)
+                    if _hs1 > 0:
+                        _kw["halfspread"] = _hs1 * (lots ** _alpha)
             r = options_costs.cost_round_trip(
                 float(premium_in), float(premium_out), lot,
                 legs=legs, cfg=cfg, **_kw)
         stat = float(r.get("statutory", 0)) * lots
+        if lots > 1:
+            # v59.72 (R2/verifier) — brokerage is per ORDER, not per
+            # lot: a 5-lot spread is still one order per leg per side.
+            # Scaling the whole 1-lot statutory by lots over-charged
+            # the fixed component by (lots−1)×; options_costs owns the
+            # rate table, so the amount comes from there, not from a
+            # re-declared constant here.
+            stat = max(0.0, stat - (lots - 1)
+                       * options_costs.fixed_order_cost(cfg, legs=legs))
         slip = float(r.get("spread", 0)) * lots
         if stat + slip > 0:
             # "model" makes a silent fallback OBSERVABLE downstream: the
@@ -1307,11 +1343,20 @@ class Agent(threading.Thread):
                 # no longer read as "quiet because idle".
                 n = getattr(self, "_consec_errors", 0) + 1
                 self._consec_errors = n
-                if n == 1 or n % 20 == 0:
-                    self.bus.alert("high", self.name, self.name.upper(),
-                                   f"agent cycle CRASHED "
-                                   f"({n} consecutive): "
-                                   f"{type(e).__name__}: {e}")
+                # v59.72 (R2 finding L5) — TIME-throttled, not count-
+                # throttled: every-20th on a 2s agent was ~2,160 HIGH
+                # alerts/day for one permanently broken step. And the
+                # alert call is guarded — an alerting failure must not
+                # kill the agent thread it reports on.
+                if n == 1 or time.time() - getattr(self, "_crash_alert_ts", 0) > 600:
+                    self._crash_alert_ts = time.time()
+                    try:
+                        self.bus.alert("high", self.name, self.name.upper(),
+                                       f"agent cycle CRASHED "
+                                       f"({n} consecutive): "
+                                       f"{type(e).__name__}: {e}")
+                    except Exception:
+                        pass
             self.last_run = now_ist().strftime("%H:%M:%S")
             self.stop_evt.wait(self.interval)
         self.status = "stopped"
@@ -4517,22 +4562,46 @@ class ExecutionAgent(Agent):
         self._entry_lock = threading.Lock()
 
     def cycle(self):
-        # v59.71 (third-eye Tier 4) — per-step isolation. These used to
-        # be bare calls in sequence: one deterministic exception in
-        # _monitor() skipped spread monitoring, futures monitoring and
-        # auto-deploy EVERY cycle, forever, with a feed line as the only
-        # witness. Each step now fails alone; the first error is
-        # re-raised after every step has had its chance, so run()'s
-        # crash accounting (status + HIGH alert) still fires.
+        # v59.71 (third-eye Tier 4) — per-step isolation: one
+        # deterministic exception in _monitor() used to skip spread/
+        # futures monitoring and auto-deploy every cycle, forever.
+        #
+        # v59.72 (R2 finding H1) — isolation is right for MONITORS and
+        # wrong for the GUARD. Isolating the kill-switch meant a
+        # crashing guard logged a line while the cycle went on to drain
+        # the entry queue and auto-deploy — the exact behaviour the old
+        # bare sequence prevented by accident. A guard that cannot run
+        # must halt what it guards: on kill-switch failure the entry-
+        # generating steps are skipped this cycle AND the shared halt
+        # flag is raised so RiskAgent/enter_future/enter_spread refuse
+        # too. Exits and monitors still run — closing positions stays
+        # safe when the guard is broken; opening new ones does not.
+        guard_err = None
+        try:
+            self._check_portfolio_kill_switch()
+        except Exception as e:
+            guard_err = e
+            self.bus.log(self.name,
+                         f"⚠ step _check_portfolio_kill_switch failed: "
+                         f"{type(e).__name__}: {e} — entries halted")
+            self.bus.set("portfolio_halt_until", time.time() + 120)
+            if time.time() - getattr(self, "_guard_alert_ts", 0) > 300:
+                self._guard_alert_ts = time.time()
+                self.bus.alert("high", self.name, "PORTFOLIO",
+                               f"kill-switch UNAVAILABLE "
+                               f"({type(e).__name__}: {e}) — new entries "
+                               f"halted until it runs again")
+        steps = [self._reconcile_broker]     # v59.69 — live-only, throttled
+        if guard_err is None:
+            steps.append(self._drain_entry_queue)
+        steps += [self._monitor,
+                  self._monitor_spreads,
+                  self._monitor_futures]     # S4 (v50)
+        if guard_err is None:
+            steps += [self._futures_signal_engine,  # S4 Phase 2 (v52)
+                      self._auto_spreads]
         first_err = None
-        for step in (self._check_portfolio_kill_switch,
-                     self._reconcile_broker,     # v59.69 — live-only, throttled
-                     self._drain_entry_queue,
-                     self._monitor,
-                     self._monitor_spreads,
-                     self._monitor_futures,      # S4 (v50)
-                     self._futures_signal_engine,  # S4 Phase 2 (v52)
-                     self._auto_spreads):
+        for step in steps:
             try:
                 step()
             except Exception as e:
@@ -4541,6 +4610,8 @@ class ExecutionAgent(Agent):
                              f"{type(e).__name__}: {e}")
                 if first_err is None:
                     first_err = e
+        if guard_err is not None:
+            raise guard_err
         if first_err is not None:
             raise first_err
 
@@ -4736,7 +4807,12 @@ class ExecutionAgent(Agent):
             order_id = resp.get("orderId") or "UNCONFIRMED"
             self.bus.log(self.name, f"\U0001f534 LIVE FUT {side} {symbol} "
                          f"\u00d7{lots} lot(s) @ {ltp} \u2014 order {order_id}")
-            self._confirm_order(orders, resp, f"FUT {side} {symbol}")
+            _st = self._confirm_order(orders, resp, f"FUT {side} {symbol}")
+            # v59.72 (R2 finding H2) \u2014 a rejected futures BUY/SELL means
+            # no fill; do not build a position for it.
+            if _st in ("REJECTED", "CANCELLED"):
+                return {"error": f"live futures order {_st} at the broker "
+                                 f"\u2014 nothing tracked (see alert)"}
         # (stop/target geometry and the rupee cap were computed above,
         # BEFORE the order was placed — see the block after `lot_size`.
         # _sl_px/_tg_px are already bound here.)
@@ -4770,8 +4846,12 @@ class ExecutionAgent(Agent):
         # not whatever the current (possibly already-trailed) stop is.
         pos["initial_sl"] = pos["sl"]
         pos["defended"] = False
-        futs[symbol] = pos
-        self.bus.set("futures_positions", futs)
+        # v59.72 (R2 finding H4 family) — re-read at write time. Writing
+        # the earlier loop/method-local dict back wholesale can resurrect
+        # a position another path just closed.
+        _cur = self.bus.get("futures_positions", {}) or {}
+        _cur[symbol] = pos
+        self.bus.set("futures_positions", _cur)
         self.bus.log(self.name, f"FUT {side} {symbol} \u00d7{lots} lot(s) "
                      f"@ {ltp} (SL {pos['sl']}, T {pos['target']}, "
                      f"margin \u20b9{need:,.0f}) [{'live' if live else 'paper'}]")
@@ -4805,8 +4885,15 @@ class ExecutionAgent(Agent):
                 sign = 1 if p["side"] == "LONG" else -1
                 p["pnl"] = round((ltp - p["entry"]) * sign
                                  * p["lot_size"] * p["lots"], 2)
-                futs[sym] = p
-                self.bus.set("futures_positions", futs)
+                # v59.72 (R2 finding H4) — write ONLY this symbol against
+                # a fresh read. Writing the loop-local dict re-inserted a
+                # position exit_future had already popped, so with two
+                # contracts open at close the first was squared off TWICE
+                # (double-booked trade; in live, a second offsetting order).
+                _cur = self.bus.get("futures_positions", {}) or {}
+                if sym in _cur:
+                    _cur[sym] = p
+                    self.bus.set("futures_positions", _cur)
                 self.exit_future(sym, "market closed — squaring off")
                 continue
             _fts = ohlc.get("ts")
@@ -4887,7 +4974,13 @@ class ExecutionAgent(Agent):
                             self.bus.alert("medium", self.name, sym,
                                           f"Futures {p['side']} defense: "
                                           f"stop tightened to {new_sl:.1f}")
-            self.bus.set("futures_positions", futs)
+            # v59.72 (R2 finding H4, pre-existing variant) — same rule:
+            # per-symbol write against a fresh read, never the whole
+            # loop-local dict.
+            _cur = self.bus.get("futures_positions", {}) or {}
+            if sym in _cur:
+                _cur[sym] = p
+                self.bus.set("futures_positions", _cur)
             hm = now_ist().hour * 60 + now_ist().minute
             _rpf_fut = rupee_profit_floor(p, p.get("pnl", 0), cfg, "futures")
             # 2026-08-01 — translate the ARMED floor into a stop PRICE.
@@ -5208,7 +5301,13 @@ class ExecutionAgent(Agent):
                     self.bus.log(self.name, f"\U0001f534 LIVE FUT close order "
                                  f"{symbol} — "
                                  f"{resp.get('orderId') or 'UNCONFIRMED'}")
-                    self._confirm_order(orders, resp, f"FUT close {symbol}")
+                    _st = self._confirm_order(orders, resp,
+                                              f"FUT close {symbol}")
+                    # v59.72 (R2 finding H2) — a REJECTED close must not
+                    # book the exit; the contract is still live.
+                    if _st in ("REJECTED", "CANCELLED"):
+                        return {"error": f"FUT close {_st} at the broker — "
+                                         f"position kept, verify manually"}
                 except Exception as e:
                     reason = f"{reason} [LIVE CLOSE ORDER FAILED: {e} — " \
                              f"verify position at the broker manually]"
@@ -5335,7 +5434,18 @@ class ExecutionAgent(Agent):
             return None
         try:
             st = orders.order_status(str(oid)) or {}
-            data = st.get("data") if isinstance(st.get("data"), dict) else st
+            # v59.72 (R2 finding H3) — Dhan's GET /orders/{id} returns a
+            # JSON ARRAY of order objects. The old .get() on a list
+            # raised AttributeError into this function's own catch, so
+            # the entire fill-confirmation feature was a silent no-op
+            # logging "unavailable" — the same shape _reconcile_broker
+            # always handled and this function did not.
+            if isinstance(st, list):
+                st = st[0] if st else {}
+            data = st.get("data") if isinstance(st.get("data"), (dict, list)) \
+                else st
+            if isinstance(data, list):
+                data = data[0] if data else {}
             status = str((data or {}).get("orderStatus")
                          or (data or {}).get("status") or "").upper()
             if status in ("REJECTED", "CANCELLED"):
@@ -6506,6 +6616,16 @@ class ExecutionAgent(Agent):
                 pos["order_id"] = resp.get("orderId") or "UNCONFIRMED"
                 pos["order_status"] = self._confirm_order(
                     orders, resp, f"BUY {sym} {sig.get('strike')} {leg}")
+                # v59.72 (R2 finding H2) — ACT on the verdict. A rejected
+                # BUY means no fill exists; registering the position
+                # anyway created a phantom that the exit path would later
+                # SELL — an unintended naked short.
+                if pos["order_status"] in ("REJECTED", "CANCELLED"):
+                    self.bus.log(self.name,
+                                 f"LIVE BUY {pos['order_status']} at the "
+                                 f"broker — entry abandoned, nothing tracked")
+                    return {"error": f"live BUY {pos['order_status']} at "
+                                     f"the broker (see alert)"}
             except Exception as e:
                 # A timeout does NOT mean the order failed — it may have
                 # reached the exchange after this call gave up. Track
@@ -6599,30 +6719,10 @@ class ExecutionAgent(Agent):
     def _monitor_one(self, p):
         cfg = config.load()
         sym = p["symbol"]
-        # Strategy 7 (v51) — structure-break exit, spec exit rule #3:
-        # a NEW confirmed ZigZag pivot printing adverse structure
-        # (LH/LL while long, HH/HL while short) closes the position —
-        # structure invalidation, mirroring the spot-invalidation rule.
-        # Pivots come from the SAME zigzag on the SAME pa_candles 1m
-        # series the entry gate used (parity). Only pivots confirmed
-        # AFTER entry count — the pivot that justified the entry must
-        # not immediately exit it.
-        if p.get("setup") == "sg_ema" and p.get("entry_ts"):
-            pack = self.bus.get(f"pa_candles:{sym}")
-            if pack and pack.get("c1"):
-                import structure
-                confirmed = [pv for pv in structure.zigzag_series(pack["c1"])
-                             if pv.get("structure")
-                             and pv.get("time", 0) > p["entry_ts"]]
-                if confirmed:
-                    last = confirmed[-1]["structure"]
-                    is_long = p.get("leg", "").upper() == "CE" or \
-                              "CE" in str(p.get("signal", ""))
-                    adverse = (last in ("LH", "LL")) if is_long else \
-                              (last in ("HH", "HL"))
-                    if adverse:
-                        return self.exit(f"structure break ({last} pivot "
-                                        f"confirmed after entry)", symbol=sym)
+        # (Strategy 7's structure-break exit moved BELOW the market-
+        # closed and stale-quote guards in v59.72 — R2 finding M7: it
+        # used to fire ~40 lines before them, so an S7 position could
+        # still exit at 23:00 or off a 300s-old chain.)
         chain = self.bus.get(f"chain:{sym}")
         row = (next((r for r in chain["rows"] if r["strike"] == p["strike"]), None)
               if chain else None)
@@ -6674,6 +6774,29 @@ class ExecutionAgent(Agent):
             return (f"{sym} {p['strike']} {p['leg']} — quote "
                     f"{time.time() - _cts:.0f}s old (>{_max_age}s) — "
                     f"holding exit decisions until fresh data")
+        # Strategy 7 (v51) — structure-break exit, spec exit rule #3:
+        # a NEW confirmed ZigZag pivot printing adverse structure
+        # (LH/LL while long, HH/HL while short) closes the position —
+        # structure invalidation, mirroring the spot-invalidation rule.
+        # Pivots come from the SAME zigzag on the SAME pa_candles 1m
+        # series the entry gate used (parity). Only pivots confirmed
+        # AFTER entry count. Runs BELOW the guards as of v59.72 (R2 M7).
+        if p.get("setup") == "sg_ema" and p.get("entry_ts"):
+            pack = self.bus.get(f"pa_candles:{sym}")
+            if pack and pack.get("c1"):
+                import structure
+                confirmed = [pv for pv in structure.zigzag_series(pack["c1"])
+                             if pv.get("structure")
+                             and pv.get("time", 0) > p["entry_ts"]]
+                if confirmed:
+                    last = confirmed[-1]["structure"]
+                    is_long = p.get("leg", "").upper() == "CE" or \
+                              "CE" in str(p.get("signal", ""))
+                    adverse = (last in ("LH", "LL")) if is_long else \
+                              (last in ("HH", "HL"))
+                    if adverse:
+                        return self.exit(f"structure break ({last} pivot "
+                                        f"confirmed after entry)", symbol=sym)
         p["ltp"] = ltp
         p["pnl"] = round((ltp - p["entry"]) * p["qty"], 0)
         p["pnl_ts"] = time.time()   # v59.70 — freshness stamp; the kill-switch checks it
@@ -6982,9 +7105,17 @@ class ExecutionAgent(Agent):
                     self.bus.log(self.name, f"🔴 LIVE SELL — order "
                                  f"{resp.get('orderId','UNCONFIRMED')} — {reason} "
                                  f"· est P&L ₹{p['pnl']:.0f}")
-                    self._confirm_order(orders, resp,
-                                        f"SELL {p['symbol']} "
-                                        f"{p.get('strike')} {p.get('leg')}")
+                    _st = self._confirm_order(orders, resp,
+                                              f"SELL {p['symbol']} "
+                                              f"{p.get('strike')} {p.get('leg')}")
+                    # v59.72 (R2 finding H2) — a REJECTED exit must NOT
+                    # book a close: the position is still live at the
+                    # broker. Keep it; exit_attempt_ts (stamped above)
+                    # paces the retries.
+                    if _st in ("REJECTED", "CANCELLED"):
+                        return {"error": f"exit order {_st} at the broker "
+                                         f"— position kept; retry after "
+                                         f"cooldown"}
                 except Exception as e:
                     # An ALERT, not a log line: "close manually NOW" is
                     # the single most urgent operational event this
@@ -8858,6 +8989,15 @@ class Orchestrator:
         # stale — agents re-fetch live prices on their next cycle as
         # normal, this just re-seeds WHICH positions exist to manage.
         open_positions, open_spreads = load_open_state()
+        # v59.72 (R2 findings L6/L7) — restored entries get a fresh
+        # pnl_ts (a pre-v59.70 snapshot has none, which read as "stale
+        # for years" to the kill-switch on the first cycle) and any
+        # exit_attempt_ts is dropped (a restart within the retry
+        # cooldown of a failed SELL must not stay exit-blocked).
+        for _p in list((open_positions or {}).values())                 + list((open_spreads or {}).values()):
+            if isinstance(_p, dict):
+                _p.setdefault("pnl_ts", time.time())
+                _p.pop("exit_attempt_ts", None)
         if open_positions:
             self.bus.set("positions", open_positions)
         if open_spreads:

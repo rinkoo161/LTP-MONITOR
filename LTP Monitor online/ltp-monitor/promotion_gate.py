@@ -135,18 +135,23 @@ _K_CACHE = {"at": 0.0, "k": None}   # trial_log is a file read; cache 10 min
 
 
 def expected_max_abs_t(n):
-    """E[max |t|] of n independent null draws — asymptotic Gumbel form.
+    """E[max |t|] of n independent null draws — asymptotic Gumbel form
+    over 2n one-sided draws, since |t| folds both tails:
 
-        sqrt(2 ln n) - (ln ln n + ln 4π) / (2 sqrt(2 ln n))
+        m = 2n;  sqrt(2 ln m) - (ln ln m + ln 4π) / (2 sqrt(2 ln m))
+
+    (v59.72, R2 finding L1 — the first version used n where |t| needs
+    2n, an error in the PERMISSIVE direction that the 3.255 floor only
+    masked below ~2,000 recorded trials.)
 
     The strategies are not independent (shared symbols, days, underlying
     moves), which makes the true benchmark somewhat LOWER — but by an
     amount this data cannot quantify, so the independent-draw figure is
     used as the defensible upper anchor and the pre-commit floor covers
     the rest."""
-    n = max(2, int(n))
-    a = math.sqrt(2.0 * math.log(n))
-    return a - (math.log(math.log(n)) + math.log(4.0 * math.pi)) / (2.0 * a)
+    m = 2 * max(2, int(n))
+    a = math.sqrt(2.0 * math.log(m))
+    return a - (math.log(math.log(m)) + math.log(4.0 * math.pi)) / (2.0 * a)
 
 
 def deflation_k():
@@ -157,7 +162,11 @@ def deflation_k():
     n = 0
     try:
         import trial_log
-        n = trial_log.count()
+        # v59.72 (R2 finding M5) — DISTINCT configurations, not raw
+        # rows: run_all appends ~36 daily-baseline rows for re-testing
+        # the SAME already-chosen params, which made k a function of
+        # calendar time rather than of searching.
+        n = trial_log.distinct_count()
     except Exception:
         pass          # unreadable log ⇒ floor applies; the floor IS the fallback
     k = max(PRECOMMITTED_K,
@@ -316,9 +325,14 @@ def evaluate(name, symbol, trades, net_pnl, k=None, cfg=None,
         import config as _config
         min_days = int((cfg if cfg is not None else _config.load())
                        .get("gate_min_days", 10))
-        if day_sd is None:
-            return _deny("day-clustered dispersion missing (pnl_sd_day) — "
-                         "cannot form the independent-observation term",
+        if not day_sd:
+            # v59.72 (R2 finding M2) — `is None` let a day_sd rounded to
+            # 0 through, zeroing the strategy's own dispersion term and
+            # LOWERING the bar. Same treatment as `if not own_sd` above:
+            # unmeasurable must not read as passed.
+            return _deny("day-clustered dispersion missing or zero "
+                         "(pnl_sd_day) — cannot form the independent-"
+                         "observation term",
                          name, symbol, trades=trades, net_pnl=net_pnl,
                          net_per_trade=per, n_days=n_days, cost_bias=b, k=k,
                          window=window)
@@ -430,6 +444,17 @@ def evaluate_entry(name, symbol, m, k=None, cfg=None):
         return _deny(f"0 out-of-sample trades ({oos.get('window') or 'window empty'}) "
                      "— the gate only scores days the active parameters "
                      "were not fitted on",
+                     name, symbol, trades=m.get("trades"),
+                     net_pnl=m.get("net_pnl"), window=oos.get("window"))
+    # v59.72 (R2 finding M1) — BOTH day fields or DENY. A missing
+    # `days_tested` used to fall through to the per-trade branch —
+    # scoring correlated trades as independent again (~4.3× smaller SE)
+    # AND skipping gate_min_days, with no log line: the one fail-open
+    # path in a fail-closed gate.
+    if not oos.get("days_tested") or oos.get("pnl_sd_day") is None:
+        return _deny("out-of-sample window lacks day-clustered fields "
+                     "(days_tested/pnl_sd_day) — refusing rather than "
+                     "silently reverting to per-trade independence",
                      name, symbol, trades=m.get("trades"),
                      net_pnl=m.get("net_pnl"), window=oos.get("window"))
     osd, src = own_sd_from(oos)

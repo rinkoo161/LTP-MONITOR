@@ -56,10 +56,19 @@ check("and by roughly a factor of two", 1.6 < two / one < 2.6,
       f"crosses the bid-ask FOUR times")
 
 print("\n3) cost scales with LOTS")
-l1 = agents.realistic_fees("option", "NIFTY", 1, 150.0, 140.0, cfg)
-l3 = agents.realistic_fees("option", "NIFTY", 3, 150.0, 140.0, cfg)
-check("3 lots cost ~3x one lot", abs(l3 - 3 * l1) < 2,
-      f"{l1:.0f} -> {l3:.0f}")
+# v59.72 (third-eye R2) — the law changed from naive ×lots: notional
+# charges scale with lots, brokerage(+GST) is charged ONCE per round
+# trip, and the bid-ask carries a sqrt size impact (n^1.5 total).
+import options_costs as _oc
+r1 = agents.realistic_costs("option", "NIFTY", 1, 150.0, 140.0, cfg)
+r3 = agents.realistic_costs("option", "NIFTY", 3, 150.0, 140.0, cfg)
+_fixed = _oc.fixed_order_cost(cfg, legs=1)
+check("3-lot statutory = 3x notional charges + brokerage charged ONCE",
+      abs(r3["fees"] - (3 * r1["fees"] - 2 * _fixed)) <= 3,
+      f"{r1['fees']:.0f} -> {r3['fees']:.0f} (fixed component ₹{_fixed:.0f})")
+check("3-lot slippage carries the sqrt size impact (3^1.5)",
+      abs(r3["slippage"] - r1["slippage"] * 3 ** 1.5) <= 3,
+      f"{r1['slippage']:.0f} -> {r3['slippage']:.0f}")
 
 print("\n4) it FALLS BACK rather than making a trade look free")
 bad = agents.realistic_fees("option", "NIFTY", 1, None, None, cfg)

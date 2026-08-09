@@ -4,6 +4,89 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.72 — round-2 review findings fixed; the fixed code is finally RUNNING (2026-08-09)
+
+The second third-eye review verified the v59.66–71 remediation by
+independent execution (costs reconciled to the rupee, gate 0/15 with
+honest reasons, restated record exact to ₹0.00) — and found that NONE
+of it was running: the app process predated every fix, and at 13:16 the
+old in-memory code appended a fresh negative version to the cleaned
+store. **Operational**: app restarted onto the new code at 14:12 (before
+the 15:45 old-code daily run), store re-cleaned (45→43), restarted again
+on this release.
+
+New defects the remediation had introduced, now fixed:
+
+**H1 — isolation defeated the guard.** Per-step isolation let a
+crashing kill-switch log a line while the cycle drained the entry queue
+and auto-deployed anyway. The guard runs first now: on failure the
+entry-generating steps are SKIPPED, `portfolio_halt_until` is raised
+(so RiskAgent/enter_future/enter_spread refuse too), and a throttled
+HIGH alert fires. Monitors and exits still run — closing stays safe
+when the guard is broken; opening does not.
+
+**H2+H3 — fill confirmation was a no-op, and ignored.** Dhan's
+`GET /orders/{id}` returns a JSON ARRAY; `_confirm_order`'s `.get()` on
+it AttributeError'd into its own catch — "status check unavailable"
+forever. It parses list/dict/data-wrapped shapes now, and every call
+site ACTS on the verdict: a REJECTED BUY registers nothing (no phantom
+for a later exit to short), a REJECTED SELL/close keeps the position
+(no P&L booked for a fill that never happened).
+
+**H4 — futures EOD resurrection.** The market-closed branch (and the
+pre-existing loop-end write, and enter_future's registration) wrote a
+stale loop-local dict back to the bus, re-inserting positions
+exit_future had already popped — with two contracts open at close the
+first was squared off twice. All three sites now write per-symbol
+against a fresh read; executable test drives two futures through EOD
+twice and asserts exactly one close each.
+
+**M1/M2 — the gate's fail-open holes.** Missing `days_tested` silently
+restored per-trade independence (~4.3× smaller SE) AND skipped
+gate_min_days; `pnl_sd_day` rounded to 0 zeroed the dispersion term.
+Both DENY now.
+
+**M3 — fill-bar blind spot.** Next-bar-open fills never inspected the
+fill bar's own range; a stop pierced there was carried unobserved (and
+a last-bar fill vanished with no exit). `_bar_exit` now runs on the
+fill bar in all three replays.
+
+**M4 sub-item/M5/L1** — `or 0.5` no longer clobbers a deliberate zero
+half-spread; `deflation_k` counts DISTINCT configs (daily baselines had
+made k a function of calendar time); `expected_max_abs_t` uses the 2n
+Gumbel form (|t| folds both tails) — k is now 3.31, the pre-commit
+floor no longer binding.
+
+**Brokerage is per ORDER** (R2/verifier): `_cost_parts` no longer
+multiplies the fixed brokerage+tax component by lots — futures go
+through `breakdown(lots=n)` (scrip-master lot preferred, config
+fallback said out loud); options subtract the overcount via the new
+`options_costs.fixed_order_cost()` so no rate is re-declared outside
+the tax table. test_notional_costs updated to the corrected law.
+
+**M7** — S7's structure-break exit moved BELOW the market-closed and
+stale-quote guards. **M6** — `/api/trades` headline totals now come
+from trades.jsonl (mtime-cached) with a `totals_scope` field, so the
+capped memory window can't shrink lifetime figures. **L3** — restate
+re-run skips already-stamped rows (audit baseline preserved). **L5** —
+crash alerts time-throttled (600s) and the alert call guarded. **L6/L7**
+— restored positions get a fresh pnl_ts and any exit_attempt_ts is
+dropped. **L8/L9** — futures panel formula corrected; clean_versions
+tolerates a null active pointer. STT clamped at zero inside
+options_costs itself, not only at callers.
+
+Known-and-accepted (documented, not fixed): the historical record's
+costs are linear-slippage (pre-impact-model) — restating again under
+n^1.5 would touch 24 futures + multi-lot spread rows by up to ₹2,194;
+deferred until the impact alpha is calibrated against live fills.
+Replays still price 1 lot by design (the gate's cost bias is a 1-lot
+figure; size_aware_cost.py carries the pessimistic-alpha band).
+
+Tests: tier3 grew to 40 checks (list-shaped order status, EOD
+no-resurrection, fill-bar pierce, per-order brokerage law), tier4 to 30
+(guard-vs-monitor isolation contract, halt flag), gate-statistics +4
+(M1/M2 denials, 2n form, distinct-count). 18 suites green.
+
 ## v59.71 — Tier 4: failure domains isolated, errors are loud, the clock is the exchange's (2026-08-09)
 
 The code-robustness findings from the third-eye review, resolved:

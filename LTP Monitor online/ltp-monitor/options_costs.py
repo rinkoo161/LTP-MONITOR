@@ -56,6 +56,18 @@ def rate(name, cfg=None):
     return max(lo, min(hi, v))
 
 
+def fixed_order_cost(cfg=None, legs=1):
+    """The per-ROUND-TRIP fixed component: brokerage — charged per ORDER,
+    never per lot — plus the GST levied on it.
+
+    v59.72 (third-eye R2) — exposed so a caller that scales a 1-lot
+    round trip by `lots` can remove the (lots−1)× brokerage overcount
+    WITHOUT re-declaring any rate here (a second copy of the tax table
+    is the drift failure this codebase keeps having to collapse)."""
+    return (rate("opt_brokerage_per_order", cfg) * 2 * max(1, int(legs))
+            * (1.0 + rate("opt_gst_pct", cfg)))
+
+
 def cost_round_trip(premium_in, premium_out, lot, legs=1, cfg=None,
                     halfspread=None):
     """Round-trip cost in RUPEES for `legs` option legs, 1 lot each.
@@ -73,7 +85,7 @@ def cost_round_trip(premium_in, premium_out, lot, legs=1, cfg=None,
     sell_notional = float(premium_out) * lot * legs
 
     brokerage = rate("opt_brokerage_per_order", cfg) * 2 * legs
-    stt = rate("opt_stt_sell_pct", cfg) * sell_notional
+    stt = rate("opt_stt_sell_pct", cfg) * max(0.0, sell_notional)   # v59.72 — a negative premium must never become an STT rebate (R2)
     exch = rate("opt_exchange_txn_pct", cfg) * (buy_notional + sell_notional)
     sebi = rate("opt_sebi_turnover_pct", cfg) * (buy_notional + sell_notional)
     stamp = rate("opt_stamp_duty_pct", cfg) * buy_notional
