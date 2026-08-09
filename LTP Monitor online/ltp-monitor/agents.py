@@ -7033,9 +7033,22 @@ class BacktestAgent(Agent):
             "improved": result["improved"],
             "baseline_net": result["baseline_metrics"].get("net_pnl"),
             "best_net": result["best_metrics"].get("net_pnl")})
-        if not result["improved"]:
+        # v59.67 — `improved` (meaningful_improvement) also fires on a
+        # 15%-smaller LOSS, and this path then appended a negative
+        # version on every Optimize click. A sweep result becomes a
+        # version only when it is positive AND meaningfully better;
+        # everything tried is in trial_log either way.
+        _base_pnl = (result["baseline_metrics"].get("net_pnl") or 0
+                     if result["baseline_metrics"].get("trades") else 0)
+        _best_pnl = (result["best_metrics"].get("net_pnl") or 0
+                     if result["best_metrics"].get("trades") else 0)
+        if not backtester.version_worthy(
+                _base_pnl, _best_pnl,
+                cfg.get("pa_tuning_improvement_threshold", 0.15)):
             self.summary = (f"{symbol} {name}: swept {len(result['tried'])} "
-                           f"candidates — none beat the current version")
+                           f"candidates — best (₹{_best_pnl:.0f}) is not a "
+                           f"positive improvement over ₹{_base_pnl:.0f}; no "
+                           f"version created (trial_log keeps the record)")
             self.bus.log(self.name, self.summary)
             return
         # v56 — guard against piling up duplicate versions: if the
@@ -7272,14 +7285,21 @@ class BacktestAgent(Agent):
                 new_trades = new_m.get("trades") or 0
                 new_pnl = new_m.get("net_pnl") or 0
                 new_profitable = new_trades >= min_conf and new_pnl > 0
-                worth_keeping = new_profitable or backtester.meaningful_improvement(
+                # v59.67 — a version requires a POSITIVE result that
+                # meaningfully improves on the incumbent. The old
+                # `new_profitable or meaningful_improvement` accepted a
+                # 15%-smaller loss and minted a negative version for it,
+                # every manual Run included; 67 of the 85 versions on
+                # the live install were non-positive dead weight.
+                worth_keeping = backtester.version_worthy(
                     net_pnl, new_pnl, improve_thresh)
                 if not worth_keeping:
                     entry["tuning_attempts"] = entry.get("tuning_attempts", 0) + 1
                     self.bus.log(self.name,
                                  f"{sym} {name}: candidate (₹{new_pnl:.0f}) "
-                                 f"didn't clear the {improve_thresh*100:.0f}% "
-                                 f"improvement bar over ₹{net_pnl:.0f} — not kept")
+                                 f"is not a positive {improve_thresh*100:.0f}%+ "
+                                 f"improvement over ₹{net_pnl:.0f} — no version "
+                                 f"created (trial_log keeps the record)")
                     if entry["tuning_attempts"] >= max_attempts:
                         from datetime import timedelta
                         entry["tuning_exhausted"] = True
@@ -7414,15 +7434,17 @@ class BacktestAgent(Agent):
                 new_pnl = new_m.get("net_pnl") or 0
                 new_profitable = (new_trades >= min_trades_for_confidence
                                   and new_pnl > 0)
-                worth_keeping = new_profitable or backtester.meaningful_improvement(
+                # v59.67 — same rule as _revalidate: no version without a
+                # positive, meaningfully-improved result.
+                worth_keeping = backtester.version_worthy(
                     net_pnl, new_pnl, improve_thresh)
                 if not worth_keeping:
                     entry["tuning_attempts"] = entry.get("tuning_attempts", 0) + 1
                     self.bus.log(self.name,
                                  f"{sym} {name}: candidate (₹{new_pnl:.0f}) "
-                                 f"didn't clear the {improve_thresh*100:.0f}% "
-                                 f"improvement bar over ₹{net_pnl:.0f} — not "
-                                 f"kept (attempt {entry['tuning_attempts']}/"
+                                 f"is not a positive {improve_thresh*100:.0f}%+ "
+                                 f"improvement over ₹{net_pnl:.0f} — no version "
+                                 f"created (attempt {entry['tuning_attempts']}/"
                                  f"{max_attempts})")
                     if entry["tuning_attempts"] >= max_attempts:
                         from datetime import timedelta

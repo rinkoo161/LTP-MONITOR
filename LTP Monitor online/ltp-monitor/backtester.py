@@ -134,6 +134,28 @@ def meaningful_improvement(old_pnl, new_pnl, threshold=0.15):
     return False
 
 
+def version_worthy(old_pnl, new_pnl, threshold=0.15):
+    """May a candidate configuration become a persisted VERSION?
+
+    v59.67, operator requirement (2026-08-09): a version exists only when
+    the changed configuration produced a POSITIVE net result that
+    meaningfully improves on the incumbent — never for a smaller loss,
+    never for an equal or worse positive. meaningful_improvement() alone
+    accepted "loss shrank 15%", and every path that used it minted a
+    version for it: the live install accumulated 85 versions of which 67
+    had non-positive results — 4 MB of dead weight parsed by every
+    get_params() call.
+
+    Refusing the version loses no information: the candidate's
+    evaluation is already in trial_log (N counts configurations TRIED,
+    not configurations kept), and the tuner's own attempt/cooldown
+    bookkeeping still advances on refusal.
+    """
+    if new_pnl is None or new_pnl <= 0:
+        return False
+    return meaningful_improvement(old_pnl or 0, new_pnl, threshold)
+
+
 def get_params(name, symbol=None):
     v = load_versions()
     if symbol is None:

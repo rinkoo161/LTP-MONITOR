@@ -26,7 +26,7 @@ from agents import Orchestrator, compute_momentum
 import agents
 
 BASE = os.path.dirname(os.path.abspath(__file__))
-APP_VERSION = "v59.66"   # maintained per explicit request; last delivered was v49
+APP_VERSION = "v59.67"   # maintained per explicit request; last delivered was v49
 
 app = FastAPI(title="LTP Option Chain Monitor")
 
@@ -4736,7 +4736,9 @@ def api_backtest_optimize(body: OptimizeIn):
         return {"error": "Start the agents first."}
     pilot.bus.set("bt_optimize_job", {"name": body.name, "symbol": body.symbol.upper()})
     return {"ok": True, "note": "optimizer queued — watch the backtest agent box; "
-                                "results appear as a new version once done"}
+                                "a new version is created only if the best result "
+                                "is positive and meaningfully better (v59.67); "
+                                "every candidate is recorded in trial_log either way"}
 
 
 @app.get("/api/ml-probability/status")

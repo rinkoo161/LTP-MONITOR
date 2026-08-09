@@ -4,6 +4,45 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.67 — versions are only created for positive, improved results; store pruned (2026-08-09)
+
+Operator report: every Backtest-page run/Optimize was creating a new
+configuration version even when the result was negative. Confirmed on
+the live store: 85 versions across 32 entries, **67 with non-positive
+results** — all "tightening" daily-tune churn and negative sweep
+proposals — in a 4 MB file that `get_params()` parses on every call.
+
+Root cause was the keep-rule at all three creation sites:
+`new_profitable OR meaningful_improvement(...)` — and
+`meaningful_improvement` deliberately counts a 15%-smaller LOSS as
+improvement (correct for steering the tuner, wrong for minting a
+version). The sweep path additionally appended its best candidate
+whenever the params differed, `improved` also firing on loss-shrink.
+
+The rule is now `backtester.version_worthy(old, new, thresh)`: a
+version is created ONLY when the new result is **positive** AND a
+meaningful (≥15%) improvement over the incumbent — never for a smaller
+loss, never for an equal or worse positive. Applied at `_revalidate`,
+`_tune_pa`, and `_optimize`. Nothing statistical is lost by refusing:
+every candidate evaluation still lands in trial_log (N counts
+configurations TRIED), and the tuner's attempt/cooldown bookkeeping
+still advances on refusal.
+
+`clean_versions.py` (new, one-shot with --dry-run/--force) pruned the
+existing store: keeps the active version, v1 initial baseline, anything
+ever deployed, and any version with positive results; strips the
+chart-overlay bulk (`trades_detail`/`equity_curve`) from non-active
+kept versions; asserts no active pointer is orphaned; writes a
+timestamped backup and replaces the file atomically. Run on the live
+store 2026-08-09: **85 → 44 versions, 4,082,800 → 1,940,277 bytes**,
+backup at `strategy_versions.pre-clean-20260809-115636.json`.
+
+Tests: `test_version_hygiene.py` — the version_worthy truth table
+(smaller loss, equal positive, sub-threshold, flip-to-profit, None),
+clean()'s keep/prune/slim behaviour, purity, and the orphaned-pointer
+assertion, all by execution; plus a tripwire that no creation site
+reverts to the OR rule.
+
 ## v59.66 — the promotion gate measures independent, out-of-sample evidence (2026-08-09)
 
 Resolves every Tier 1 (statistical validity) finding from the third-eye
