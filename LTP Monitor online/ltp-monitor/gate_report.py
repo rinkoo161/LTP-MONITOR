@@ -64,9 +64,15 @@ def main():
                              if d["true_sd"] else None)
             rows.append(d)
 
-    live_rows = [r for r in rows if r["live_now"]]
+    # v59.74 — report ALL gated entries, not only live-flagged ones.
+    # Since v59.66 the flag FOLLOWS the gate verdict, so filtering on it
+    # showed an empty table (with every denial reason hidden) exactly
+    # when the gate was doing its job.
+    live_rows = rows
+    _live_n = sum(1 for r in rows if r.get("live_now"))
     k_now = pg.deflation_k()
-    print(f"\n  PROMOTION GATE — {len(live_rows)} live strategies")
+    print(f"\n  PROMOTION GATE — {len(live_rows)} gated strategies "
+          f"({_live_n} live-enabled)")
     # v59.66 — this header used to print the SUPERSEDED quadrature form
     # while the code below applied the calibrated one (third-eye Tier 1).
     # It now prints what is actually applied, k included.
