@@ -1336,7 +1336,11 @@ def ai_signal(analysis: dict, api_key: str | None = None,
         "three words BUY_CE, BUY_PE, or WAIT \u2014 never combine them, "
         "never output the word \"or\" or a \"|\" character.\n" + json.dumps(compact)
     )
-    text, err = _claude_json(prompt, None, 400)
+    # v59.78 — 400 tokens was too small for a pretty-printing local
+    # model's signal JSON (truncated mid-string all session on
+    # 2026-08-10); 900 matches the other analyzer calls, and llm.py
+    # now also retries once at double budget on a length cut.
+    text, err = _claude_json(prompt, None, 900)
     if err:
         fallback["source"] = f"rule-engine (AI unavailable: {err})"
         return fallback

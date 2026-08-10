@@ -266,7 +266,12 @@ def _syn_day():
     path = ([100] * 30 + leg(100, 112, 25) + leg(112, 105, 25) + leg(105, 120, 30)
             + leg(120, 105.2, 30) + leg(105.2, 112.4, 25) + leg(112.4, 96, 60)
             + leg(96, 99, 50))
-    t0 = 1750000000
+    # v59.78 — t0 must fall in MARKET HOURS: the entry-runway guard now
+    # refuses signals within 30 minutes of the 15:22 square-off, and the
+    # old arbitrary epoch (1750000000) landed at ~21:00 IST, refusing
+    # every synthetic signal. 1750044300 = 09:15 IST on the same
+    # fixture day; the ~285-bar path then ends around 14:00.
+    t0 = 1750044300
     return [{"time": t0 + i * 60, "ts": t0 + i * 60, "open": x, "high": x * 1.0006,
              "low": x * 0.9994, "close": x, "volume": 0} for i, x in enumerate(path)]
 

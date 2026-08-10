@@ -51,7 +51,7 @@ def _ollama_json(prompt: str, model: str, max_tokens: int = 600):
     import config as _cfg
     cfg = _cfg.load()
 
-    def _call(p):
+    def _call(p, budget):
         body = json.dumps({
             "model": model,
             "prompt": p,
@@ -60,7 +60,7 @@ def _ollama_json(prompt: str, model: str, max_tokens: int = 600):
             "keep_alive": cfg.get("ollama_keep_alive", "2m"),
             "options": {
                 "temperature": 0.2,
-                "num_predict": max_tokens,
+                "num_predict": budget,
                 "num_thread": cfg.get("ollama_num_thread", 4),
                 "num_ctx": cfg.get("ollama_num_ctx", 2048),
             },
@@ -69,10 +69,27 @@ def _ollama_json(prompt: str, model: str, max_tokens: int = 600):
             OLLAMA_URL + "/api/generate", data=body,
             headers={"Content-Type": "application/json"})
         with urllib.request.urlopen(req, timeout=cfg.get("ollama_timeout", 60)) as r:
-            return json.loads(r.read()).get("response", "").strip()
+            j = json.loads(r.read())
+            return (j.get("response", "").strip(),
+                    j.get("done_reason"))
+
+    def _call_with_length_retry(p):
+        # v59.78 — TRUNCATION retry. 2026-08-10: every signal-engine
+        # call failed all session with "Unterminated string … char
+        # ~840" — the model answered in PRETTY-PRINTED JSON, the
+        # newlines/indentation burned the 400-token budget, Ollama cut
+        # the output mid-string (done_reason "length"), and the rule
+        # engine traded alone all day. Ollama TELLS us when it
+        # truncated; a cut JSON is never parseable, so retrying once at
+        # double the budget (capped) is strictly better than returning
+        # bytes we know are broken.
+        text, done = _call(p, max_tokens)
+        if done == "length":
+            text, done = _call(p, min(max_tokens * 2, 2000))
+        return text
 
     try:
-        return _call(prompt)
+        return _call_with_length_retry(prompt)
     except urllib.error.HTTPError as e:
         if e.code != 500:
             raise
@@ -80,7 +97,7 @@ def _ollama_json(prompt: str, model: str, max_tokens: int = 600):
         strict = ("You must reply with a single valid JSON object and "
                   "nothing else. No prose, no markdown, no commentary. "
                   "The JSON schema and data follow:\n\n" + prompt)
-        return _call(strict)
+        return _call_with_length_retry(strict)
 
 
 def _anthropic_json(prompt: str, api_key: str, max_tokens: int = 600):

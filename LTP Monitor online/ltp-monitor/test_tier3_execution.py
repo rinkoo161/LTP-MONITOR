@@ -66,8 +66,14 @@ ex.ctx = {}
 _orig_open = agents.market_open
 _orig_load = config.load
 _base_cfg = config.load()
+_orig_now_t3 = agents.now_ist
 try:
     agents.market_open = lambda: True
+    # v59.78 — pin the clock mid-session: the entry-runway guard runs
+    # before the daily-loss gate, and a test executed after 14:52 IST
+    # would hit runway instead of the gate under test.
+    from datetime import datetime as _dt_t3
+    agents.now_ist = lambda: _dt_t3(2026, 8, 10, 11, 0, tzinfo=agents.IST)
     config.load = lambda: {**_base_cfg, "paper_mode": True,
                            "daily_loss_limit": 5000,
                            "futures_risk_per_trade_rupees": 2500,
@@ -84,6 +90,7 @@ try:
 finally:
     agents.market_open = _orig_open
     config.load = _orig_load
+    agents.now_ist = _orig_now_t3
 
 # --- market-closed pre-empts the whole spread exit chain ---------------
 cfg = config.load()

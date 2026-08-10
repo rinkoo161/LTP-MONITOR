@@ -445,6 +445,8 @@ def replay_spreads(symbol, name, params=None, days=None, log=lambda m: None):
             if ts - last_eval < eval_gap:
                 continue
             last_eval = ts
+            if not _runway_ok(ts, cfg):
+                continue          # v59.78: no runway to the target
             if len(open_list) >= max_open:
                 continue
             if ts < cd_until:
@@ -652,6 +654,8 @@ def replay_portfolio(symbols=None, names=None, days=None, log=lambda m: None):
             if ts - last_eval < eval_gap:
                 continue
             last_eval = ts
+            if not _runway_ok(ts, cfg):
+                continue          # v59.78: no runway to the target
             for sym in symbols:
                 chain = here.get(sym)
                 if not chain:
@@ -800,6 +804,16 @@ def replay_momentum(symbol, params=None, days=None, log=lambda m: None):
             day_count += 1
         log(f"  {day}: cumulative trades {len(trades)}")
     return trades
+
+
+def _runway_ok(ts, cfg):
+    """v59.78 — mirror of the live entry-runway guard
+    (agents.minutes_to_squareoff): the replays must refuse the same
+    late entries live refuses, or the tuner learns from trades live
+    cannot take. `ts` is the frame/bar epoch timestamp."""
+    import agents as _ag
+    return _ag.minutes_to_squareoff(ts, cfg) >= int(
+        cfg.get("min_entry_runway_min", 30) or 0)
 
 
 def _edge_ok_pa(ev, lot, fee, cfg):
@@ -972,6 +986,8 @@ def replay_pa(symbol, name, params=None, days=None, log=lambda m: None):
                                  precomputed=precomputed)
             if ev and not _edge_ok_pa(ev, lot, fee, cfg):
                 ev = None             # Tier 2: designed edge below cost
+            if ev and not _runway_ok(win[-1]["ts"], cfg):
+                ev = None             # v59.78: no runway to the target
             if ev:
                 pending = ev          # fills next bar — see above
     return trades
@@ -1053,6 +1069,8 @@ def replay_ew_reversal(symbol, params=None, days=None, log=lambda m: None):
                                             taken_today=taken, pivots=pivots)
             if ev and not _edge_ok_pa(ev, lot, fee, cfg):
                 ev = None             # Tier 2: designed edge below cost
+            if ev and not _runway_ok(win[-1]["ts"], cfg):
+                ev = None             # v59.78: no runway to the target
             if ev:
                 pending = ev          # fills next bar
     return trades
@@ -1128,6 +1146,8 @@ def replay_ta_elliott(symbol, params=None, days=None, log=lambda m: None):
                                       taken_today=taken, pivots=pivots)
             if ev and not _edge_ok_pa(ev, lot, fee, cfg):
                 ev = None             # Tier 2: designed edge below cost
+            if ev and not _runway_ok(win[-1]["ts"], cfg):
+                ev = None             # v59.78: no runway to the target
             if ev:
                 pending = ev          # fills next bar
     return trades

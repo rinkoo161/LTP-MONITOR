@@ -268,6 +268,20 @@ DEFAULTS = {
     "max_spread_capital_pct": 60.0,
     "spread_reentry_cooldown_min": 15,
     "pa_min_trades_for_confidence": 15,  # min backtest trades before a version can go live
+    "min_entry_runway_min": 30,   # v59.78 — minimum minutes to the forced
+                           # square-off for a NEW entry, every instrument, live
+                           # and replay. 2026-08-10's biggest loss entered at
+                           # 15:13 against a 15:22 square-off: nine minutes of
+                           # life, full round-trip cost, target unreachable by
+                           # construction. 30 ≈ the median observed hold (12m)
+                           # plus headroom — a trade needs at least typical
+                           # time-to-target on the clock.
+    "option_buy_require_regime_fit": False,  # v59.78 — directional option buys
+                           # must match the regime (CE: trending-up/mixed, PE:
+                           # trending-down/mixed), the gate spreads always had.
+                           # Ships OFF: turning it on is a strategy decision,
+                           # not a bug fix — see 2026-08-10 (PE and CE both
+                           # bought around the same 24,600 pin in chop).
     "min_edge_cost_ratio": 2.0,   # v59.73 (Tier 2) — a trade is admissible only
                            # when its DESIGNED gross edge (its own target) is at
                            # least this multiple of the modelled round-trip

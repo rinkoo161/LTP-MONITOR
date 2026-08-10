@@ -4,6 +4,49 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.78 — the 2026-08-10 post-mortem: LLM truncation, entry runway, regime fit (2026-08-10)
+
+First gated live-paper day: 8 trades, −₹3,461 (vs the −₹13.9k historical
+daily mean), 94 spread designs refused by the feasibility gate with
+visible arithmetic, the cost-aware profit lock banked its first winner.
+Three findings, all fixed:
+
+**The LLM signal engine was down all session.** Every signal call
+failed with "Unterminated string … char ~840": the local model answered
+in pretty-printed JSON, the 400-token budget ran out mid-string, and
+the rule engine traded alone (3 of 5 option buys carry the error in
+their source field). Ollama SAYS when it truncated (`done_reason:
+"length"`), so `llm._ollama_json` now retries once at double budget on
+a length cut — a cut JSON is never parseable, so the retry is strictly
+better than returning bytes known to be broken — and the signal call's
+budget goes 400→900, matching the other analyzer calls.
+
+**Entry runway.** The day's biggest loss (−₹928) was an `orb` signal
+entering at 15:13 against the 15:22 square-off: nine minutes of life,
+full round-trip cost, target unreachable by construction. New
+`min_entry_runway_min` (default 30 ≈ median observed hold + headroom):
+no NEW entry on any instrument without that many minutes to the
+square-off — enforced in RiskAgent (options), enter_spread,
+enter_future, AND all five replay loops (`_runway_ok`), so the tuner
+cannot learn from trades live is not allowed to take. The S9 test's
+synthetic day moved to market-hours timestamps — its arbitrary epoch
+landed at 21:00 IST and the new guard correctly refused everything,
+which is the guard working.
+
+**Regime fit for directional buys** (`option_buy_require_regime_fit`,
+ships OFF — enabling is a strategy decision, not a bug fix): the rule
+engine bought a PE at 09:18 and a CE at 11:20 around the same 24,600
+pin on a chop day and lost both directions; their 1-ATR invalidation
+fences (working as designed since 2026-08-06) were crossed by ordinary
+oscillation. Spreads always had a regime gate and correctly sat out the
+"unknown" morning; with this ON, CE needs trending-up/mixed, PE needs
+trending-down/mixed.
+
+test_session_guards.py: 12 executable checks — runway math against the
+actual 15:13 case, live refusal + replay parity, the double-budget
+length retry with recorded budgets [400, 800], and the OFF-by-default
+regime key.
+
 ## v59.77 — Users & Access panel in Settings (2026-08-09)
 
 The admin endpoints for account management (`/api/auth/users` list/

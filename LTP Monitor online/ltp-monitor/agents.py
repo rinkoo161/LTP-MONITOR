@@ -395,6 +395,23 @@ def symbol_paused(symbol, cfg=None):
     return str(symbol).upper() in {str(x).upper() for x in paused}
 
 
+def minutes_to_squareoff(ts=None, cfg=None):
+    """Minutes until the mandatory intraday square-off, exchange clock.
+    Negative after it. v59.78 — an entry with less runway than a trade
+    needs to reach its target is a guaranteed cost burn: 2026-08-10's
+    single biggest loss was an ORB entry at 15:13 force-closed at 15:23
+    (−₹928), a trade whose only possible outcomes were 'small win by
+    luck' or 'full round-trip cost'."""
+    cfg = cfg if cfg is not None else config.load()
+    try:
+        hh, mm = str(cfg.get("fno_squareoff_time", "15:22")).split(":")
+        cutoff = int(hh) * 60 + int(mm)
+    except (ValueError, AttributeError):
+        cutoff = 15 * 60 + 22
+    t = (datetime.fromtimestamp(ts, IST) if ts is not None else now_ist())
+    return cutoff - (t.hour * 60 + t.minute)
+
+
 def realized_pnl_today(bus):
     """Sum of TODAY's closed-trade net P&L — the ONE definition of "day
     P&L" for risk gating.
@@ -4323,6 +4340,26 @@ class RiskAgent(Agent):
             sig.get("entry", 0), sig.get("target1", 0),
             cfg["lot_sizes"].get(job["symbol"], 75), cfg)
         check(_edge_ok, _edge_detail)
+        # v59.78 — entry RUNWAY: enough session left to plausibly reach
+        # the target before the forced square-off.
+        _runway = int(cfg.get("min_entry_runway_min", 30) or 0)
+        _left = minutes_to_squareoff(cfg=cfg)
+        check(_left >= _runway,
+              f"entry runway ({_left}m to square-off, need {_runway}m)")
+        # v59.78 — OPTIONAL regime fit for directional buys (ships OFF;
+        # enabling it is a deliberate choice). Spreads always had a
+        # regime gate; the rule-engine option buys had none, and on
+        # 2026-08-10 they bought a PE and a CE around the same 24,600
+        # pin in chop and lost both directions.
+        if cfg.get("option_buy_require_regime_fit", False):
+            _reg = (self.bus.get(f"regime:{job['symbol']}") or {}
+                    ).get("regime", "unknown")
+            _fit = {"BUY_CE": ("trending-up", "mixed"),
+                    "BUY_PE": ("trending-down", "mixed")}.get(
+                        sig.get("signal"), ())
+            check(_reg in _fit,
+                  f"regime fit for {sig.get('signal')} "
+                  f"({_reg}; needs {'/'.join(_fit) or 'n/a'})")
         profit_target = cfg.get("daily_profit_target", 0)
         if profit_target > 0:
             # Bug found 2026-07-24 from live logs: check() logs its label
@@ -4704,6 +4741,11 @@ class ExecutionAgent(Agent):
         # trades. Same shared figure the options gate uses
         # (realized_pnl_today), risked amount = the per-trade rupee cap
         # this function already enforces below.
+        _runway_left = minutes_to_squareoff(cfg=cfg)
+        _runway_need = int(cfg.get("min_entry_runway_min", 30) or 0)
+        if _runway_left < _runway_need:
+            return {"error": f"entry runway: {_runway_left}m to square-off "
+                             f"(need {_runway_need}m)"}
         _day = realized_pnl_today(self.bus)
         _risk_cap = float(cfg.get("futures_risk_per_trade_rupees", 2500))
         _limit = abs(cfg.get("daily_loss_limit", 5000))
@@ -5939,6 +5981,11 @@ class ExecutionAgent(Agent):
         # symbol would stop its options and leave its spreads trading.
         if symbol_paused(sym, cfg):
             return {"error": f"{sym} is on hold (paused_symbols)"}
+        _runway = int(cfg.get("min_entry_runway_min", 30) or 0)
+        _left = minutes_to_squareoff(cfg=cfg)
+        if _left < _runway:
+            return {"error": f"entry runway: {_left}m to square-off "
+                             f"(need {_runway}m)"}
         spreads = self.bus.get("spreads", {}) or {}
         sid = f"{sym}:{spread['name']}:{spread['short_strike']:.0f}"
         if sid in spreads:
