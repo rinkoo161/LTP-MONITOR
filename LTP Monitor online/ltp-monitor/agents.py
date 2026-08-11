@@ -6719,6 +6719,65 @@ class ExecutionAgent(Agent):
                              f"priced ₹{sig['option_ltp']} ({100*_drift:.1f}% "
                              f"stale from the {TechnicalAgent.interval}s "
                              f"analysis pack)")
+        # ---------------------------------------------------------------
+        # v59.80 — RE-VALIDATE THE GEOMETRY AGAINST THE PRICE ACTUALLY
+        # PAID. The signal's stop/targets were derived from the 60s
+        # analysis pack; `fill` above comes from the 3s chain. When the
+        # option moves hard inside that window the two are different
+        # instruments in every way that matters.
+        #
+        # Live, 2026-08-11 11:39:29 — the trade this exists to prevent:
+        #     signal : BUY_PE 24450  entry ₹10.00  sl ₹4.00  t1 ₹22.00
+        #     filled : ₹43.45   (same option, 4x, inside 60s)
+        # Every signal-side invariant passed (60% stop = exactly the
+        # bound, RR = exactly 2.0) because they all check the signal
+        # against ITSELF. At the fill price target1 sat BELOW entry, so
+        # t1_hit fired on cycle one, the breakeven lock pinned the stop
+        # to entry, and the next downtick closed it. mfe was ₹0. Two of
+        # these cost ₹856 in one session.
+        #
+        # Same three-band rule as the signal path, same config keys, ONE
+        # definition (analyzer.reprice_to_reference) — only the reference
+        # differs, and a fill price cannot be stale.
+        try:
+            import analyzer as _an
+            _verdict, _geom, _detail = _an.reprice_to_reference(
+                sig, fill, cfg)
+            if _verdict == "reject":
+                self.bus.log(self.name,
+                             f"{label}: entry REFUSED at fill ₹{fill} — "
+                             f"{_detail}")
+                self.bus.alert("medium", self.name, sym,
+                               f"entry refused — signal geometry does not "
+                               f"belong to the fill price: {_detail}")
+                return {"error": f"fill-price geometry rejected: {_detail}"}
+            if _verdict == "rescaled":
+                sig.update(_geom)
+                self.bus.log(self.name,
+                             f"{label}: geometry rescaled to the fill — "
+                             f"{_detail}")
+        except Exception as _e:
+            # A repricing failure must not silently admit the position it
+            # was added to screen: refuse and say why.
+            self.bus.log(self.name,
+                         f"{label}: entry REFUSED — fill-price check failed "
+                         f"({type(_e).__name__}: {_e})")
+            return {"error": f"fill-price check failed: {type(_e).__name__}"}
+
+        # A target ALREADY reached by the fill is a broken signal, not a
+        # winner. instant_exit_reason() deliberately omits target1 (it is
+        # an exit-side ratchet trigger, not an exit), so it cannot catch
+        # this — but t1_hit firing on cycle one is exactly what pins the
+        # stop to entry and guarantees the loss above. Checked here.
+        if isinstance(sig.get("target1"), (int, float)) and \
+                fill >= sig["target1"] > 0:
+            self.bus.log(self.name,
+                         f"{label}: entry REFUSED — fill ₹{fill} is already "
+                         f"at/past target1 ₹{sig['target1']}; the breakeven "
+                         f"lock would fire on the first cycle")
+            return {"error": f"fill ₹{fill} already at target1 "
+                             f"₹{sig['target1']}"}
+
         # REFUSE A POSITION THAT WOULD EXIT ON ITS FIRST MONITOR CYCLE.
         #
         # 2026-08-06, fourth instance of one family today. SENSEX 78800

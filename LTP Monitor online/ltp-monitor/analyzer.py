@@ -1449,6 +1449,77 @@ def _rule_signal(analysis: dict) -> dict:
     return sig
 
 
+def reprice_to_reference(geom, reference, cfg=None):
+    """Re-check a signal's price GEOMETRY against a reference price.
+
+    THE one definition of the three-band rule. Returns
+    `(verdict, new_geom, detail)` with verdict in:
+
+        "ok"        deviation within tolerance — geometry unchanged
+        "rescaled"  same instrument, materially moved: stop/target
+                    DISTANCES scaled by the same ratio so the intended
+                    risk-reward survives exactly
+        "reject"    this price does not belong to this instrument;
+                    rescaling would launder a malformed signal
+        "skip"      no usable reference or entry — caller decides
+
+    `geom` is any mapping with entry/stoploss/target1/target2; a shallow
+    copy is returned, the input is never mutated.
+
+    WHY THIS IS A FUNCTION AND NOT AN INLINE BLOCK (v59.80). It used to
+    live inside enforce_signal_invariants only, comparing the signal's
+    entry against the 60-SECOND analysis pack — the same snapshot the
+    signal was derived from. That comparison cannot detect staleness by
+    construction; it only catches the model pricing a DIFFERENT strike
+    within the same pack.
+
+    Measured, 2026-08-11 11:39:29:
+
+        signal : BUY_PE 24450  entry ₹10.00  sl ₹4.00  t1 ₹22.00  conf 92
+        filled : ₹43.45        (the SAME option, 4x higher, <60s later)
+
+    Every invariant passed — a 60% stop is exactly the upper bound and
+    RR was exactly 2.0 — because all of them validated the signal
+    against itself. The fill then landed on a price 4x away with the
+    stop and target still on the ₹10 scale, which put target1 BELOW
+    entry: t1_hit fired on the first monitor cycle, the breakeven lock
+    slammed the stop to the entry price, and the next downtick closed
+    it. Two such trades cost ₹856 that day, both with mfe = 0.
+
+    So the same rule now runs a second time at FILL time against the
+    price actually paid (agents._enter), which is the only reference
+    that cannot be stale. One definition, two call sites — the drift-pair
+    rule this codebase keeps having to re-learn.
+    """
+    cfg = cfg or {}
+    out = dict(geom)
+    entry = geom.get("entry") or 0
+    if not reference or entry <= 0:
+        return "skip", out, "no usable reference or entry"
+    tol_ok = cfg.get("signal_entry_tolerance_pct", 10.0) / 100.0
+    tol_scale = cfg.get("signal_entry_rescale_max_pct", 40.0) / 100.0
+    # Denominator is the REFERENCE (what the trade is actually priced
+    # at), not the model's claim: using the claim inflates the figure
+    # and makes the bands asymmetric.
+    dev = abs(reference - entry) / reference
+    if dev > tol_scale:
+        return ("reject", out,
+                f"entry {entry} is {100*dev:.0f}% from {reference} — "
+                f"beyond the {100*tol_scale:.0f}% band; this price does "
+                f"not belong to this instrument")
+    if dev > tol_ok:
+        ratio = reference / entry
+        for k in ("stoploss", "target1", "target2"):
+            v = geom.get(k)
+            if isinstance(v, (int, float)):
+                out[k] = round(reference + (v - entry) * ratio, 1)
+        out["entry"] = reference
+        return ("rescaled", out,
+                f"entry {entry} -> {reference} ({100*dev:.0f}% off); "
+                f"stop/targets rescaled x{ratio:.2f}, risk-reward preserved")
+    return "ok", out, f"entry within {100*tol_ok:.0f}% of {reference}"
+
+
 def enforce_signal_invariants(sig, analysis, cfg=None, log=lambda m: None):
     """Enforce the invariants the LLM prompt STATES but nothing checked.
 
@@ -1673,38 +1744,23 @@ def enforce_signal_invariants(sig, analysis, cfg=None, log=lambda m: None):
         if _row:
             _live_ltp = (_row.get(_leg) or {}).get("ltp")
     if _live_ltp and entry > 0:
-        _tol_ok = cfg.get("signal_entry_tolerance_pct", 10.0) / 100.0
-        _tol_scale = cfg.get("signal_entry_rescale_max_pct", 40.0) / 100.0
-        # Denominator is the LIVE price, not the model's claim. Using
-        # the claim inflates the figure and makes the bands asymmetric:
-        # the 123.45-vs-363.60 case reads 195% against the claim but 66%
-        # against reality, and a 330.40 signal against a live 363.60 —
-        # ordinary 60s staleness — reads 10.05% against the claim and
-        # trips a 10% band it has no business tripping. The live price
-        # is what the trade will actually be filled at, so it is the
-        # reference.
-        _dev = abs(_live_ltp - entry) / _live_ltp
-        if _dev > _tol_scale:
+        # v59.80 — ONE definition of the band rule, shared with the
+        # FILL-time check in agents._enter (see reprice_to_reference).
+        # Note the reference here is the analysis pack, which is up to
+        # 60 s old — that is precisely why the same rule has to run
+        # again against the actual fill.
+        _verdict, _geom, _detail = reprice_to_reference(sig, _live_ltp, cfg)
+        if _verdict == "reject":
             sig["signal"] = "NO_TRADE"
             sig["invariant_repairs"] = repairs + [
-                f"REJECTED: entry {entry} is {100*_dev:.0f}% from the live "
-                f"price {_live_ltp} of {sig.get('strike')} {_leg.upper()} — "
-                f"this price does not belong to this instrument"]
-            log(f"signal REJECTED: entry {entry} vs live {_live_ltp} "
-                f"({100*_dev:.0f}% off) for {sig.get('strike')} {_leg.upper()}")
+                f"REJECTED: {_detail} ({sig.get('strike')} {_leg.upper()})"]
+            log(f"signal REJECTED: {_detail} for "
+                f"{sig.get('strike')} {_leg.upper()}")
             return sig, sig["invariant_repairs"]
-        if _dev > _tol_ok:
-            _ratio = _live_ltp / entry
-            _old = entry
-            for _k in ("stoploss", "target1", "target2"):
-                _v = sig.get(_k)
-                if isinstance(_v, (int, float)):
-                    sig[_k] = round(_live_ltp + (_v - _old) * _ratio, 1)
-            sig["entry"] = entry = _live_ltp
-            sl = sig["stoploss"]
-            repairs.append(
-                f"entry {_old} -> {_live_ltp} ({100*_dev:.0f}% stale); "
-                f"stop/targets rescaled x{_ratio:.2f}, risk-reward preserved")
+        if _verdict == "rescaled":
+            sig.update(_geom)
+            entry, sl = sig["entry"], sig["stoploss"]
+            repairs.append(_detail)
 
     # --- target2 must be a REAL number ABOVE target1 -------------------
     # 2026-08-06. Until now the ONLY place target2 was ever corrected was
