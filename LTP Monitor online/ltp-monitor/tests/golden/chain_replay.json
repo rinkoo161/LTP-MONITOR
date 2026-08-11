@@ -1,0 +1,11290 @@
+{
+ "frames": [
+  {
+   "atr_pct": null,
+   "error": null,
+   "max_pain": 23750.0,
+   "n_strikes": 21,
+   "pcr": null,
+   "quadrants": [
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23750.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23800.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23850.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23900.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23950.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24000.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24050.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24100.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24150.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24200.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24250.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24300.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24350.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24400.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24450.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24500.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24550.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24600.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24650.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24700.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24750.0
+    }
+   ],
+   "signal_lines": {
+    "R": [
+     {
+      "color": "blue",
+      "level": 24500.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "yellow",
+      "level": 24300.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 89
+     },
+     {
+      "color": "yellow",
+      "level": 24600.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 86
+     }
+    ],
+    "S": [
+     {
+      "color": "blue",
+      "level": 24200.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "pink",
+      "level": 24000.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 62
+     },
+     {
+      "color": "pink",
+      "level": 24100.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 56
+     }
+    ]
+   },
+   "spot": 24252.0,
+   "spreads": {
+    "bear_call_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "R1 wall 24500 is 248 pts above spot",
+      "credit \u20b910.05 too thin (<28% of \u20b9100 width)"
+     ],
+     "short_strike": null,
+     "width": null
+    },
+    "bull_put_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "S1 wall 24200 is 52 pts below spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    }
+   },
+   "ts": 1784519100
+  },
+  {
+   "atr_pct": null,
+   "error": null,
+   "max_pain": 23700.0,
+   "n_strikes": 21,
+   "pcr": null,
+   "quadrants": [
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23700.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23750.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23800.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23850.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23900.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23950.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24000.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24050.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24100.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24150.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24200.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24250.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24300.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24350.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24400.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24450.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24500.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24550.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24600.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24650.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24700.0
+    }
+   ],
+   "signal_lines": {
+    "R": [
+     {
+      "color": "blue",
+      "level": 24500.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "yellow",
+      "level": 24250.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 89
+     },
+     {
+      "color": "yellow",
+      "level": 24600.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 86
+     }
+    ],
+    "S": [
+     {
+      "color": "blue",
+      "level": 24200.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "grey",
+      "level": 24000.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 49
+     },
+     {
+      "color": "grey",
+      "level": 24150.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 48
+     }
+    ]
+   },
+   "spot": 24217.2,
+   "spreads": {
+    "bear_call_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "R1 wall 24500 is 283 pts above spot",
+      "credit \u20b98.35 too thin (<28% of \u20b9100 width)"
+     ],
+     "short_strike": null,
+     "width": null
+    },
+    "bull_put_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "S1 wall 24200 is 17 pts below spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    }
+   },
+   "ts": 1784519160
+  },
+  {
+   "atr_pct": null,
+   "error": null,
+   "max_pain": 23750.0,
+   "n_strikes": 21,
+   "pcr": null,
+   "quadrants": [
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23750.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23800.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23850.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23900.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23950.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24000.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24050.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24100.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24150.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24200.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24250.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24300.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24350.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24400.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24450.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24500.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24550.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24600.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24650.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24700.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24750.0
+    }
+   ],
+   "signal_lines": {
+    "R": [
+     {
+      "color": "blue",
+      "level": 24500.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "yellow",
+      "level": 24300.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 90
+     },
+     {
+      "color": "yellow",
+      "level": 24250.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 85
+     }
+    ],
+    "S": [
+     {
+      "color": "blue",
+      "level": 24200.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "yellow",
+      "level": 24000.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 82
+     },
+     {
+      "color": "pink",
+      "level": 24150.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 61
+     }
+    ]
+   },
+   "spot": 24225.7,
+   "spreads": {
+    "bear_call_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "R1 wall 24500 is 274 pts above spot",
+      "credit \u20b97.8 too thin (<28% of \u20b9100 width)"
+     ],
+     "short_strike": null,
+     "width": null
+    },
+    "bull_put_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "S1 wall 24200 is 26 pts below spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    }
+   },
+   "ts": 1784519220
+  },
+  {
+   "atr_pct": null,
+   "error": null,
+   "max_pain": 23700.0,
+   "n_strikes": 21,
+   "pcr": null,
+   "quadrants": [
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23700.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23750.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23800.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23850.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23900.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23950.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24000.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24050.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24100.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24150.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24200.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24250.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24300.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24350.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24400.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24450.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24500.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24550.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24600.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24650.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24700.0
+    }
+   ],
+   "signal_lines": {
+    "R": [
+     {
+      "color": "blue",
+      "level": 24700.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "yellow",
+      "level": 24300.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 89
+     },
+     {
+      "color": "yellow",
+      "level": 24250.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 84
+     }
+    ],
+    "S": [
+     {
+      "color": "blue",
+      "level": 24200.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "pink",
+      "level": 24000.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 57
+     },
+     {
+      "color": "grey",
+      "level": 24100.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 53
+     }
+    ]
+   },
+   "spot": 24216.5,
+   "spreads": {
+    "bear_call_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "R1 wall 24700 is 484 pts above spot",
+      "hedge strike outside loaded chain"
+     ],
+     "short_strike": null,
+     "width": null
+    },
+    "bull_put_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "S1 wall 24200 is 16 pts below spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    }
+   },
+   "ts": 1784519280
+  },
+  {
+   "atr_pct": null,
+   "error": null,
+   "max_pain": 23700.0,
+   "n_strikes": 21,
+   "pcr": null,
+   "quadrants": [
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23700.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23750.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23800.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23850.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23900.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23950.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24000.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24050.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24100.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24150.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24200.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24250.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24300.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24350.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24400.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24450.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24500.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24550.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24600.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24650.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24700.0
+    }
+   ],
+   "signal_lines": {
+    "R": [
+     {
+      "color": "blue",
+      "level": 24250.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "yellow",
+      "level": 24300.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 98
+     },
+     {
+      "color": "pink",
+      "level": 24700.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 74
+     }
+    ],
+    "S": [
+     {
+      "color": "blue",
+      "level": 24200.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "grey",
+      "level": 24100.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 38
+     },
+     {
+      "color": "grey",
+      "level": 24000.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 37
+     }
+    ]
+   },
+   "spot": 24209.7,
+   "spreads": {
+    "bear_call_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "R1 wall 24250 is 40 pts above spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    },
+    "bull_put_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "S1 wall 24200 is 10 pts below spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    }
+   },
+   "ts": 1784519340
+  },
+  {
+   "atr_pct": null,
+   "error": null,
+   "max_pain": 23700.0,
+   "n_strikes": 21,
+   "pcr": null,
+   "quadrants": [
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23700.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23750.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23800.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23850.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23900.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23950.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24000.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24050.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24100.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24150.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24200.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24250.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24300.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24350.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24400.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24450.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24500.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24550.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24600.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24650.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24700.0
+    }
+   ],
+   "signal_lines": {
+    "R": [
+     {
+      "color": "blue",
+      "level": 24200.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "pink",
+      "level": 24300.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 64
+     },
+     {
+      "color": "pink",
+      "level": 24250.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 61
+     }
+    ],
+    "S": [
+     {
+      "color": "blue",
+      "level": 24150.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "yellow",
+      "level": 24100.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 93
+     },
+     {
+      "color": "yellow",
+      "level": 24000.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 85
+     }
+    ]
+   },
+   "spot": 24198.2,
+   "spreads": {
+    "bear_call_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "R1 wall 24200 is 2 pts above spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    },
+    "bull_put_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "S1 wall 24150 is 48 pts below spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    }
+   },
+   "ts": 1784519400
+  },
+  {
+   "atr_pct": null,
+   "error": null,
+   "max_pain": 23700.0,
+   "n_strikes": 21,
+   "pcr": null,
+   "quadrants": [
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23700.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23750.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23800.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23850.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23900.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23950.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24000.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24050.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24100.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24150.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24200.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24250.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24300.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24350.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24400.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24450.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24500.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24550.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24600.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24650.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24700.0
+    }
+   ],
+   "signal_lines": {
+    "R": [
+     {
+      "color": "blue",
+      "level": 24200.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "pink",
+      "level": 24300.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 71
+     },
+     {
+      "color": "pink",
+      "level": 24500.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 66
+     }
+    ],
+    "S": [
+     {
+      "color": "blue",
+      "level": 24150.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "yellow",
+      "level": 24100.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 88
+     },
+     {
+      "color": "pink",
+      "level": 24000.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 70
+     }
+    ]
+   },
+   "spot": 24188.9,
+   "spreads": {
+    "bear_call_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "R1 wall 24200 is 11 pts above spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    },
+    "bull_put_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "S1 wall 24150 is 39 pts below spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    }
+   },
+   "ts": 1784519460
+  },
+  {
+   "atr_pct": null,
+   "error": null,
+   "max_pain": 23700.0,
+   "n_strikes": 21,
+   "pcr": null,
+   "quadrants": [
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23700.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23750.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23800.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23850.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23900.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23950.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24000.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24050.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24100.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24150.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24200.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24250.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24300.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24350.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24400.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24450.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24500.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24550.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24600.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24650.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24700.0
+    }
+   ],
+   "signal_lines": {
+    "R": [
+     {
+      "color": "blue",
+      "level": 24200.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "pink",
+      "level": 24300.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 69
+     },
+     {
+      "color": "pink",
+      "level": 24250.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 65
+     }
+    ],
+    "S": [
+     {
+      "color": "blue",
+      "level": 24150.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "yellow",
+      "level": 24100.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "yellow",
+      "level": 24000.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 95
+     }
+    ]
+   },
+   "spot": 24187.6,
+   "spreads": {
+    "bear_call_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "R1 wall 24200 is 12 pts above spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    },
+    "bull_put_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "S1 wall 24150 is 38 pts below spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    }
+   },
+   "ts": 1784519520
+  },
+  {
+   "atr_pct": null,
+   "error": null,
+   "max_pain": 23700.0,
+   "n_strikes": 21,
+   "pcr": null,
+   "quadrants": [
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23700.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23750.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23800.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23850.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23900.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23950.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24000.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24050.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24100.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24150.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24200.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24250.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24300.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24350.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24400.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24450.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24500.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24550.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24600.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24650.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24700.0
+    }
+   ],
+   "signal_lines": {
+    "R": [
+     {
+      "color": "blue",
+      "level": 24200.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "pink",
+      "level": 24300.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 64
+     },
+     {
+      "color": "grey",
+      "level": 24400.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 50
+     }
+    ],
+    "S": [
+     {
+      "color": "blue",
+      "level": 24000.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "yellow",
+      "level": 24150.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 93
+     },
+     {
+      "color": "yellow",
+      "level": 24100.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 89
+     }
+    ]
+   },
+   "spot": 24192.35,
+   "spreads": {
+    "bear_call_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "R1 wall 24200 is 8 pts above spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    },
+    "bull_put_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "S1 wall 24000 is 192 pts below spot",
+      "credit \u20b917.3 too thin (<28% of \u20b9100 width)"
+     ],
+     "short_strike": null,
+     "width": null
+    }
+   },
+   "ts": 1784519580
+  },
+  {
+   "atr_pct": null,
+   "error": null,
+   "max_pain": 23700.0,
+   "n_strikes": 21,
+   "pcr": null,
+   "quadrants": [
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23700.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23750.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23800.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23850.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23900.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23950.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24000.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24050.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24100.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24150.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24200.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24250.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24300.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24350.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24400.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24450.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24500.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24550.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24600.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24650.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24700.0
+    }
+   ],
+   "signal_lines": {
+    "R": [
+     {
+      "color": "blue",
+      "level": 24250.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "yellow",
+      "level": 24300.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 96
+     },
+     {
+      "color": "pink",
+      "level": 24500.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 56
+     }
+    ],
+    "S": [
+     {
+      "color": "blue",
+      "level": 24200.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "pink",
+      "level": 24150.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 55
+     },
+     {
+      "color": "grey",
+      "level": 24100.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 53
+     }
+    ]
+   },
+   "spot": 24212.65,
+   "spreads": {
+    "bear_call_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "R1 wall 24250 is 37 pts above spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    },
+    "bull_put_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "S1 wall 24200 is 13 pts below spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    }
+   },
+   "ts": 1784519640
+  },
+  {
+   "atr_pct": null,
+   "error": null,
+   "max_pain": 23700.0,
+   "n_strikes": 21,
+   "pcr": null,
+   "quadrants": [
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23700.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23750.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23800.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23850.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23900.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23950.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24000.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24050.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24100.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24150.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24200.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24250.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24300.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24350.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24400.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24450.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24500.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24550.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24600.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24650.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24700.0
+    }
+   ],
+   "signal_lines": {
+    "R": [
+     {
+      "color": "blue",
+      "level": 24200.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "pink",
+      "level": 24300.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 66
+     },
+     {
+      "color": "pink",
+      "level": 24500.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 63
+     }
+    ],
+    "S": [
+     {
+      "color": "blue",
+      "level": 24150.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "yellow",
+      "level": 24100.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 87
+     },
+     {
+      "color": "yellow",
+      "level": 24000.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 78
+     }
+    ]
+   },
+   "spot": 24198.0,
+   "spreads": {
+    "bear_call_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "R1 wall 24200 is 2 pts above spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    },
+    "bull_put_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "S1 wall 24150 is 48 pts below spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    }
+   },
+   "ts": 1784519700
+  },
+  {
+   "atr_pct": null,
+   "error": null,
+   "max_pain": 23700.0,
+   "n_strikes": 21,
+   "pcr": null,
+   "quadrants": [
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23700.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23750.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23800.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23850.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23900.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23950.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24000.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24050.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24100.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24150.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24200.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24250.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24300.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24350.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24400.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24450.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24500.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24550.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24600.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24650.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24700.0
+    }
+   ],
+   "signal_lines": {
+    "R": [
+     {
+      "color": "blue",
+      "level": 24700.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "yellow",
+      "level": 24300.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 88
+     },
+     {
+      "color": "yellow",
+      "level": 24250.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 84
+     }
+    ],
+    "S": [
+     {
+      "color": "blue",
+      "level": 24200.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "pink",
+      "level": 24100.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 61
+     },
+     {
+      "color": "pink",
+      "level": 24150.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 61
+     }
+    ]
+   },
+   "spot": 24203.85,
+   "spreads": {
+    "bear_call_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "R1 wall 24700 is 496 pts above spot",
+      "hedge strike outside loaded chain"
+     ],
+     "short_strike": null,
+     "width": null
+    },
+    "bull_put_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "S1 wall 24200 is 4 pts below spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    }
+   },
+   "ts": 1784519760
+  },
+  {
+   "atr_pct": null,
+   "error": null,
+   "max_pain": 23700.0,
+   "n_strikes": 21,
+   "pcr": null,
+   "quadrants": [
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23700.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23750.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23800.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23850.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23900.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23950.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24000.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24050.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24100.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24150.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24200.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24250.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24300.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24350.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24400.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24450.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24500.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24550.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24600.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24650.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24700.0
+    }
+   ],
+   "signal_lines": {
+    "R": [
+     {
+      "color": "blue",
+      "level": 24200.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "pink",
+      "level": 24250.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 55
+     },
+     {
+      "color": "grey",
+      "level": 24500.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 54
+     }
+    ],
+    "S": [
+     {
+      "color": "blue",
+      "level": 24100.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "yellow",
+      "level": 24150.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 94
+     },
+     {
+      "color": "yellow",
+      "level": 24000.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 81
+     }
+    ]
+   },
+   "spot": 24196.65,
+   "spreads": {
+    "bear_call_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "R1 wall 24200 is 3 pts above spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    },
+    "bull_put_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "S1 wall 24100 is 97 pts below spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    }
+   },
+   "ts": 1784519820
+  },
+  {
+   "atr_pct": null,
+   "error": null,
+   "max_pain": 23700.0,
+   "n_strikes": 21,
+   "pcr": null,
+   "quadrants": [
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23700.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23750.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23800.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23850.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23900.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23950.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24000.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24050.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24100.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24150.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24200.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24250.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24300.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24350.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24400.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24450.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24500.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24550.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24600.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24650.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24700.0
+    }
+   ],
+   "signal_lines": {
+    "R": [
+     {
+      "color": "blue",
+      "level": 24200.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "grey",
+      "level": 24300.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 51
+     },
+     {
+      "color": "grey",
+      "level": 24250.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 51
+     }
+    ],
+    "S": [
+     {
+      "color": "blue",
+      "level": 24150.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "yellow",
+      "level": 24100.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 78
+     },
+     {
+      "color": "yellow",
+      "level": 24000.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 76
+     }
+    ]
+   },
+   "spot": 24188.35,
+   "spreads": {
+    "bear_call_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "R1 wall 24200 is 12 pts above spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    },
+    "bull_put_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "S1 wall 24150 is 38 pts below spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    }
+   },
+   "ts": 1784519880
+  },
+  {
+   "atr_pct": null,
+   "error": null,
+   "max_pain": 23700.0,
+   "n_strikes": 21,
+   "pcr": null,
+   "quadrants": [
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23700.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23750.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23800.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23850.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23900.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23950.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24000.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24050.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24100.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24150.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24200.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24250.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24300.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24350.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24400.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24450.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24500.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24550.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24600.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24650.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24700.0
+    }
+   ],
+   "signal_lines": {
+    "R": [
+     {
+      "color": "blue",
+      "level": 24200.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "pink",
+      "level": 24300.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 67
+     },
+     {
+      "color": "grey",
+      "level": 24250.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 51
+     }
+    ],
+    "S": [
+     {
+      "color": "blue",
+      "level": 24150.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "yellow",
+      "level": 24000.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 93
+     },
+     {
+      "color": "yellow",
+      "level": 24100.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 87
+     }
+    ]
+   },
+   "spot": 24191.7,
+   "spreads": {
+    "bear_call_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "R1 wall 24200 is 8 pts above spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    },
+    "bull_put_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "S1 wall 24150 is 42 pts below spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    }
+   },
+   "ts": 1784519940
+  },
+  {
+   "atr_pct": null,
+   "error": null,
+   "max_pain": 23700.0,
+   "n_strikes": 21,
+   "pcr": null,
+   "quadrants": [
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23700.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23750.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23800.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23850.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23900.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23950.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24000.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24050.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24100.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24150.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24200.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24250.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24300.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24350.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24400.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24450.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24500.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24550.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24600.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24650.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24700.0
+    }
+   ],
+   "signal_lines": {
+    "R": [
+     {
+      "color": "blue",
+      "level": 24200.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "pink",
+      "level": 24300.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 66
+     },
+     {
+      "color": "grey",
+      "level": 24250.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 50
+     }
+    ],
+    "S": [
+     {
+      "color": "blue",
+      "level": 24150.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "yellow",
+      "level": 24000.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 81
+     },
+     {
+      "color": "yellow",
+      "level": 24100.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 78
+     }
+    ]
+   },
+   "spot": 24182.95,
+   "spreads": {
+    "bear_call_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "R1 wall 24200 is 17 pts above spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    },
+    "bull_put_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "S1 wall 24150 is 33 pts below spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    }
+   },
+   "ts": 1784520000
+  },
+  {
+   "atr_pct": null,
+   "error": null,
+   "max_pain": 23700.0,
+   "n_strikes": 21,
+   "pcr": null,
+   "quadrants": [
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23700.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23750.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23800.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23850.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23900.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23950.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24000.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24050.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24100.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24150.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24200.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24250.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24300.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24350.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24400.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24450.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24500.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24550.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24600.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24650.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24700.0
+    }
+   ],
+   "signal_lines": {
+    "R": [
+     {
+      "color": "blue",
+      "level": 24200.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "pink",
+      "level": 24300.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 59
+     },
+     {
+      "color": "grey",
+      "level": 24250.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 47
+     }
+    ],
+    "S": [
+     {
+      "color": "blue",
+      "level": 24150.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "yellow",
+      "level": 24100.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 85
+     },
+     {
+      "color": "yellow",
+      "level": 24000.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 83
+     }
+    ]
+   },
+   "spot": 24181.35,
+   "spreads": {
+    "bear_call_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "R1 wall 24200 is 19 pts above spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    },
+    "bull_put_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "S1 wall 24150 is 31 pts below spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    }
+   },
+   "ts": 1784520060
+  },
+  {
+   "atr_pct": null,
+   "error": null,
+   "max_pain": 23700.0,
+   "n_strikes": 21,
+   "pcr": null,
+   "quadrants": [
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23700.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23750.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23800.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23850.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23900.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23950.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24000.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24050.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24100.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24150.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24200.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24250.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24300.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24350.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24400.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24450.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24500.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24550.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24600.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24650.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24700.0
+    }
+   ],
+   "signal_lines": {
+    "R": [
+     {
+      "color": "blue",
+      "level": 24200.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "pink",
+      "level": 24300.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 65
+     },
+     {
+      "color": "grey",
+      "level": 24250.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 51
+     }
+    ],
+    "S": [
+     {
+      "color": "blue",
+      "level": 24150.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "yellow",
+      "level": 24100.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 93
+     },
+     {
+      "color": "yellow",
+      "level": 24000.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 87
+     }
+    ]
+   },
+   "spot": 24182.1,
+   "spreads": {
+    "bear_call_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "R1 wall 24200 is 18 pts above spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    },
+    "bull_put_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "S1 wall 24150 is 32 pts below spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    }
+   },
+   "ts": 1784520120
+  },
+  {
+   "atr_pct": null,
+   "error": null,
+   "max_pain": 23700.0,
+   "n_strikes": 21,
+   "pcr": null,
+   "quadrants": [
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23700.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23750.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23800.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23850.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23900.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23950.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24000.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24050.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24100.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24150.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24200.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24250.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24300.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24350.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24400.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24450.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24500.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24550.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24600.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24650.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24700.0
+    }
+   ],
+   "signal_lines": {
+    "R": [
+     {
+      "color": "blue",
+      "level": 24200.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "grey",
+      "level": 24300.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 50
+     },
+     {
+      "color": "grey",
+      "level": 24250.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 46
+     }
+    ],
+    "S": [
+     {
+      "color": "blue",
+      "level": 24150.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "yellow",
+      "level": 24100.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 76
+     },
+     {
+      "color": "pink",
+      "level": 24000.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 67
+     }
+    ]
+   },
+   "spot": 24175.65,
+   "spreads": {
+    "bear_call_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "R1 wall 24200 is 24 pts above spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    },
+    "bull_put_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "S1 wall 24150 is 26 pts below spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    }
+   },
+   "ts": 1784520180
+  },
+  {
+   "atr_pct": null,
+   "error": null,
+   "max_pain": 23700.0,
+   "n_strikes": 21,
+   "pcr": null,
+   "quadrants": [
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23700.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23750.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23800.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23850.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23900.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23950.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24000.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24050.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24100.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24150.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24200.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24250.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24300.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24350.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24400.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24450.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24500.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24550.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24600.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24650.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24700.0
+    }
+   ],
+   "signal_lines": {
+    "R": [
+     {
+      "color": "blue",
+      "level": 24200.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "grey",
+      "level": 24300.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 54
+     },
+     {
+      "color": "grey",
+      "level": 24250.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 48
+     }
+    ],
+    "S": [
+     {
+      "color": "blue",
+      "level": 24150.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "yellow",
+      "level": 24100.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 80
+     },
+     {
+      "color": "yellow",
+      "level": 24000.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 76
+     }
+    ]
+   },
+   "spot": 24180.45,
+   "spreads": {
+    "bear_call_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "R1 wall 24200 is 20 pts above spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    },
+    "bull_put_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "S1 wall 24150 is 30 pts below spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    }
+   },
+   "ts": 1784520240
+  },
+  {
+   "atr_pct": null,
+   "error": null,
+   "max_pain": 23700.0,
+   "n_strikes": 21,
+   "pcr": null,
+   "quadrants": [
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23700.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23750.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23800.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23850.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23900.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23950.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24000.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24050.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24100.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24150.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24200.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24250.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24300.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24350.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24400.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24450.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24500.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24550.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24600.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24650.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24700.0
+    }
+   ],
+   "signal_lines": {
+    "R": [
+     {
+      "color": "blue",
+      "level": 24200.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "grey",
+      "level": 24300.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 51
+     },
+     {
+      "color": "grey",
+      "level": 24500.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 43
+     }
+    ],
+    "S": [
+     {
+      "color": "blue",
+      "level": 24150.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "yellow",
+      "level": 24100.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 77
+     },
+     {
+      "color": "pink",
+      "level": 24000.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 65
+     }
+    ]
+   },
+   "spot": 24183.95,
+   "spreads": {
+    "bear_call_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "R1 wall 24200 is 16 pts above spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    },
+    "bull_put_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "S1 wall 24150 is 34 pts below spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    }
+   },
+   "ts": 1784520300
+  },
+  {
+   "atr_pct": null,
+   "error": null,
+   "max_pain": 23700.0,
+   "n_strikes": 21,
+   "pcr": null,
+   "quadrants": [
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23700.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23750.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23800.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23850.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23900.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23950.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24000.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24050.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24100.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24150.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24200.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24250.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24300.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24350.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24400.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24450.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24500.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24550.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24600.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24650.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24700.0
+    }
+   ],
+   "signal_lines": {
+    "R": [
+     {
+      "color": "blue",
+      "level": 24200.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "grey",
+      "level": 24250.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 40
+     },
+     {
+      "color": "grey",
+      "level": 24300.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 38
+     }
+    ],
+    "S": [
+     {
+      "color": "blue",
+      "level": 24150.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "yellow",
+      "level": 24000.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 87
+     },
+     {
+      "color": "yellow",
+      "level": 24100.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 77
+     }
+    ]
+   },
+   "spot": 24189.45,
+   "spreads": {
+    "bear_call_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "R1 wall 24200 is 11 pts above spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    },
+    "bull_put_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "S1 wall 24150 is 39 pts below spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    }
+   },
+   "ts": 1784520360
+  },
+  {
+   "atr_pct": null,
+   "error": null,
+   "max_pain": 23700.0,
+   "n_strikes": 21,
+   "pcr": null,
+   "quadrants": [
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23700.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23750.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23800.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23850.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23900.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23950.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24000.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24050.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24100.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24150.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24200.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24250.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24300.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24350.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24400.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24450.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24500.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24550.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24600.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24650.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24700.0
+    }
+   ],
+   "signal_lines": {
+    "R": [
+     {
+      "color": "blue",
+      "level": 24200.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "grey",
+      "level": 24500.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 47
+     },
+     {
+      "color": "grey",
+      "level": 24300.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 47
+     }
+    ],
+    "S": [
+     {
+      "color": "blue",
+      "level": 24150.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "yellow",
+      "level": 24100.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 89
+     },
+     {
+      "color": "yellow",
+      "level": 24000.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 82
+     }
+    ]
+   },
+   "spot": 24181.0,
+   "spreads": {
+    "bear_call_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "R1 wall 24200 is 19 pts above spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    },
+    "bull_put_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "S1 wall 24150 is 31 pts below spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    }
+   },
+   "ts": 1784520420
+  },
+  {
+   "atr_pct": null,
+   "error": null,
+   "max_pain": 23650.0,
+   "n_strikes": 21,
+   "pcr": null,
+   "quadrants": [
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23650.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23700.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23750.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23800.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23850.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23900.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23950.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24000.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24050.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24100.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24150.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24200.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24250.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24300.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24350.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24400.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24450.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24500.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24550.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24600.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24650.0
+    }
+   ],
+   "signal_lines": {
+    "R": [
+     {
+      "color": "blue",
+      "level": 24200.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "grey",
+      "level": 24250.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 53
+     },
+     {
+      "color": "grey",
+      "level": 24300.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 47
+     }
+    ],
+    "S": [
+     {
+      "color": "blue",
+      "level": 24150.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "yellow",
+      "level": 24100.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 76
+     },
+     {
+      "color": "pink",
+      "level": 24000.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 73
+     }
+    ]
+   },
+   "spot": 24172.1,
+   "spreads": {
+    "bear_call_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "R1 wall 24200 is 28 pts above spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    },
+    "bull_put_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "S1 wall 24150 is 22 pts below spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    }
+   },
+   "ts": 1784520480
+  },
+  {
+   "atr_pct": null,
+   "error": null,
+   "max_pain": 23650.0,
+   "n_strikes": 21,
+   "pcr": null,
+   "quadrants": [
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23650.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23700.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23750.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23800.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23850.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23900.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23950.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24000.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24050.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24100.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24150.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24200.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24250.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24300.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24350.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24400.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24450.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24500.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24550.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24600.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24650.0
+    }
+   ],
+   "signal_lines": {
+    "R": [
+     {
+      "color": "blue",
+      "level": 24200.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "pink",
+      "level": 24400.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 56
+     },
+     {
+      "color": "pink",
+      "level": 24250.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 55
+     }
+    ],
+    "S": [
+     {
+      "color": "blue",
+      "level": 24150.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "yellow",
+      "level": 24100.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 77
+     },
+     {
+      "color": "pink",
+      "level": 24000.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 59
+     }
+    ]
+   },
+   "spot": 24162.75,
+   "spreads": {
+    "bear_call_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "R1 wall 24200 is 37 pts above spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    },
+    "bull_put_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "S1 wall 24150 is 13 pts below spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    }
+   },
+   "ts": 1784520540
+  },
+  {
+   "atr_pct": null,
+   "error": null,
+   "max_pain": 23650.0,
+   "n_strikes": 21,
+   "pcr": null,
+   "quadrants": [
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23650.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23700.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23750.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23800.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23850.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23900.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23950.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24000.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24050.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24100.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24150.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24200.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24250.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24300.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24350.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24400.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24450.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24500.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24550.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24600.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24650.0
+    }
+   ],
+   "signal_lines": {
+    "R": [
+     {
+      "color": "blue",
+      "level": 24200.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "pink",
+      "level": 24500.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 57
+     },
+     {
+      "color": "grey",
+      "level": 24300.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 54
+     }
+    ],
+    "S": [
+     {
+      "color": "blue",
+      "level": 24150.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "yellow",
+      "level": 24100.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 77
+     },
+     {
+      "color": "pink",
+      "level": 24000.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 60
+     }
+    ]
+   },
+   "spot": 24168.35,
+   "spreads": {
+    "bear_call_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "R1 wall 24200 is 32 pts above spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    },
+    "bull_put_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "S1 wall 24150 is 18 pts below spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    }
+   },
+   "ts": 1784520600
+  },
+  {
+   "atr_pct": null,
+   "error": null,
+   "max_pain": 23650.0,
+   "n_strikes": 21,
+   "pcr": null,
+   "quadrants": [
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23650.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23700.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23750.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23800.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23850.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23900.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23950.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24000.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24050.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24100.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24150.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24200.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24250.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24300.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24350.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24400.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24450.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24500.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24550.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24600.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24650.0
+    }
+   ],
+   "signal_lines": {
+    "R": [
+     {
+      "color": "blue",
+      "level": 24200.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "pink",
+      "level": 24300.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 69
+     },
+     {
+      "color": "pink",
+      "level": 24250.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 59
+     }
+    ],
+    "S": [
+     {
+      "color": "blue",
+      "level": 24150.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "pink",
+      "level": 24100.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 71
+     },
+     {
+      "color": "pink",
+      "level": 24000.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 71
+     }
+    ]
+   },
+   "spot": 24161.7,
+   "spreads": {
+    "bear_call_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "R1 wall 24200 is 38 pts above spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    },
+    "bull_put_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "S1 wall 24150 is 12 pts below spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    }
+   },
+   "ts": 1784520660
+  },
+  {
+   "atr_pct": null,
+   "error": null,
+   "max_pain": 23650.0,
+   "n_strikes": 21,
+   "pcr": null,
+   "quadrants": [
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23650.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23700.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23750.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23800.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23850.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23900.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23950.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24000.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24050.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24100.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24150.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24200.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24250.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24300.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24350.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24400.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24450.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24500.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24550.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24600.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24650.0
+    }
+   ],
+   "signal_lines": {
+    "R": [
+     {
+      "color": "blue",
+      "level": 24200.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "grey",
+      "level": 24300.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 54
+     },
+     {
+      "color": "grey",
+      "level": 24250.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 43
+     }
+    ],
+    "S": [
+     {
+      "color": "blue",
+      "level": 24150.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "yellow",
+      "level": 24100.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 81
+     },
+     {
+      "color": "pink",
+      "level": 24000.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 60
+     }
+    ]
+   },
+   "spot": 24167.85,
+   "spreads": {
+    "bear_call_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "R1 wall 24200 is 32 pts above spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    },
+    "bull_put_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "S1 wall 24150 is 18 pts below spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    }
+   },
+   "ts": 1784520720
+  },
+  {
+   "atr_pct": null,
+   "error": null,
+   "max_pain": 23700.0,
+   "n_strikes": 21,
+   "pcr": null,
+   "quadrants": [
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23700.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23750.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23800.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23850.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23900.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23950.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24000.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24050.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24100.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24150.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24200.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24250.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24300.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24350.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24400.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24450.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24500.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24550.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24600.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24650.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24700.0
+    }
+   ],
+   "signal_lines": {
+    "R": [
+     {
+      "color": "blue",
+      "level": 24200.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "grey",
+      "level": 24300.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 52
+     },
+     {
+      "color": "grey",
+      "level": 24250.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 47
+     }
+    ],
+    "S": [
+     {
+      "color": "blue",
+      "level": 24150.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "pink",
+      "level": 24100.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 74
+     },
+     {
+      "color": "pink",
+      "level": 24000.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 69
+     }
+    ]
+   },
+   "spot": 24175.65,
+   "spreads": {
+    "bear_call_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "R1 wall 24200 is 24 pts above spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    },
+    "bull_put_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "S1 wall 24150 is 26 pts below spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    }
+   },
+   "ts": 1784520780
+  },
+  {
+   "atr_pct": null,
+   "error": null,
+   "max_pain": 23650.0,
+   "n_strikes": 21,
+   "pcr": null,
+   "quadrants": [
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23650.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23700.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23750.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23800.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23850.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23900.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23950.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24000.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24050.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24100.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24150.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24200.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24250.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24300.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24350.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24400.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24450.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24500.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24550.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24600.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24650.0
+    }
+   ],
+   "signal_lines": {
+    "R": [
+     {
+      "color": "blue",
+      "level": 24200.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "grey",
+      "level": 24300.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 44
+     },
+     {
+      "color": "grey",
+      "level": 24250.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 40
+     }
+    ],
+    "S": [
+     {
+      "color": "blue",
+      "level": 24150.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "yellow",
+      "level": 24000.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 75
+     },
+     {
+      "color": "pink",
+      "level": 24100.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 67
+     }
+    ]
+   },
+   "spot": 24171.45,
+   "spreads": {
+    "bear_call_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "R1 wall 24200 is 29 pts above spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    },
+    "bull_put_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "S1 wall 24150 is 21 pts below spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    }
+   },
+   "ts": 1784520840
+  },
+  {
+   "atr_pct": null,
+   "error": null,
+   "max_pain": 23650.0,
+   "n_strikes": 21,
+   "pcr": null,
+   "quadrants": [
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23650.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23700.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23750.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23800.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23850.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23900.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23950.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24000.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24050.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24100.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24150.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24200.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24250.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24300.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24350.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24400.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24450.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24500.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24550.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24600.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24650.0
+    }
+   ],
+   "signal_lines": {
+    "R": [
+     {
+      "color": "blue",
+      "level": 24200.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "grey",
+      "level": 24300.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 54
+     },
+     {
+      "color": "grey",
+      "level": 24250.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 48
+     }
+    ],
+    "S": [
+     {
+      "color": "blue",
+      "level": 24150.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "yellow",
+      "level": 24100.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 77
+     },
+     {
+      "color": "pink",
+      "level": 24000.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 73
+     }
+    ]
+   },
+   "spot": 24163.35,
+   "spreads": {
+    "bear_call_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "R1 wall 24200 is 37 pts above spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    },
+    "bull_put_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "S1 wall 24150 is 13 pts below spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    }
+   },
+   "ts": 1784520900
+  },
+  {
+   "atr_pct": null,
+   "error": null,
+   "max_pain": 23650.0,
+   "n_strikes": 21,
+   "pcr": null,
+   "quadrants": [
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23650.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23700.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23750.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23800.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23850.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23900.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23950.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24000.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24050.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24100.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24150.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24200.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24250.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24300.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24350.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24400.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24450.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24500.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24550.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24600.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24650.0
+    }
+   ],
+   "signal_lines": {
+    "R": [
+     {
+      "color": "blue",
+      "level": 24200.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "pink",
+      "level": 24250.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 59
+     },
+     {
+      "color": "pink",
+      "level": 24400.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 58
+     }
+    ],
+    "S": [
+     {
+      "color": "blue",
+      "level": 24150.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "yellow",
+      "level": 24000.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 79
+     },
+     {
+      "color": "yellow",
+      "level": 24100.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 75
+     }
+    ]
+   },
+   "spot": 24166.0,
+   "spreads": {
+    "bear_call_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "R1 wall 24200 is 34 pts above spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    },
+    "bull_put_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "S1 wall 24150 is 16 pts below spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    }
+   },
+   "ts": 1784520960
+  },
+  {
+   "atr_pct": null,
+   "error": null,
+   "max_pain": 23650.0,
+   "n_strikes": 21,
+   "pcr": null,
+   "quadrants": [
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23650.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23700.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23750.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23800.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23850.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23900.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23950.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24000.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24050.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24100.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24150.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24200.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24250.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24300.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24350.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24400.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24450.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24500.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24550.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24600.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24650.0
+    }
+   ],
+   "signal_lines": {
+    "R": [
+     {
+      "color": "blue",
+      "level": 24200.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "pink",
+      "level": 24250.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 61
+     },
+     {
+      "color": "grey",
+      "level": 24300.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 49
+     }
+    ],
+    "S": [
+     {
+      "color": "blue",
+      "level": 24150.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "pink",
+      "level": 24000.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 71
+     },
+     {
+      "color": "pink",
+      "level": 24100.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 71
+     }
+    ]
+   },
+   "spot": 24161.35,
+   "spreads": {
+    "bear_call_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "R1 wall 24200 is 39 pts above spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    },
+    "bull_put_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "S1 wall 24150 is 11 pts below spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    }
+   },
+   "ts": 1784521020
+  },
+  {
+   "atr_pct": null,
+   "error": null,
+   "max_pain": 23650.0,
+   "n_strikes": 21,
+   "pcr": null,
+   "quadrants": [
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23650.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23700.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23750.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23800.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23850.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23900.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23950.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24000.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24050.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24100.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24150.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24200.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24250.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24300.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24350.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24400.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24450.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24500.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24550.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24600.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24650.0
+    }
+   ],
+   "signal_lines": {
+    "R": [
+     {
+      "color": "blue",
+      "level": 24200.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "grey",
+      "level": 24250.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 53
+     },
+     {
+      "color": "grey",
+      "level": 24300.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 46
+     }
+    ],
+    "S": [
+     {
+      "color": "blue",
+      "level": 24150.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "yellow",
+      "level": 24100.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 76
+     },
+     {
+      "color": "pink",
+      "level": 24000.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 62
+     }
+    ]
+   },
+   "spot": 24159.55,
+   "spreads": {
+    "bear_call_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "R1 wall 24200 is 40 pts above spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    },
+    "bull_put_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "S1 wall 24150 is 10 pts below spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    }
+   },
+   "ts": 1784521080
+  },
+  {
+   "atr_pct": null,
+   "error": null,
+   "max_pain": 23650.0,
+   "n_strikes": 21,
+   "pcr": null,
+   "quadrants": [
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23650.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23700.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23750.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23800.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23850.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23900.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23950.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24000.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24050.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24100.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24150.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24200.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24250.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24300.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24350.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24400.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24450.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24500.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24550.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24600.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24650.0
+    }
+   ],
+   "signal_lines": {
+    "R": [
+     {
+      "color": "blue",
+      "level": 24200.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "grey",
+      "level": 24300.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 53
+     },
+     {
+      "color": "grey",
+      "level": 24500.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 50
+     }
+    ],
+    "S": [
+     {
+      "color": "blue",
+      "level": 24150.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "yellow",
+      "level": 24000.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 83
+     },
+     {
+      "color": "pink",
+      "level": 24100.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 70
+     }
+    ]
+   },
+   "spot": 24163.3,
+   "spreads": {
+    "bear_call_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "R1 wall 24200 is 37 pts above spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    },
+    "bull_put_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "S1 wall 24150 is 13 pts below spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    }
+   },
+   "ts": 1784521140
+  },
+  {
+   "atr_pct": null,
+   "error": null,
+   "max_pain": 23650.0,
+   "n_strikes": 21,
+   "pcr": null,
+   "quadrants": [
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23650.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23700.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23750.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23800.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23850.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23900.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23950.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24000.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24050.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24100.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24150.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24200.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24250.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24300.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24350.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24400.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24450.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24500.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24550.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24600.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24650.0
+    }
+   ],
+   "signal_lines": {
+    "R": [
+     {
+      "color": "blue",
+      "level": 24200.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "grey",
+      "level": 24300.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 52
+     },
+     {
+      "color": "grey",
+      "level": 24250.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 42
+     }
+    ],
+    "S": [
+     {
+      "color": "blue",
+      "level": 24150.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "yellow",
+      "level": 24000.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 76
+     },
+     {
+      "color": "pink",
+      "level": 24100.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 71
+     }
+    ]
+   },
+   "spot": 24172.0,
+   "spreads": {
+    "bear_call_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "R1 wall 24200 is 28 pts above spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    },
+    "bull_put_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "S1 wall 24150 is 22 pts below spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    }
+   },
+   "ts": 1784521200
+  },
+  {
+   "atr_pct": null,
+   "error": null,
+   "max_pain": 23650.0,
+   "n_strikes": 21,
+   "pcr": null,
+   "quadrants": [
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23650.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23700.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23750.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23800.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23850.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23900.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23950.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24000.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24050.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24100.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24150.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24200.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24250.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24300.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24350.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24400.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24450.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24500.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24550.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24600.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24650.0
+    }
+   ],
+   "signal_lines": {
+    "R": [
+     {
+      "color": "blue",
+      "level": 24200.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "yellow",
+      "level": 24300.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 83
+     },
+     {
+      "color": "grey",
+      "level": 24600.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 53
+     }
+    ],
+    "S": [
+     {
+      "color": "blue",
+      "level": 24150.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "yellow",
+      "level": 24000.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 75
+     },
+     {
+      "color": "pink",
+      "level": 24100.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 72
+     }
+    ]
+   },
+   "spot": 24165.1,
+   "spreads": {
+    "bear_call_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "R1 wall 24200 is 35 pts above spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    },
+    "bull_put_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "S1 wall 24150 is 15 pts below spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    }
+   },
+   "ts": 1784521260
+  },
+  {
+   "atr_pct": null,
+   "error": null,
+   "max_pain": 23650.0,
+   "n_strikes": 21,
+   "pcr": null,
+   "quadrants": [
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23650.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23700.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23750.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23800.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23850.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23900.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23950.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24000.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24050.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24100.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24150.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24200.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24250.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24300.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24350.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24400.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24450.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24500.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24550.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24600.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24650.0
+    }
+   ],
+   "signal_lines": {
+    "R": [
+     {
+      "color": "blue",
+      "level": 24200.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "pink",
+      "level": 24300.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 65
+     },
+     {
+      "color": "grey",
+      "level": 24250.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 50
+     }
+    ],
+    "S": [
+     {
+      "color": "blue",
+      "level": 24150.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "pink",
+      "level": 24100.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 72
+     },
+     {
+      "color": "pink",
+      "level": 24000.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 72
+     }
+    ]
+   },
+   "spot": 24169.6,
+   "spreads": {
+    "bear_call_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "R1 wall 24200 is 30 pts above spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    },
+    "bull_put_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "S1 wall 24150 is 20 pts below spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    }
+   },
+   "ts": 1784521320
+  },
+  {
+   "atr_pct": null,
+   "error": null,
+   "max_pain": 23650.0,
+   "n_strikes": 21,
+   "pcr": null,
+   "quadrants": [
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23650.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23700.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23750.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23800.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23850.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23900.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23950.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24000.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24050.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24100.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24150.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24200.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24250.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24300.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24350.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24400.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24450.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24500.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24550.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24600.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24650.0
+    }
+   ],
+   "signal_lines": {
+    "R": [
+     {
+      "color": "blue",
+      "level": 24200.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "grey",
+      "level": 24300.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 45
+     },
+     {
+      "color": "grey",
+      "level": 24250.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 42
+     }
+    ],
+    "S": [
+     {
+      "color": "blue",
+      "level": 24150.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "yellow",
+      "level": 24100.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 81
+     },
+     {
+      "color": "pink",
+      "level": 24000.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 70
+     }
+    ]
+   },
+   "spot": 24172.1,
+   "spreads": {
+    "bear_call_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "R1 wall 24200 is 28 pts above spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    },
+    "bull_put_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "S1 wall 24150 is 22 pts below spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    }
+   },
+   "ts": 1784521380
+  },
+  {
+   "atr_pct": null,
+   "error": null,
+   "max_pain": 23700.0,
+   "n_strikes": 21,
+   "pcr": null,
+   "quadrants": [
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23700.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23750.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23800.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23850.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23900.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23950.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24000.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24050.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24100.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24150.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24200.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24250.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24300.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24350.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24400.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24450.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24500.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24550.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24600.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24650.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24700.0
+    }
+   ],
+   "signal_lines": {
+    "R": [
+     {
+      "color": "blue",
+      "level": 24200.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "pink",
+      "level": 24500.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 71
+     },
+     {
+      "color": "grey",
+      "level": 24250.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 41
+     }
+    ],
+    "S": [
+     {
+      "color": "blue",
+      "level": 24150.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "yellow",
+      "level": 24100.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 75
+     },
+     {
+      "color": "pink",
+      "level": 24000.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 74
+     }
+    ]
+   },
+   "spot": 24178.15,
+   "spreads": {
+    "bear_call_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "R1 wall 24200 is 22 pts above spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    },
+    "bull_put_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "S1 wall 24150 is 28 pts below spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    }
+   },
+   "ts": 1784521440
+  },
+  {
+   "atr_pct": null,
+   "error": null,
+   "max_pain": 23700.0,
+   "n_strikes": 21,
+   "pcr": null,
+   "quadrants": [
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23700.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23750.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23800.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23850.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23900.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23950.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24000.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24050.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24100.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24150.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24200.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24250.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24300.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24350.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24400.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24450.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24500.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24550.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24600.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24650.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24700.0
+    }
+   ],
+   "signal_lines": {
+    "R": [
+     {
+      "color": "blue",
+      "level": 24200.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "grey",
+      "level": 24250.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 42
+     },
+     {
+      "color": "grey",
+      "level": 24300.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 34
+     }
+    ],
+    "S": [
+     {
+      "color": "blue",
+      "level": 24150.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "yellow",
+      "level": 24100.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 85
+     },
+     {
+      "color": "pink",
+      "level": 24000.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 71
+     }
+    ]
+   },
+   "spot": 24183.25,
+   "spreads": {
+    "bear_call_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "R1 wall 24200 is 17 pts above spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    },
+    "bull_put_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "S1 wall 24150 is 33 pts below spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    }
+   },
+   "ts": 1784521500
+  },
+  {
+   "atr_pct": null,
+   "error": null,
+   "max_pain": 23700.0,
+   "n_strikes": 21,
+   "pcr": null,
+   "quadrants": [
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23700.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23750.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23800.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23850.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23900.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23950.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24000.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24050.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24100.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24150.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24200.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24250.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24300.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24350.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24400.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24450.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24500.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24550.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24600.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24650.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24700.0
+    }
+   ],
+   "signal_lines": {
+    "R": [
+     {
+      "color": "blue",
+      "level": 24200.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "grey",
+      "level": 24300.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 40
+     },
+     {
+      "color": "grey",
+      "level": 24250.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 39
+     }
+    ],
+    "S": [
+     {
+      "color": "blue",
+      "level": 24150.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "yellow",
+      "level": 24100.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 87
+     },
+     {
+      "color": "pink",
+      "level": 24000.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 66
+     }
+    ]
+   },
+   "spot": 24189.25,
+   "spreads": {
+    "bear_call_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "R1 wall 24200 is 11 pts above spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    },
+    "bull_put_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "S1 wall 24150 is 39 pts below spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    }
+   },
+   "ts": 1784521560
+  },
+  {
+   "atr_pct": null,
+   "error": null,
+   "max_pain": 23700.0,
+   "n_strikes": 21,
+   "pcr": null,
+   "quadrants": [
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23700.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23750.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23800.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23850.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23900.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23950.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24000.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24050.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24100.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24150.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24200.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24250.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24300.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24350.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24400.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24450.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24500.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24550.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24600.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24650.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24700.0
+    }
+   ],
+   "signal_lines": {
+    "R": [
+     {
+      "color": "blue",
+      "level": 24200.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "grey",
+      "level": 24300.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 43
+     },
+     {
+      "color": "grey",
+      "level": 24250.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 43
+     }
+    ],
+    "S": [
+     {
+      "color": "blue",
+      "level": 24100.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "yellow",
+      "level": 24150.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 99
+     },
+     {
+      "color": "yellow",
+      "level": 24000.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 89
+     }
+    ]
+   },
+   "spot": 24192.25,
+   "spreads": {
+    "bear_call_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "R1 wall 24200 is 8 pts above spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    },
+    "bull_put_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "S1 wall 24100 is 92 pts below spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    }
+   },
+   "ts": 1784521620
+  },
+  {
+   "atr_pct": null,
+   "error": null,
+   "max_pain": 23700.0,
+   "n_strikes": 21,
+   "pcr": null,
+   "quadrants": [
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23700.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23750.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23800.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23850.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23900.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23950.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24000.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24050.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24100.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24150.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24200.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24250.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24300.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24350.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24400.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24450.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24500.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24550.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24600.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24650.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24700.0
+    }
+   ],
+   "signal_lines": {
+    "R": [
+     {
+      "color": "blue",
+      "level": 24200.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "grey",
+      "level": 24250.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 41
+     },
+     {
+      "color": "grey",
+      "level": 24300.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 36
+     }
+    ],
+    "S": [
+     {
+      "color": "blue",
+      "level": 24000.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "yellow",
+      "level": 24150.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 98
+     },
+     {
+      "color": "yellow",
+      "level": 24100.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 86
+     }
+    ]
+   },
+   "spot": 24196.1,
+   "spreads": {
+    "bear_call_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "R1 wall 24200 is 4 pts above spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    },
+    "bull_put_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "S1 wall 24000 is 196 pts below spot",
+      "credit \u20b915.35 too thin (<28% of \u20b9100 width)"
+     ],
+     "short_strike": null,
+     "width": null
+    }
+   },
+   "ts": 1784521680
+  },
+  {
+   "atr_pct": null,
+   "error": null,
+   "max_pain": 23700.0,
+   "n_strikes": 21,
+   "pcr": null,
+   "quadrants": [
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23700.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23750.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23800.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23850.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23900.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23950.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24000.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24050.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24100.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24150.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24200.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24250.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24300.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24350.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24400.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24450.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24500.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24550.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24600.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24650.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24700.0
+    }
+   ],
+   "signal_lines": {
+    "R": [
+     {
+      "color": "blue",
+      "level": 24200.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "pink",
+      "level": 24300.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 67
+     },
+     {
+      "color": "grey",
+      "level": 24250.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 47
+     }
+    ],
+    "S": [
+     {
+      "color": "blue",
+      "level": 24150.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "pink",
+      "level": 24000.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 74
+     },
+     {
+      "color": "pink",
+      "level": 24100.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 74
+     }
+    ]
+   },
+   "spot": 24190.25,
+   "spreads": {
+    "bear_call_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "R1 wall 24200 is 10 pts above spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    },
+    "bull_put_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "S1 wall 24150 is 40 pts below spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    }
+   },
+   "ts": 1784521740
+  },
+  {
+   "atr_pct": null,
+   "error": null,
+   "max_pain": 23700.0,
+   "n_strikes": 21,
+   "pcr": null,
+   "quadrants": [
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23700.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23750.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23800.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23850.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23900.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23950.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24000.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24050.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24100.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24150.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24200.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24250.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24300.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24350.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24400.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24450.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24500.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24550.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24600.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24650.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24700.0
+    }
+   ],
+   "signal_lines": {
+    "R": [
+     {
+      "color": "blue",
+      "level": 24200.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "grey",
+      "level": 24250.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 47
+     },
+     {
+      "color": "grey",
+      "level": 24300.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 44
+     }
+    ],
+    "S": [
+     {
+      "color": "blue",
+      "level": 24150.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "yellow",
+      "level": 24100.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 75
+     },
+     {
+      "color": "pink",
+      "level": 24000.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 62
+     }
+    ]
+   },
+   "spot": 24187.1,
+   "spreads": {
+    "bear_call_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "R1 wall 24200 is 13 pts above spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    },
+    "bull_put_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "S1 wall 24150 is 37 pts below spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    }
+   },
+   "ts": 1784521800
+  },
+  {
+   "atr_pct": null,
+   "error": null,
+   "max_pain": 23700.0,
+   "n_strikes": 21,
+   "pcr": null,
+   "quadrants": [
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23700.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23750.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23800.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23850.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23900.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23950.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24000.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24050.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24100.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24150.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24200.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24250.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24300.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24350.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24400.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24450.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24500.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24550.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24600.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24650.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24700.0
+    }
+   ],
+   "signal_lines": {
+    "R": [
+     {
+      "color": "blue",
+      "level": 24200.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "grey",
+      "level": 24250.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 45
+     },
+     {
+      "color": "grey",
+      "level": 24300.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 43
+     }
+    ],
+    "S": [
+     {
+      "color": "blue",
+      "level": 24150.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "yellow",
+      "level": 24100.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 81
+     },
+     {
+      "color": "pink",
+      "level": 24000.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 59
+     }
+    ]
+   },
+   "spot": 24186.65,
+   "spreads": {
+    "bear_call_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "R1 wall 24200 is 13 pts above spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    },
+    "bull_put_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "S1 wall 24150 is 37 pts below spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    }
+   },
+   "ts": 1784521860
+  },
+  {
+   "atr_pct": null,
+   "error": null,
+   "max_pain": 23700.0,
+   "n_strikes": 21,
+   "pcr": null,
+   "quadrants": [
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23700.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23750.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23800.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23850.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23900.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23950.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24000.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24050.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24100.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24150.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24200.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24250.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24300.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24350.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24400.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24450.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24500.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24550.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24600.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24650.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24700.0
+    }
+   ],
+   "signal_lines": {
+    "R": [
+     {
+      "color": "blue",
+      "level": 24200.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "grey",
+      "level": 24250.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 39
+     },
+     {
+      "color": "grey",
+      "level": 24300.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 36
+     }
+    ],
+    "S": [
+     {
+      "color": "blue",
+      "level": 24150.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "pink",
+      "level": 24000.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 71
+     },
+     {
+      "color": "pink",
+      "level": 24100.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 69
+     }
+    ]
+   },
+   "spot": 24195.2,
+   "spreads": {
+    "bear_call_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "R1 wall 24200 is 5 pts above spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    },
+    "bull_put_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "S1 wall 24150 is 45 pts below spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    }
+   },
+   "ts": 1784521920
+  },
+  {
+   "atr_pct": null,
+   "error": null,
+   "max_pain": 23700.0,
+   "n_strikes": 21,
+   "pcr": null,
+   "quadrants": [
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23700.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23750.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23800.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23850.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23900.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23950.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24000.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24050.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24100.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24150.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24200.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24250.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24300.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24350.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24400.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24450.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24500.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24550.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24600.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24650.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24700.0
+    }
+   ],
+   "signal_lines": {
+    "R": [
+     {
+      "color": "blue",
+      "level": 24200.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "grey",
+      "level": 24250.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 42
+     },
+     {
+      "color": "grey",
+      "level": 24300.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 40
+     }
+    ],
+    "S": [
+     {
+      "color": "blue",
+      "level": 24150.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "yellow",
+      "level": 24100.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 95
+     },
+     {
+      "color": "yellow",
+      "level": 24000.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 95
+     }
+    ]
+   },
+   "spot": 24197.4,
+   "spreads": {
+    "bear_call_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "R1 wall 24200 is 3 pts above spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    },
+    "bull_put_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "S1 wall 24150 is 47 pts below spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    }
+   },
+   "ts": 1784521980
+  },
+  {
+   "atr_pct": null,
+   "error": null,
+   "max_pain": 23700.0,
+   "n_strikes": 21,
+   "pcr": null,
+   "quadrants": [
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23700.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23750.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23800.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23850.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23900.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23950.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24000.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24050.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24100.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24150.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24200.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24250.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24300.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24350.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24400.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24450.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24500.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24550.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24600.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24650.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24700.0
+    }
+   ],
+   "signal_lines": {
+    "R": [
+     {
+      "color": "blue",
+      "level": 24200.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "grey",
+      "level": 24250.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 48
+     },
+     {
+      "color": "grey",
+      "level": 24300.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 41
+     }
+    ],
+    "S": [
+     {
+      "color": "blue",
+      "level": 24150.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "yellow",
+      "level": 24100.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 82
+     },
+     {
+      "color": "pink",
+      "level": 24000.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 66
+     }
+    ]
+   },
+   "spot": 24194.55,
+   "spreads": {
+    "bear_call_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "R1 wall 24200 is 5 pts above spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    },
+    "bull_put_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "S1 wall 24150 is 45 pts below spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    }
+   },
+   "ts": 1784522040
+  },
+  {
+   "atr_pct": null,
+   "error": null,
+   "max_pain": 23700.0,
+   "n_strikes": 21,
+   "pcr": null,
+   "quadrants": [
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23700.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23750.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23800.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23850.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23900.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23950.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24000.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24050.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24100.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24150.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24200.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24250.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24300.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24350.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24400.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24450.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24500.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24550.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24600.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24650.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24700.0
+    }
+   ],
+   "signal_lines": {
+    "R": [
+     {
+      "color": "blue",
+      "level": 24600.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "yellow",
+      "level": 24250.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 82
+     },
+     {
+      "color": "yellow",
+      "level": 24300.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 76
+     }
+    ],
+    "S": [
+     {
+      "color": "blue",
+      "level": 24200.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "pink",
+      "level": 24100.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 66
+     },
+     {
+      "color": "pink",
+      "level": 24150.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 64
+     }
+    ]
+   },
+   "spot": 24201.75,
+   "spreads": {
+    "bear_call_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "R1 wall 24600 is 398 pts above spot",
+      "credit \u20b91.75 too thin (<28% of \u20b9100 width)"
+     ],
+     "short_strike": null,
+     "width": null
+    },
+    "bull_put_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "S1 wall 24200 is 2 pts below spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    }
+   },
+   "ts": 1784522100
+  },
+  {
+   "atr_pct": null,
+   "error": null,
+   "max_pain": 23700.0,
+   "n_strikes": 21,
+   "pcr": null,
+   "quadrants": [
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23700.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23750.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23800.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23850.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23900.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23950.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24000.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24050.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24100.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24150.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24200.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24250.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24300.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24350.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24400.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24450.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24500.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24550.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24600.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24650.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24700.0
+    }
+   ],
+   "signal_lines": {
+    "R": [
+     {
+      "color": "blue",
+      "level": 24300.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "yellow",
+      "level": 24250.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 99
+     },
+     {
+      "color": "pink",
+      "level": 24600.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 63
+     }
+    ],
+    "S": [
+     {
+      "color": "blue",
+      "level": 24200.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "yellow",
+      "level": 24100.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 79
+     },
+     {
+      "color": "yellow",
+      "level": 24150.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 75
+     }
+    ]
+   },
+   "spot": 24202.55,
+   "spreads": {
+    "bear_call_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "R1 wall 24300 is 97 pts above spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    },
+    "bull_put_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "S1 wall 24200 is 3 pts below spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    }
+   },
+   "ts": 1784522160
+  },
+  {
+   "atr_pct": null,
+   "error": null,
+   "max_pain": 23700.0,
+   "n_strikes": 21,
+   "pcr": null,
+   "quadrants": [
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23700.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23750.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23800.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23850.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23900.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23950.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24000.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24050.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24100.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24150.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24200.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24250.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24300.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24350.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24400.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24450.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24500.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24550.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24600.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24650.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24700.0
+    }
+   ],
+   "signal_lines": {
+    "R": [
+     {
+      "color": "blue",
+      "level": 24200.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "grey",
+      "level": 24250.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 48
+     },
+     {
+      "color": "grey",
+      "level": 24300.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 46
+     }
+    ],
+    "S": [
+     {
+      "color": "blue",
+      "level": 24000.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "yellow",
+      "level": 24150.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 99
+     },
+     {
+      "color": "yellow",
+      "level": 24100.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 80
+     }
+    ]
+   },
+   "spot": 24199.85,
+   "spreads": {
+    "bear_call_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "R1 wall 24200 is 0 pts above spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    },
+    "bull_put_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "S1 wall 24000 is 200 pts below spot",
+      "credit \u20b914.7 too thin (<28% of \u20b9100 width)"
+     ],
+     "short_strike": null,
+     "width": null
+    }
+   },
+   "ts": 1784522220
+  },
+  {
+   "atr_pct": null,
+   "error": null,
+   "max_pain": 23700.0,
+   "n_strikes": 21,
+   "pcr": null,
+   "quadrants": [
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23700.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23750.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23800.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23850.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23900.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23950.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24000.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24050.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24100.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24150.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24200.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24250.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24300.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24350.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24400.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24450.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24500.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24550.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24600.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24650.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24700.0
+    }
+   ],
+   "signal_lines": {
+    "R": [
+     {
+      "color": "blue",
+      "level": 24200.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "grey",
+      "level": 24300.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 48
+     },
+     {
+      "color": "grey",
+      "level": 24250.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 47
+     }
+    ],
+    "S": [
+     {
+      "color": "blue",
+      "level": 24150.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "yellow",
+      "level": 24100.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 88
+     },
+     {
+      "color": "yellow",
+      "level": 24000.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 82
+     }
+    ]
+   },
+   "spot": 24191.6,
+   "spreads": {
+    "bear_call_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "R1 wall 24200 is 8 pts above spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    },
+    "bull_put_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "S1 wall 24150 is 42 pts below spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    }
+   },
+   "ts": 1784522280
+  },
+  {
+   "atr_pct": null,
+   "error": null,
+   "max_pain": 23700.0,
+   "n_strikes": 21,
+   "pcr": null,
+   "quadrants": [
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23700.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23750.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23800.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23850.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23900.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23950.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24000.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24050.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24100.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24150.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24200.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24250.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24300.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24350.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24400.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24450.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24500.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24550.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24600.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24650.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24700.0
+    }
+   ],
+   "signal_lines": {
+    "R": [
+     {
+      "color": "blue",
+      "level": 24250.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "yellow",
+      "level": 24300.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 99
+     },
+     {
+      "color": "pink",
+      "level": 24400.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 62
+     }
+    ],
+    "S": [
+     {
+      "color": "blue",
+      "level": 24200.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "pink",
+      "level": 24150.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 67
+     },
+     {
+      "color": "pink",
+      "level": 24100.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 66
+     }
+    ]
+   },
+   "spot": 24201.55,
+   "spreads": {
+    "bear_call_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "R1 wall 24250 is 48 pts above spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    },
+    "bull_put_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "S1 wall 24200 is 2 pts below spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    }
+   },
+   "ts": 1784522340
+  },
+  {
+   "atr_pct": null,
+   "error": null,
+   "max_pain": 23700.0,
+   "n_strikes": 21,
+   "pcr": null,
+   "quadrants": [
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23700.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23750.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23800.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23850.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23900.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23950.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24000.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24050.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24100.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24150.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24200.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24250.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24300.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24350.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24400.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24450.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24500.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24550.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24600.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24650.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24700.0
+    }
+   ],
+   "signal_lines": {
+    "R": [
+     {
+      "color": "blue",
+      "level": 24250.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "yellow",
+      "level": 24300.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 90
+     },
+     {
+      "color": "pink",
+      "level": 24400.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 59
+     }
+    ],
+    "S": [
+     {
+      "color": "blue",
+      "level": 24200.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "pink",
+      "level": 24150.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 64
+     },
+     {
+      "color": "pink",
+      "level": 24100.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 57
+     }
+    ]
+   },
+   "spot": 24207.75,
+   "spreads": {
+    "bear_call_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "R1 wall 24250 is 42 pts above spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    },
+    "bull_put_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "S1 wall 24200 is 8 pts below spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    }
+   },
+   "ts": 1784522400
+  },
+  {
+   "atr_pct": null,
+   "error": null,
+   "max_pain": 23700.0,
+   "n_strikes": 21,
+   "pcr": null,
+   "quadrants": [
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23700.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23750.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23800.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23850.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23900.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23950.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24000.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24050.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24100.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24150.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24200.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24250.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24300.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24350.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24400.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24450.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24500.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24550.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24600.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24650.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24700.0
+    }
+   ],
+   "signal_lines": {
+    "R": [
+     {
+      "color": "blue",
+      "level": 24250.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "yellow",
+      "level": 24300.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 93
+     },
+     {
+      "color": "pink",
+      "level": 24350.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 65
+     }
+    ],
+    "S": [
+     {
+      "color": "blue",
+      "level": 24200.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "pink",
+      "level": 24150.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 71
+     },
+     {
+      "color": "pink",
+      "level": 24100.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 69
+     }
+    ]
+   },
+   "spot": 24212.1,
+   "spreads": {
+    "bear_call_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "R1 wall 24250 is 38 pts above spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    },
+    "bull_put_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "S1 wall 24200 is 12 pts below spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    }
+   },
+   "ts": 1784522460
+  },
+  {
+   "atr_pct": null,
+   "error": null,
+   "max_pain": 23700.0,
+   "n_strikes": 21,
+   "pcr": null,
+   "quadrants": [
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23700.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23750.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23800.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23850.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23900.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23950.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24000.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24050.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24100.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24150.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24200.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24250.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24300.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24350.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24400.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24450.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24500.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24550.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24600.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24650.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24700.0
+    }
+   ],
+   "signal_lines": {
+    "R": [
+     {
+      "color": "blue",
+      "level": 24250.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "yellow",
+      "level": 24300.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 77
+     },
+     {
+      "color": "grey",
+      "level": 24400.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 53
+     }
+    ],
+    "S": [
+     {
+      "color": "blue",
+      "level": 24200.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "pink",
+      "level": 24150.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 64
+     },
+     {
+      "color": "pink",
+      "level": 24100.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 55
+     }
+    ]
+   },
+   "spot": 24217.9,
+   "spreads": {
+    "bear_call_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "R1 wall 24250 is 32 pts above spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    },
+    "bull_put_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "S1 wall 24200 is 18 pts below spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    }
+   },
+   "ts": 1784522520
+  },
+  {
+   "atr_pct": null,
+   "error": null,
+   "max_pain": 23700.0,
+   "n_strikes": 21,
+   "pcr": null,
+   "quadrants": [
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23700.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23750.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23800.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23850.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23900.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23950.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24000.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24050.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24100.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24150.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24200.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24250.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24300.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24350.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24400.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24450.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24500.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24550.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24600.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24650.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24700.0
+    }
+   ],
+   "signal_lines": {
+    "R": [
+     {
+      "color": "blue",
+      "level": 24250.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "yellow",
+      "level": 24300.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 87
+     },
+     {
+      "color": "pink",
+      "level": 24400.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 60
+     }
+    ],
+    "S": [
+     {
+      "color": "blue",
+      "level": 24200.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "pink",
+      "level": 24100.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 70
+     },
+     {
+      "color": "pink",
+      "level": 24150.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 60
+     }
+    ]
+   },
+   "spot": 24209.5,
+   "spreads": {
+    "bear_call_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "R1 wall 24250 is 40 pts above spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    },
+    "bull_put_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "S1 wall 24200 is 10 pts below spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    }
+   },
+   "ts": 1784522580
+  },
+  {
+   "atr_pct": null,
+   "error": null,
+   "max_pain": 23700.0,
+   "n_strikes": 21,
+   "pcr": null,
+   "quadrants": [
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23700.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23750.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23800.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23850.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23900.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 23950.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24000.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24050.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24100.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24150.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24200.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24250.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24300.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24350.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24400.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24450.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24500.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24550.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24600.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24650.0
+    },
+    {
+     "ce": null,
+     "pe": null,
+     "strike": 24700.0
+    }
+   ],
+   "signal_lines": {
+    "R": [
+     {
+      "color": "blue",
+      "level": 24300.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "yellow",
+      "level": 24250.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 98
+     },
+     {
+      "color": "pink",
+      "level": 24500.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 72
+     }
+    ],
+    "S": [
+     {
+      "color": "blue",
+      "level": 24200.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 100
+     },
+     {
+      "color": "pink",
+      "level": 24150.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 61
+     },
+     {
+      "color": "pink",
+      "level": 24100.0,
+      "oi": 0,
+      "oi_chg": 0,
+      "strength": 56
+     }
+    ]
+   },
+   "spot": 24209.95,
+   "spreads": {
+    "bear_call_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "R1 wall 24300 is 90 pts above spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    },
+    "bull_put_spread": {
+     "credit": null,
+     "eligible": false,
+     "max_loss": null,
+     "reasons": [
+      "S1 wall 24200 is 10 pts below spot",
+      "wall too close to spot (< 2.0 strike gaps)"
+     ],
+     "short_strike": null,
+     "width": null
+    }
+   },
+   "ts": 1784522640
+  }
+ ],
+ "source": {
+  "day": "2026-07-20",
+  "expiry": "2026-07-21",
+  "frames": 60,
+  "symbol": "NIFTY"
+ }
+}
