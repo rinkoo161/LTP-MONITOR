@@ -16,6 +16,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+import hmac      # v59.79 — constant-time secret compare on the public postback
 import json
 import urllib.error
 import config
@@ -26,7 +27,7 @@ from agents import Orchestrator, compute_momentum
 import agents
 
 BASE = os.path.dirname(os.path.abspath(__file__))
-APP_VERSION = "v59.78"   # maintained per explicit request; last delivered was v49
+APP_VERSION = "v59.79"   # maintained per explicit request; last delivered was v49
 
 app = FastAPI(title="LTP Option Chain Monitor")
 
@@ -47,11 +48,26 @@ import auth
 
 SESSION_COOKIE = "ltp_session"
 _AUTH_FREE = ("/login", "/setup", "/favicon.ico", "/api/version",
-              "/api/auth/login", "/api/auth/setup", "/api/auth/status")
+              "/api/auth/login", "/api/auth/setup", "/api/auth/status",
+              # v59.79 — INBOUND WEBHOOKS. A third party's server cannot
+              # hold a session cookie, so an endpoint it must reach can
+              # never sit behind the session gate. Both of these carry
+              # their OWN credential instead and refuse (503) until one
+              # is configured:
+              #   tradingview/webhook — secret in the POST body
+              #   dhan/postback/{secret} — secret in the PATH, because
+              #     Dhan's postback has no signature and no custom
+              #     headers; the URL itself is the credential
+              # This was also a live BUG: the TradingView endpoint was
+              # never on this list, so with auth_enabled it answered 401
+              # before its own secret check ever ran — a documented
+              # feature that could not work.
+              "/api/tradingview/webhook")
 
 
 def _auth_free(path):
-    return path in _AUTH_FREE or path.startswith("/static/")
+    return (path in _AUTH_FREE or path.startswith("/static/")
+            or path.startswith("/api/dhan/postback/"))
 
 
 def current_user(request):
@@ -936,6 +952,7 @@ class SettingsIn(BaseModel):
     broker_reconcile_interval_sec: int | None = None  # v59.69 — live position reconcile cadence
     exit_retry_cooldown_sec: int | None = None  # v59.69 — cooldown after failed live SELL
     order_update_ws_enabled: bool | None = None  # v59.76 — Dhan order-update websocket
+    dhan_postback_secret: str | None = None  # v59.79 — path secret for the public postback
     slippage_impact_alpha: float | None = None  # v59.69 — size impact exponent on spread cost
     closed_trades_memory_cap: int | None = None  # v59.71 — in-memory trade window size
     min_edge_cost_ratio: float | None = None  # v59.73 — designed edge vs cost admission bar
@@ -1987,6 +2004,68 @@ def api_trades():
             "live": (lifetime or {}).get("live"),
         },
     }
+
+
+@app.post("/api/dhan/postback/{secret}")
+async def api_dhan_postback(secret: str, request: Request):
+    """Dhan's order POSTBACK — the push channel for a PUBLICLY reachable
+    deployment (ngrok / Cloudflare Tunnel / real host).
+
+    WHY THE SECRET IS IN THE PATH. Checked against Dhan's v2 docs: the
+    postback carries no HMAC, no signature and no configurable headers —
+    the only thing you can set is the URL. So the URL IS the credential
+    (a capability URL), and it must therefore be treated like a
+    password: long, random, never pasted into a screenshot or a public
+    repo. Blank secret = 503, which is the shipped default.
+
+    Dhan will not call localhost/127.0.0.1 (their docs say so
+    explicitly), which is why this endpoint only matters behind a
+    tunnel. If you are NOT publicly exposed, leave it off: the
+    order-update websocket (v59.76) already delivers the same events
+    over an OUTBOUND connection with no exposure at all, and this
+    endpoint is then pure attack surface for zero gain.
+
+    What it does is deliberately narrow: it hands the payload to the
+    SAME handler the websocket feeds (ExecutionAgent._on_order_event via
+    dhan_order_ws.normalize_event — one interpreter, two envelopes),
+    which is report-and-repair only. It never places, modifies or exits
+    an order. Worst case for a leaked URL is a corrupted view of the
+    book plus alert noise — bad, and still not an order-placing
+    capability.
+    """
+    cfg = config.load()
+    expected = cfg.get("dhan_postback_secret", "")
+    if not expected:
+        raise HTTPException(503, "No dhan_postback_secret configured — set "
+                                 "one in Settings first (the URL is the only "
+                                 "credential Dhan's postback can carry)")
+    # Constant-time: this endpoint is internet-facing by definition, so
+    # the comparison must not leak the secret one character at a time.
+    if not hmac.compare_digest(str(secret), str(expected)):
+        pilot.bus.log("execution",
+                      f"🔔 Dhan postback REJECTED — wrong secret in path "
+                      f"(from {request.client.host if request.client else '?'})")
+        raise HTTPException(401, "Invalid postback secret")
+    raw = await request.body()
+    if len(raw) > 64 * 1024:      # an order event is ~1 KB; this is a bound,
+        raise HTTPException(413, "payload too large")   # not a guess
+    try:
+        payload = json.loads(raw or b"{}")
+    except ValueError:
+        raise HTTPException(400, "body is not valid JSON")
+    ex = next((a for a in pilot.agents if a.name == "execution"), None)
+    if ex is None:
+        # Accepted-but-unprocessed is the honest answer: retrying would
+        # not help, and 500 would tell Dhan we are broken when we are
+        # merely not started.
+        return {"ok": True, "note": "agents not running — event logged only"}
+    try:
+        ex._on_order_event(payload)
+    except Exception as e:
+        pilot.bus.log("execution",
+                      f"⚠ postback handler failed: {type(e).__name__}: {e}")
+        return {"ok": False, "error": f"{type(e).__name__}"}
+    return {"ok": True}
 
 
 @app.get("/api/live/pnl")

@@ -49,15 +49,29 @@ def auth_message(client_id, token):
 
 
 def normalize_event(msg):
-    """order_alert → a flat dict, or None for anything else.
+    """An order event → a flat dict, or None for anything else.
+
+    Accepts BOTH envelopes Dhan uses, because there must be exactly one
+    interpreter of order-event fields (v59.79):
+
+      * websocket: {"Type": "order_alert", "Data": {...}}
+      * POSTBACK : the bare JSON body Dhan POSTs to a configured URL
+                   (no envelope, no "Type" — identified by carrying an
+                   order id / status).
 
     Returns {"order_id", "status", "correlation_id", "security_id",
     "txn_type", "qty", "traded_qty", "avg_price", "raw"} with None for
     absent fields. Shape-tolerant for the same reason parse_fills() is:
-    Dhan mixes camelCase and wrapping across surfaces."""
-    if not isinstance(msg, dict) or msg.get("Type") != "order_alert":
+    Dhan mixes camelCase, snake_case and wrapping across surfaces."""
+    if not isinstance(msg, dict):
         return None
-    d = msg.get("Data")
+    if msg.get("Type") == "order_alert":
+        d = msg.get("Data")
+    elif any(k in msg for k in ("orderId", "orderNo", "order_id",
+                                "orderStatus")):
+        d = msg               # postback: the body IS the payload
+    else:
+        return None
     if not isinstance(d, dict) or not d:
         return None          # an alert with no payload is noise, not an event
 
@@ -88,8 +102,12 @@ def normalize_event(msg):
             "security_id": _s("securityId", "security_id"),
             "txn_type": _s("txnType", "transactionType"),
             "qty": _i("quantity", "qty"),
-            "traded_qty": _i("tradedQty", "tradedQuantity", "filledQty"),
-            "avg_price": _f("avgTradedPrice", "tradedPrice", "price"),
+            # filled_qty / averageTradedPrice are the POSTBACK spellings
+            # (v59.79) — same quantities, different surface.
+            "traded_qty": _i("tradedQty", "tradedQuantity", "filledQty",
+                             "filled_qty"),
+            "avg_price": _f("avgTradedPrice", "averageTradedPrice",
+                            "tradedPrice", "price"),
             "raw": d}
 
 

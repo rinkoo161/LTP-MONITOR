@@ -72,8 +72,13 @@ try:
     # v59.78 — pin the clock mid-session: the entry-runway guard runs
     # before the daily-loss gate, and a test executed after 14:52 IST
     # would hit runway instead of the gate under test.
-    from datetime import datetime as _dt_t3
-    agents.now_ist = lambda: _dt_t3(2026, 8, 10, 11, 0, tzinfo=agents.IST)
+    # v59.79 — pin the TIME but keep TODAY's DATE: realized_pnl_today()
+    # filters closed trades by the patched clock's date, so a hardcoded
+    # date made the fixture rows (stamped with the real TODAY) invisible
+    # and the daily-loss gate passed on an empty book.
+    _t3_real_now = _orig_now_t3()
+    agents.now_ist = lambda: _t3_real_now.replace(hour=11, minute=0,
+                                                  second=0, microsecond=0)
     config.load = lambda: {**_base_cfg, "paper_mode": True,
                            "daily_loss_limit": 5000,
                            "futures_risk_per_trade_rupees": 2500,

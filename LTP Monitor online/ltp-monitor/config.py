@@ -306,6 +306,15 @@ DEFAULTS = {
                            # refuse to re-place for this long (the first order
                            # may have filled; a 2s-cadence re-fire was a
                            # duplicate-order generator)
+    "dhan_postback_secret": "",  # v59.79 — enables POST /api/dhan/postback/{secret}.
+                           # Dhan's postback carries NO signature/HMAC (checked
+                           # against their v2 docs), and it only lets you
+                           # configure a URL — so the secret has to live in the
+                           # PATH: the URL itself is the credential. Blank =
+                           # endpoint disabled (503), which is the default.
+                           # Only needed when this app is publicly reachable
+                           # (ngrok/tunnel); the order-update websocket already
+                           # delivers the same events with no exposure at all.
     "order_update_ws_enabled": True,  # v59.76 — Dhan order-update websocket
                            # (wss://api-order-update.dhan.co, client connects
                            # OUT — no postback URL needed). Live mode only; a
@@ -979,7 +988,8 @@ SECRET_KEYS = ("dhan_client_id", "dhan_access_token", "anthropic_api_key",
                "kotak_sid", "kotak_auth_token",
                "kotak_session_token", "kotak_mobile",
                "twelve_data_api_key", "alpha_vantage_api_key", "newsapi_api_key",
-               "tradingview_webhook_secret", "telegram_bot_token")
+               "tradingview_webhook_secret", "telegram_bot_token",
+               "dhan_postback_secret")
 
 
 def load() -> dict:

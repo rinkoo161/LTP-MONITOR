@@ -4,6 +4,44 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.79 — Dhan postback receiver (for tunnelled deployments) + a dead webhook revived (2026-08-11)
+
+Operator runs ngrok, so a postback URL is now actually reachable and
+worth having as a third confirmation channel.
+
+**`POST /api/dhan/postback/{secret}`.** Verified against Dhan's v2 docs
+first: the postback carries NO HMAC, NO signature and NO configurable
+headers — the only thing settable is the URL — and Dhan explicitly
+refuses to call `localhost`/`127.0.0.1`. So the secret lives in the
+PATH: the URL *is* the credential (a capability URL), compared with
+`hmac.compare_digest` because the endpoint is internet-facing by
+definition. Blank secret ⇒ 503, the shipped default. Body bounded at
+64 KB, malformed JSON ⇒ 400, every rejection logged with the caller IP.
+
+The payload is handed to the SAME handler the websocket feeds
+(`_on_order_event` via `normalize_event`) — `normalize_event` now
+accepts both envelopes (`{"Type":"order_alert","Data":{…}}` and the
+bare postback body, plus its `filled_qty`/`averageTradedPrice`
+spellings). One interpreter, two surfaces: the drift-pair rule this
+codebase keeps having to re-learn. The handler stays report-and-repair
+— it never places, modifies or exits an order, so the worst case for a
+leaked URL is a corrupted view of the book plus alert noise.
+
+**A live bug found while doing it:** `/api/tradingview/webhook` was
+never on the auth allowlist, so with `auth_enabled` it answered 401
+*before* its own body-secret check ever ran — a documented feature that
+could not work since auth shipped. Both inbound webhooks are now
+auth-free by design (a third party's server cannot hold a session
+cookie) and carry their own credential instead; everything else stays
+session-gated, asserted per-route in the test.
+
+Standing advice recorded here so it is not lost: the postback is the
+WORST of the three channels for a home deployment. The order-update
+websocket (v59.76) delivers the same events over an OUTBOUND connection
+with zero exposure, and the polling confirm (v59.75) is a second
+independent check. Enable the postback only while genuinely tunnelled,
+and treat the URL as a password.
+
 ## v59.78 — the 2026-08-10 post-mortem: LLM truncation, entry runway, regime fit (2026-08-10)
 
 First gated live-paper day: 8 trades, −₹3,461 (vs the −₹13.9k historical
