@@ -246,19 +246,23 @@ check("and no position was opened",
       not (b4.get("positions") or {}).get("SENSEX"),
       str(b4.get("positions")))
 
-# (b) target2 already satisfied by the live price
-b5, ex5 = _bus_ex(ltp=700.0)
+# (b) target2 already satisfied by the live price.
+# v59.80 — the fill must stay INSIDE the entry-price band (fill 370 vs
+# entry 358.85 = 3%), or the new fill-time geometry guard rejects the
+# trade earlier for a different reason and this probe is never reached.
+# A target BELOW the fill is the shape that survives the band check.
+b5, ex5 = _bus_ex(ltp=370.0)
 j5 = _job()
-j5["signal"]["target2"] = 646.3                   # live 700 >= 646.3
+j5["signal"]["target2"] = 300.0                   # live 370 >= 300
 r5 = ex5.place(j5)
 check("an entry already at target-2 is REFUSED",
       isinstance(r5, dict) and "exit immediately" in str(r5.get("error", "")),
       str(r5)[:130])
 
-# (c) stop already breached
-b6, ex6 = _bus_ex(ltp=200.0)
+# (c) stop already breached — same band constraint as (b) above.
+b6, ex6 = _bus_ex(ltp=370.0)
 j6 = _job()
-j6["signal"]["stoploss"] = 251.19                 # live 200 <= 251.19
+j6["signal"]["stoploss"] = 380.0                  # live 370 <= 380
 r6 = ex6.place(j6)
 check("an entry already at its stop is REFUSED",
       isinstance(r6, dict) and "exit immediately" in str(r6.get("error", "")),
@@ -271,6 +275,18 @@ check("an entry already at its stop is REFUSED",
 check("and it is labelled a stop, not a 'trailing stop in profit'",
       "trailing stop" not in str(r6.get("error", "")),
       str(r6.get("error", ""))[:120])
+
+# (d) v59.80 — a fill on a DIFFERENT price scale than the signal is
+# refused before any probe: the 2026-08-11 loss pair (signal priced a
+# ~Rs 10 option, filled at Rs 43.45) that pinned the stop to entry.
+b7, ex7 = _bus_ex(ltp=700.0)
+r7 = ex7.place(_job())                             # entry 358.85 vs fill 700
+check("a fill far outside the entry band is REFUSED (fill-time geometry)",
+      isinstance(r7, dict)
+      and "geometry rejected" in str(r7.get("error", "")),
+      str(r7)[:130])
+check("and no position was opened for it",
+      not (b7.get("positions") or {}).get("SENSEX"))
 
 # (d) a HEALTHY entry still goes through — a guard that blocks
 # everything is a shutdown, not a guard.
