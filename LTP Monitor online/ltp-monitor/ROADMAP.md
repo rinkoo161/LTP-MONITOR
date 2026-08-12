@@ -4,6 +4,49 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.80 — signal geometry is re-validated against the ACTUAL fill (2026-08-12)
+
+Root cause of the 2026-08-11 loss pair — 2 trades, ₹856, both with
+mfe ₹0, i.e. they never saw a single favourable tick:
+
+    11:39:29  BUY_PE 24450  entry ₹10.00  sl ₹4.00  t1 ₹22.00  conf 92
+              filled at ₹43.45 — the SAME option, 4x higher, inside 60 s
+
+Every signal-side invariant PASSED it: a 60% stop is exactly the
+STOP_BOUNDS upper bound and RR was exactly 2.0. They all validate the
+signal against ITSELF. The cross-instrument guard that exists for
+precisely this shape compares against `analysis["strikes"]` — the same
+60-SECOND pack the signal came from — so it cannot detect staleness by
+construction, while `_place()` fills from the 3-second chain. At ₹43.45
+the ₹22 target sat BELOW entry: `t1_hit` fired on cycle one, the
+breakeven lock pinned the stop to the entry price, and the next downtick
+closed it.
+
+`analyzer.reprice_to_reference()` is now the ONE definition of the
+three-band rule (≤10% leave · ≤40% rescale preserving risk-reward ·
+>40% reject). `enforce_signal_invariants` calls it — behaviour-
+preserving, the four signal suites pass unchanged — and so does the
+fill path, where the reference is the price actually paid and therefore
+cannot be stale. `_place()` also refuses outright when the fill is
+already at/past target1; `instant_exit_reason` deliberately omits
+target1 (it is a ratchet trigger, not an exit) so it could never have
+caught this, and that behaviour is unchanged and asserted.
+
+A screening failure REFUSES the trade rather than admitting it.
+
+Tests: `test_fill_geometry.py` (20 checks, driven by the real logged
+signal). `test_option_churn_loop.py` had two fixtures whose fills sat
+49%/79% from the signal entry — the new guard refused them earlier than
+the probe they were written for, so they moved inside the band to keep
+those probes genuinely exercised, plus a new case (d) for the guard.
+
+Gate: golden replay bit-for-bit (sha ae44f3d1…, unchanged — `analyze()`
+is untouched); 15 suites green; latency unaffected (the guard is
+arithmetic on four floats and is not on the per-frame path).
+
+Merged from `fix/fill-time-geometry` per the branch discipline adopted
+in CLAUDE.md.
+
 ## v59.79 — Dhan postback receiver (for tunnelled deployments) + a dead webhook revived (2026-08-11)
 
 Operator runs ngrok, so a postback URL is now actually reachable and
