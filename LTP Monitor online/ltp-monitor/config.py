@@ -268,6 +268,19 @@ DEFAULTS = {
     "max_spread_capital_pct": 60.0,
     "spread_reentry_cooldown_min": 15,
     "pa_min_trades_for_confidence": 15,  # min backtest trades before a version can go live
+    "partial_day_min_coverage_pct": 60,  # v59.81 — a replayed day must carry at
+                           # least this % of the MEDIAN day's bars for that
+                           # symbol, or it is excluded and logged. A host sleep
+                           # on 2026-08-13 left a 3.6h hole mid-session (243
+                           # bars vs 1,078-1,391 on healthy days); replayed as a
+                           # full day it would have counted as one independent
+                           # day toward the promotion gate's 10-day minimum.
+    "eod_max_price_age_sec": 900,  # v59.81 — if the last known price is older
+                           # than this when the EOD square-off fires, the trade
+                           # still closes (never leave a position open) but the
+                           # fill is marked UNVERIFIED rather than booking a
+                           # P&L that reads as real. The 2026-08-13 square-off
+                           # ran on 6.5-hour-old quotes and recorded ₹12.
     "min_entry_runway_min": 30,   # v59.78 — minimum minutes to the forced
                            # square-off for a NEW entry, every instrument, live
                            # and replay. 2026-08-10's biggest loss entered at

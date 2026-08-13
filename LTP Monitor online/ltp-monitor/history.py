@@ -1390,6 +1390,47 @@ def coverage():
     return out
 
 
+def day_bar_coverage(symbol, kind="opt"):
+    """{day: bar_count} for one symbol — how much of each session was
+    actually RECORDED.
+
+    v59.81. On 2026-08-13 the host slept from 11:52 to 18:25, so the
+    archive holds 243 frames for that day against 1,078-1,391 on healthy
+    days, with a 3.6-hour hole in the middle of live trading. The day is
+    excluded from replays only while it is "today"; tomorrow it becomes
+    a completed day and is replayed as a FULL session, silently feeding
+    partial data into net_pnl, pnl_sd_day and the out-of-sample window
+    the promotion gate scores. 2026-08-08 (65) and 2026-08-12 (169) are
+    already in the archive with the same shape.
+
+    Coverage is the input to that judgement, so it lives next to the
+    data rather than being recomputed by each caller.
+
+    MEASURE THE TABLE THE REPLAY ACTUALLY READS. `kind="opt"` counts
+    DISTINCT chain_snapshot timestamps, not `candles` rows, because
+    replay_spreads consumes day_chain_frames() -> chain_snapshots. The
+    distinction is not academic: option CANDLES are backfilled from the
+    broker after the fact, so 2026-08-13 shows 61,558 of a ~75,000
+    median (82% — passes any sane floor) while the LIVE snapshots that
+    day number 243 against a ~1,100 median (20% — the real hole). Using
+    the candle count would have waved the incident straight through."""
+    c = _conn()
+    if kind == "opt":
+        rows = c.execute("""SELECT date(ts,'unixepoch','+5 hours','+30 minutes'),
+                                   COUNT(DISTINCT ts)
+            FROM chain_snapshots WHERE symbol=? GROUP BY 1""",
+            (symbol,)).fetchall()
+    else:
+        rows = c.execute("""SELECT date(ts,'unixepoch','+5 hours','+30 minutes'),
+                                   COUNT(*)
+            FROM candles
+            WHERE security_id IN (SELECT security_id FROM instruments
+                                  WHERE symbol=? AND kind=?)
+            GROUP BY 1""", (symbol, kind)).fetchall()
+    c.close()
+    return {r[0]: r[1] for r in rows}
+
+
 def chain_days(symbol):
     """Trading days that have option-candle coverage for symbol."""
     c = _conn()

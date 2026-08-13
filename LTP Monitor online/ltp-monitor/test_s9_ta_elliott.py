@@ -283,7 +283,9 @@ _h.index_days = lambda s: ["D"]
 # filter for replay). The backtester passes it, so the stub must
 # accept it or the replay raises instead of returning the fixture.
 _h.day_index_candles = lambda s, d, for_compute=False: _day
-_b._completed_days = lambda d: ["D"]
+# v59.81 — _completed_days gained (symbol, kind, log) for the
+# day-coverage filter; absorb them so this stub keeps working.
+_b._completed_days = lambda d, *a, **k: ["D"]
 
 check("replay_ew_reversal exists", callable(_b.replay_ew_reversal))
 check("replay_ta_elliott exists", callable(_b.replay_ta_elliott))

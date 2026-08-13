@@ -957,6 +957,8 @@ class SettingsIn(BaseModel):
     closed_trades_memory_cap: int | None = None  # v59.71 — in-memory trade window size
     min_edge_cost_ratio: float | None = None  # v59.73 — designed edge vs cost admission bar
     min_entry_runway_min: int | None = None  # v59.78 — min minutes to square-off for entries
+    partial_day_min_coverage_pct: int | None = None  # v59.81 — day-quality floor for replays
+    eod_max_price_age_sec: int | None = None  # v59.81 — stale-fill marking at EOD square-off
     option_buy_require_regime_fit: bool | None = None  # v59.78 — regime gate for option buys
     exit_min_cost_coverage: float | None = None  # v59.73 — profit-lock cost coverage
     # v59.68 — option cost rates (now registered in DEFAULTS; see config.py)

@@ -412,6 +412,30 @@ def minutes_to_squareoff(ts=None, cfg=None):
     return cutoff - (t.hour * 60 + t.minute)
 
 
+def stale_fill_note(price_ts, cfg=None, now_ts=None):
+    """"" if the price is fresh enough to book, else an UNVERIFIED note.
+
+    v59.81. The EOD square-off deliberately runs BEFORE the staleness
+    guard (v59.69) so a position can never be left open overnight — but
+    that made "last known price" unbounded. On 2026-08-13 the host slept
+    11:52 -> 18:25; on wake the square-off closed a BANKNIFTY spread
+    using quotes frozen 6.5 hours earlier and recorded a clean-looking
+    net of Rs 12 for a trade whose real outcome is unknown.
+
+    Closing is still right — an open position is worse. What changes is
+    that the RECORD says so, instead of a fabricated number reading as
+    fact. A 90-second-old quote is fine; an hours-old one is not."""
+    cfg = cfg if cfg is not None else config.load()
+    if not price_ts:
+        return " [fill UNVERIFIED: no price timestamp]"
+    age = (now_ts or time.time()) - price_ts
+    limit = float(cfg.get("eod_max_price_age_sec", 900) or 900)
+    if age <= limit:
+        return ""
+    return (f" [fill UNVERIFIED: last price {age / 60:.0f}m old "
+            f"(> {limit / 60:.0f}m) — P&L is indicative, not a real fill]")
+
+
 def realized_pnl_today(bus):
     """Sum of TODAY's closed-trade net P&L — the ONE definition of "day
     P&L" for risk gating.
@@ -4984,7 +5008,8 @@ class ExecutionAgent(Agent):
                 if sym in _cur:
                     _cur[sym] = p
                     self.bus.set("futures_positions", _cur)
-                self.exit_future(sym, "market closed — squaring off")
+                self.exit_future(sym, "market closed — squaring off"
+                                 + stale_fill_note(p.get("pnl_ts"), cfg))
                 continue
             _fts = ohlc.get("ts")
             _max_age = cfg.get("exit_quote_max_age_sec", 90)
@@ -6122,7 +6147,9 @@ class ExecutionAgent(Agent):
                             else (l["ltp"] - l["entry"]) for l in sp["legs"])
                 sp["pnl"] = round(pnl_ps * sp["qty"], 0)
                 sp["pnl_per_share"] = round(pnl_ps, 2)
-                self.exit_spread(sid, "market closed — forced square-off (feed stale)")
+                self.exit_spread(sid, "market closed — forced square-off "
+                                 "(feed stale)"
+                                 + stale_fill_note(sp.get("pnl_ts"), cfg))
                 continue
             if stale:
                 continue
@@ -7065,8 +7092,8 @@ class ExecutionAgent(Agent):
             if sym in positions:
                 positions[sym] = p
                 self.bus.set("positions", positions)
-            self.exit("market closing — squaring off intraday position",
-                      symbol=sym)
+            self.exit("market closing — squaring off intraday position"
+                      + stale_fill_note(p.get("pnl_ts"), cfg), symbol=sym)
             return f"{sym} {p['strike']} {p['leg']} — EOD square-off"
         # 2. Stale quote: acting on an old price during a fast move is
         #    worse than not acting (MarketDataAgent's failure backoff
