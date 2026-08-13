@@ -143,6 +143,20 @@ DEFAULTS = {
     "paper_mode": True,          # simulate orders until explicitly disabled
     "auto_execute": False,       # autopilot may only place orders when True
     "min_confidence": 70,        # AI confidence needed to act
+    # v59.83 signal repeat suppression. The 13 Aug journal published
+    # NIFTY BUY_PE 24350 at 09:17/09:21/09:28/09:39/09:42 — one trade,
+    # five risk evaluations. The 120s cooldown is shorter than every
+    # one of those gaps and the 15-min backoff only arms on HARD
+    # reject reasons, so neither caught it. A setup is re-published
+    # only when something below actually moved. These are suppression
+    # bounds, NOT entry criteria — loosening them cannot create a
+    # trade that the risk gate would otherwise refuse, it can only
+    # re-ask a question already answered.
+    "signal_dedup_enabled": True,
+    "signal_repeat_window_sec": 900,   # same setup stays suppressed this long
+    "signal_repeat_conf_delta": 5,     # confidence points that count as news
+    "signal_repeat_spot_move_pct": 0.15,   # % underlying move that re-opens it
+    "signal_repeat_geometry_pct": 10.0,    # % move in entry/SL/T1 that re-opens it
     "max_trades_per_day": 3,     # hard cap for autopilot
     # DO NOT raise above the sum of the per-class budgets
     # (budget_futures/spread/option_daily_loss = 7,500). Those deliberately
