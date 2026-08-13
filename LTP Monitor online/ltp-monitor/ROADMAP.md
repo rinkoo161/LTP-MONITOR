@@ -4,6 +4,58 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.81 — the host-sleep incident: partial days and stale EOD fills (2026-08-13)
+
+macOS suspended the app from **11:52 to 18:25** — 3.6 hours of live
+market. The machine never rebooted (28 days uptime) and the process
+never died; every timer simply froze, and on wake it ran the missed
+15:45 backtest and EOD square-off at 18:26. Two silent failures.
+
+**Partial days could enter the evidence base.** The day archived 166
+chain frames against a 651 median, with a hole in the middle. It is
+excluded only while it is "today" — the NEXT day it would have replayed
+as a complete session, feeding partial data into `net_pnl`/`pnl_sd_day`
+and counting as one full independent day toward the promotion gate's
+10-day minimum. `_completed_days` now also drops days below
+`partial_day_min_coverage_pct` (60%) of that symbol's median and LOGS
+every exclusion; on the live archive it flags 2026-08-03 (108),
+08-04 (166) and 08-12 (127). Inert without a symbol, never returns an
+empty set, degrades to keep-everything on error — a quality check, not
+a blocker.
+
+Two implementation bugs that ONLY the real archive caught (both fixture
+suites passed the broken versions):
+
+  * coverage first counted `candles`, but `replay_spreads` consumes
+    `chain_snapshots`. Option candles are BACKFILLED from the broker
+    after the fact — 13 Aug shows 61,558 of a ~75,000 median (82%,
+    passes any floor) — while live snapshots cannot be (166/651 = 25%).
+    The candle count would have waved the incident straight through.
+  * retention-pruned days report 0 bars, and including those zeros
+    halved the median to exactly 166 — the incident day's own count, so
+    it passed. The norm now comes from days that HAVE data; zero-
+    coverage days are excluded under a separate message, because
+    "cannot be replayed at all" is not the same as "thin".
+
+**Stale EOD fills were booked as fact.** The market-closed square-off
+runs BEFORE the v59.69 staleness guard by design, so a position is
+never left open overnight — which left "last known price" unbounded. On
+wake it closed a BANKNIFTY spread on 6.5-hour-old quotes and recorded a
+clean-looking net of ₹12 for a trade whose real outcome is unknown.
+`stale_fill_note()` now appends *"[fill UNVERIFIED: last price Nm old …
+P&L is indicative, not a real fill]"* past `eod_max_price_age_sec`
+(900). Closing still happens — an open position is worse — but the
+record stops asserting a fabricated number. Wired into all three
+square-off paths.
+
+Not fixed by code, and worth doing: the CAUSE was the host sleeping.
+`caffeinate -is` around the app prevents it. No downstream integrity
+check recovers 3.6 hours of unrecorded market.
+
+Tests: `test_partial_day_integrity.py` (16 checks). `test_s9`'s 1-arg
+`_completed_days` stub widened. Gate: golden replay bit-for-bit,
+12 suites green.
+
 ## v59.80 — signal geometry is re-validated against the ACTUAL fill (2026-08-12)
 
 Root cause of the 2026-08-11 loss pair — 2 trades, ₹856, both with
