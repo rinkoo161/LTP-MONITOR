@@ -4,6 +4,88 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.82 — NO_TRADE was a value nobody read (2026-08-13)
+
+From an external review of the 13 Aug journal. The reviewer flagged
+"NO_TRADE entries are still running position-sizing and risk checks"
+as a **logging-hygiene** issue. It was not. It was a live path to an
+order on the wrong instrument.
+
+`enforce_signal_invariants` stamps `sig["signal"] = "NO_TRADE"`
+(`analyzer.py` ~1754) when a signal's entry premium fails the band
+check. That literal was **written in one place and read in none**. It
+therefore did not stop the trade — it travelled, and at every layer it
+was waved through by a guard shaped as a *denylist* or an `if/elif`
+with no `else`:
+
+| layer | guard | effect on `NO_TRADE` |
+|---|---|---|
+| `StrategyAgent` | `if sig["signal"] != "WAIT"` | passes — published to risk |
+| `RiskAgent.evaluate()` | direction gates are `if/elif`, no `else` | **skips** them, not fails |
+| `_enter` | duplicate-entry lock is a CE/PE allowlist | lock **disabled** |
+| `_place` | re-entry cooldown is a CE/PE allowlist | cooldown **skipped** |
+| `_place` | `leg = "CE" if … == "BUY_CE" else "PE"` | silently books **PE** |
+
+The last row is the damaging one. `_attach_security_id` runs *before*
+the invariant layer, so the order goes out on the **original** leg's
+security id while the position is recorded as PE and its P&L tracked
+off the PE row — precisely the wrong-instrument fill the band check
+exists to prevent. Near ATM the fill-time reprice check often will not
+catch it either, because the fill it compares against is read from
+that same other leg.
+
+The only barrier that would reliably have stopped it is the regime
+`allowed_signals` gate, and that deliberately no-ops when regime data
+is missing or stale.
+
+Notably the **manual** path already got this right — it uses an
+allowlist, with a comment describing this exact bug class ("the WAIT
+guard used a denylist … any unexpected value slipped straight past").
+The fix was never back-ported to autopilot. Two near-identical guards
+drifted; this is the third time that pattern has bitten this codebase.
+
+**Fix — three layers, all allowlists:**
+1. `StrategyAgent` publishes only `BUY_CE`/`BUY_PE`. Also stops a
+   malformed LLM value: the prompt *asks* for `BUY_CE|BUY_PE|WAIT`
+   but cannot enforce it.
+2. `evaluate()` states the signal value as its own first check, so the
+   journal names the refused value instead of showing a clean sheet.
+3. `_place` refuses before any state is touched — before the cooldown
+   read, the capital draw and the symbol claim.
+
+`test_no_trade_guard.py` scrapes the producer's literal rather than
+inventing `"NO_TRADE"`, and asserts the `_place` guard sits *above*
+the leg mapping. Verified against the pre-fix tree: **7 checks fail**
+without the change. One check (`evaluate() REJECTS a NO_TRADE job`) is
+annotated in-file as non-discriminating — it passes pre-fix too,
+because that fixture trips other gates anyway.
+
+**Also from the same review, assessed and NOT changed:**
+- *"Confidence check is reversed — `confidence 65≥70`"*. It is not.
+  `check()` prefixes ✓/✗ and the label states the **requirement**; a
+  failing 65% renders `✗ confidence 65≥70`. The comparison at
+  `agents.py` is correct. The label is still a poor one and invites
+  the misread — worth making outcome-aware, not done here.
+- *"Daily loss limit is really a risk budget"*. Correct diagnosis:
+  the check is `daily_pnl - max_loss > -daily_loss_limit`, i.e.
+  realised P&L minus this trade's hypothetical worst case, and it
+  ignores open risk on existing positions. **Deliberately left alone**
+  — splitting it into three limits would *loosen* a live risk control,
+  and `config.py:649` records a single stop once exceeding the whole
+  daily limit. That is an operator risk decision, not a cleanup.
+- *"Too much repeated signal generation"*. Real. `_recent_signals =
+  deque(maxlen=6)  # (sym, signal, strike, ts)` is declared at
+  `agents.py` and is its **only** occurrence in the file — dedup was
+  intended and never wired. What exists is a 120 s global cooldown and
+  a 15-min backoff on *hard* reject reasons only, so the observed
+  09:17→09:21→09:28→09:39 repeats (all >120 s, all soft rejects) are
+  suppressed by neither. Pending, see below.
+
+**Gates:** golden replay bit-for-bit identical (60 frames, sha
+ae44f3d1…) · `bench_hotpath` p99 52.4 ms/frame, unchanged in character
+(still dominated by the known `load_versions()` re-parse in
+`strategies.evaluate()`, Phase A) · version gate passes at v59.82.
+
 ## v59.81 — the host-sleep incident: partial days and stale EOD fills (2026-08-13)
 
 macOS suspended the app from **11:52 to 18:25** — 3.6 hours of live
@@ -9321,6 +9403,26 @@ against older rows understates the denominator.
 main diagnostic value at a fraction of the cost, and its result should
 decide whether the port is worth a dedicated session. See the deferred
 entry under "Explicitly deferred (not built...)".
+
+### Opened by the 13 Aug journal review (v59.82) — can be picked now
+
+- **Wire up or delete `_recent_signals`.** Declared as
+  `deque(maxlen=6)  # (sym, signal, strike, ts)` and referenced
+  nowhere else. Either implement the intended "material change"
+  suppression (price / strike / direction / regime / confidence /
+  geometry) or remove the line — a declared-and-unused dedup buffer
+  reads as protection that does not exist.
+- **Make `check()` labels outcome-aware.** They state the requirement
+  (`confidence 65≥70`) and rely on the ✓/✗ prefix for the verdict,
+  which an external reviewer read as a reversed comparison. A failing
+  check should render `confidence 65% < required 70%`. Note this class
+  already bit once: a label was hardcoded to always read as the
+  failure case (fixed 2026-07-24). Cosmetic, but it is the operator's
+  primary audit surface.
+- **Decide the daily-risk control shape.** Operator call, not a
+  refactor — see the v59.82 note. Today's single check conflates
+  realised P&L with one trade's hypothetical worst case and ignores
+  open risk on existing positions.
 
 ## PENDING WORK — current as of v59.2 (verified 2026-08-03)
 

@@ -3707,7 +3707,24 @@ class StrategyAgent(Agent):
                             log=lambda m, _s=sym: self.bus.log(self.name,
                                                                f"{_s}: {m}"))
             self.bus.set(f"signal:{sym}", sig)
-            if sig["signal"] != "WAIT" and \
+            # v59.82 — ALLOWLIST, not a denylist. This read `!= "WAIT"`,
+            # which admitted every OTHER non-actionable value. Chiefly
+            # the "NO_TRADE" that enforce_signal_invariants stamps when
+            # a signal's entry premium fails the band check
+            # (analyzer.py ~1754) — a value written in one place and
+            # read in NONE. It did not stop the trade, it travelled:
+            # evaluate()'s direction gates are if/elif with no else so
+            # it SKIPPED them, the duplicate-entry lock and re-entry
+            # cooldown are CE/PE allowlists it slipped past, and
+            # _place mapped anything != BUY_CE to leg "PE" — booking a
+            # PE position while the order went out on the security_id
+            # stamped for the ORIGINAL leg (_attach_security_id runs
+            # before the invariant layer). Exactly the wrong-instrument
+            # fill the band check exists to prevent. Same bug class the
+            # manual path already fixed with an allowlist; never
+            # back-ported here. Also catches a malformed LLM value —
+            # the prompt asks for BUY_CE|BUY_PE|WAIT but cannot enforce it.
+            if sig["signal"] in ("BUY_CE", "BUY_PE") and \
                (best is None or sig["confidence"] > best[1]["confidence"]):
                 best = (sym, sig, analysis)
         if best:
@@ -4021,6 +4038,16 @@ class RiskAgent(Agent):
             checks.append(("✓" if cond else "✗") + " " + label)
             ok = ok and cond
 
+        # v59.82 — the signal VALUE is itself a gate, stated first and
+        # as an allowlist. Every direction-specific check below
+        # (strike policy, timeframe confluence, news, regime fit) is an
+        # if/elif with no else, so an unrecognised value SKIPS them
+        # rather than failing them and can reach ok=True with a
+        # clean-looking sheet. Asserted explicitly so the journal says
+        # WHICH value was refused instead of showing no ✗ at all.
+        _sigval = sig.get("signal")
+        check(_sigval in ("BUY_CE", "BUY_PE"),
+              f"actionable signal (got {_sigval})")
         trades = self.bus.get("trades_today", 0)
         check(not self.halted, "autopilot not halted (consecutive losses)")
         portfolio_halted_until = self.bus.get("portfolio_halt_until", 0)
@@ -6641,6 +6668,19 @@ class ExecutionAgent(Agent):
     def _place(self, job, manual=False):
         cfg = config.load()
         sig, analysis, sym = job["signal"], job["analysis"], job["symbol"]
+        # v59.82 — LAST line of defence before an order leaves. Runs
+        # before ANY state is touched (cooldown stamp, capital, claim).
+        # Everything below assumes a directional option buy: the leg
+        # mapping further down is `"CE" if signal == "BUY_CE" else
+        # "PE"`, which does not raise on an unexpected value — it
+        # silently books PE while orders.place() uses the security_id
+        # stamped for whatever leg the signal originally named. Refuse
+        # rather than guess a side. Both callers upstream now filter
+        # too; this stays because a guess here costs real money.
+        _sigval = sig.get("signal")
+        if _sigval not in ("BUY_CE", "BUY_PE"):
+            return {"error": f"refusing entry on {sym}: non-actionable "
+                             f"signal {_sigval!r}"}
         # See the stamp in exit(). Blocks re-entry into the SAME
         # symbol+strike+leg for option_reentry_cooldown_sec. Manual
         # clicks are exempt: an operator re-entering deliberately is a
