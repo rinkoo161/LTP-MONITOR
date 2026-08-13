@@ -81,6 +81,32 @@ because that fixture trips other gates anyway.
   09:17→09:21→09:28→09:39 repeats (all >120 s, all soft rejects) are
   suppressed by neither. Pending, see below.
 
+**`scratch/restart_app.sh` gained two more lessons**, both from the
+v59.82 restart itself:
+
+- *Use the venv interpreter, and test it BEFORE killing anything.* The
+  restart picked `/opt/homebrew/bin/python3` because that is the path
+  `ps` displays for the running app — but that is the venv's **resolved
+  base** interpreter, not the venv, and homebrew's python has no
+  fastapi. The old process was already dead when the new one failed to
+  import, so the app stayed down. The script now imports
+  `fastapi, uvicorn` with `$PY` as a preflight and refuses to stop a
+  working process for an interpreter that cannot serve. Verified by
+  running it with the bad interpreter: it aborts and the live app is
+  untouched.
+- *Relaunch under caffeinate, and prove the assertion is held.* The app
+  does not self-spawn caffeinate, so the previous `nohup python app.py`
+  relaunch silently left the host free to sleep — the 13 Aug failure
+  (v59.81). Starting caffeinate is not sufficient evidence either, so
+  the script now greps `pmset -g assertions` for the wrapper's pid.
+
+It also now compares the served version against the `VERSION` file
+rather than printing it, extending the 2026-08-06 "verify the process,
+not a proxy" lesson to the version claim itself. The 20s escalation
+window is unchanged — `test_graceful_shutdown.py` pins app.py's
+`timeout_graceful_shutdown` (10s) below it so the clean path always
+wins the race against SIGKILL.
+
 **Gates:** golden replay bit-for-bit identical (60 frames, sha
 ae44f3d1…) · `bench_hotpath` p99 52.4 ms/frame, unchanged in character
 (still dominated by the known `load_versions()` re-parse in
