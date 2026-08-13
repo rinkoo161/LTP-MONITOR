@@ -4,6 +4,67 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.83 — the dedup buffer that was never wired (2026-08-14)
+
+Second item from the 13 Aug journal review. `_recent_signals =
+deque(maxlen=6)  # (sym, signal, strike, ts)` was declared in v58 and
+**referenced nowhere else in the file** — dedup was designed, named,
+and then never connected. It read as protection and was not.
+
+The journal shows what got through: NIFTY BUY_PE 24350 published at
+09:17, 09:21, 09:28, 09:39, 09:42 — one trade, five risk evaluations.
+Neither existing brake applies to that pattern:
+
+- the **120 s cooldown** is shorter than every one of those gaps
+  (3, 7, 11, 3 minutes);
+- the **15-min backoff** only arms on HARD reject reasons (daily loss
+  limit / halted / cooldown / trades / market open). These were soft
+  confidence and confluence rejections, so it never armed.
+
+**What was built.** A setup's identity is `(symbol, direction,
+strike)` — a change in any of the three is a different trade and is
+never suppressed, which is why they are the *key* rather than compared
+fields. Within one key, a repeat is re-published only if something
+moved: regime, confidence (±5 points), underlying (±0.15%), or the
+entry/stop/target geometry (±10%), or the 15-min window elapsed.
+
+Two properties worth stating because they are what make it safe:
+
+- **It fails OPEN.** Any comparison that cannot be made — no spot, no
+  previous geometry — counts as changed and publishes. Suppressing a
+  real signal costs a trade; publishing a duplicate costs a log line.
+- **It suppresses the ALERT and the PUBLISH only.** `signal:{SYM}` and
+  `last_signal` are still set, so the dashboard shows the current read
+  unchanged. What stops is re-running the risk gate on a trade it has
+  already judged.
+
+`maxlen` went 6 → 32. Six is smaller than the number of signals that
+fit in one repeat window (900 s ÷ 120 s ≈ 8), so entries would have
+been evicted while still relevant and the suppression would have
+quietly stopped working — the same silent-degradation shape as the
+original dead declaration.
+
+All five parameters are in `config.DEFAULTS` and `SettingsIn`, so they
+are the operator's. They are suppression bounds, **not** entry
+criteria: loosening them cannot create a trade the risk gate would
+otherwise refuse, only re-ask a question already answered. Shipped ON
+(`signal_dedup_enabled`) since suppression can only reduce the number
+of evaluations.
+
+`test_signal_dedup.py` drives the real `StrategyAgent.cycle` twice and
+**carries its own control**: the identical two cycles replayed with
+`signal_dedup_enabled=False` must publish twice. That isolates the
+suppression as the cause rather than asserting a count some unrelated
+guard could also produce.
+
+**Gates:** golden replay bit-for-bit identical (60 frames, sha
+ae44f3d1…) · `bench_hotpath` p99 46.3 ms/frame, unchanged in character
+(still the `load_versions()` re-parse in `strategies.evaluate()`) ·
+version gate v59.83 · full suite shows no new failures (the 14 known
+pre-existing, plus `test_authoritative_prev_close` which fails on the
+pre-dedup tree too — a date-rollover artefact — and one transient
+"database is locked" that passes 3/3 on rerun).
+
 ## v59.82 — NO_TRADE was a value nobody read (2026-08-13)
 
 From an external review of the 13 Aug journal. The reviewer flagged
@@ -9432,12 +9493,7 @@ entry under "Explicitly deferred (not built...)".
 
 ### Opened by the 13 Aug journal review (v59.82) — can be picked now
 
-- **Wire up or delete `_recent_signals`.** Declared as
-  `deque(maxlen=6)  # (sym, signal, strike, ts)` and referenced
-  nowhere else. Either implement the intended "material change"
-  suppression (price / strike / direction / regime / confidence /
-  geometry) or remove the line — a declared-and-unused dedup buffer
-  reads as protection that does not exist.
+- ~~Wire up or delete `_recent_signals`~~ — DONE in v59.83.
 - **Make `check()` labels outcome-aware.** They state the requirement
   (`confidence 65≥70`) and rely on the ✓/✗ prefix for the verdict,
   which an external reviewer read as a reversed comparison. A failing

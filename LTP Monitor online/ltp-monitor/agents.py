@@ -3622,6 +3622,72 @@ class FundamentalAgent(Agent):
         self.summary = f"daily brief: {brief['stance']}"
 
 
+def signal_repeat_key(sym, sig):
+    """The identity of a setup for repeat-suppression purposes.
+
+    Symbol + direction + strike. A change in any of the three is a
+    DIFFERENT trade, so it is never suppressed — which is why those
+    three are the key rather than one of the compared fields.
+    """
+    return (sym, sig.get("signal"), sig.get("strike"))
+
+
+def signal_materially_changed(prev, sig, spot, regime, cfg, now_ts=None):
+    """Has anything changed since `prev` that justifies re-publishing?
+
+    Returns (changed: bool, why: str) — `why` is logged either way, so
+    a suppression always states what it compared.
+
+    v59.83. The 13 Aug journal showed NIFTY BUY_PE 24350 published at
+    09:17, 09:21, 09:28, 09:39, 09:42 — five evaluations of the same
+    trade. Neither existing brake caught it: the 120 s cooldown is
+    shorter than every one of those gaps, and the 15-min backoff only
+    arms on HARD reject reasons (daily loss limit, halted, cooldown),
+    not on the soft confidence/confluence rejections these were.
+
+    `_recent_signals` was declared for exactly this in v58 and never
+    referenced again — a dedup buffer that looked like protection and
+    was not. This is the function it was waiting for.
+
+    Deliberately fail-OPEN: any comparison it cannot make (missing
+    previous geometry, no spot) counts as changed. Suppressing a real
+    signal costs a trade; publishing a duplicate costs a log line.
+    """
+    now = time.time() if now_ts is None else now_ts
+    window = float(cfg.get("signal_repeat_window_sec", 900))
+    age = now - float(prev.get("ts") or 0)
+    if age >= window:
+        return True, f"repeat window elapsed ({age:.0f}s ≥ {window:.0f}s)"
+    if (prev.get("regime") or None) != (regime or None):
+        return True, f"regime {prev.get('regime')!r} → {regime!r}"
+
+    conf_delta = abs(float(sig.get("confidence") or 0)
+                     - float(prev.get("confidence") or 0))
+    if conf_delta >= float(cfg.get("signal_repeat_conf_delta", 5)):
+        return True, (f"confidence {prev.get('confidence')} → "
+                      f"{sig.get('confidence')}")
+
+    prev_spot, spot = float(prev.get("spot") or 0), float(spot or 0)
+    if prev_spot > 0 and spot > 0:
+        move = abs(spot - prev_spot) / prev_spot * 100
+        if move >= float(cfg.get("signal_repeat_spot_move_pct", 0.15)):
+            return True, f"spot moved {move:.2f}% ({prev_spot:.0f}→{spot:.0f})"
+    elif not (prev_spot > 0 and spot > 0):
+        return True, "spot unavailable for comparison"
+
+    geo_pct = float(cfg.get("signal_repeat_geometry_pct", 10.0))
+    for field in ("entry", "stoploss", "target1"):
+        a, b = float(prev.get(field) or 0), float(sig.get(field) or 0)
+        if a <= 0 or b <= 0:
+            return True, f"{field} unavailable for comparison"
+        moved = abs(b - a) / a * 100
+        if moved >= geo_pct:
+            return True, f"{field} ₹{a:.2f} → ₹{b:.2f} ({moved:.0f}%)"
+
+    return False, (f"same setup as {age:.0f}s ago — conf ±{conf_delta:.0f}, "
+                   f"spot/geometry within bounds")
+
+
 class StrategyAgent(Agent):
     name = "strategy"
     interval = 5           # event-driven; the loop only drains a queue
@@ -3631,7 +3697,16 @@ class StrategyAgent(Agent):
         self._pending = deque()
         bus.subscribe("analysis", self._pending.append)
         self._last_signal_ts = 0
-        self._recent_signals = deque(maxlen=6)   # (sym, signal, strike, ts)
+        # v59.83 — WIRED UP at last (declared v58, referenced nowhere
+        # until now). Holds the last published signal per setup:
+        # {key: (sym, direction, strike), ts, confidence, spot,
+        #  entry, stoploss, target1, regime}.
+        # maxlen was 6, which is smaller than the number of signals
+        # that fit in one repeat window (900s / 120s cooldown ≈ 8) —
+        # entries would have been evicted while still relevant and the
+        # suppression would have silently stopped working. 32 is far
+        # above that and still bounded.
+        self._recent_signals = deque(maxlen=32)
         self._backoff_until = 0
 
     def cycle(self):
@@ -3736,12 +3811,45 @@ class StrategyAgent(Agent):
                            f"T1 ₹{sig.get('target1')} T2 ₹{sig.get('target2')}")
             self.summary = (f"{sym}: {sig['signal']} {sig.get('strike','')} "
                           f"conf {sig['confidence']}% — {trade_params}")
+            # v59.83 — repeat suppression. The two existing brakes miss
+            # the common case: the 120s cooldown is shorter than the
+            # observed 3-11 minute repeat gaps, and the 15-min backoff
+            # only arms on HARD reject reasons, not the soft
+            # confidence/confluence rejections that actually recur.
+            # Suppress the ALERT and the PUBLISH only — `signal:{sym}`
+            # and `last_signal` are already set above, so the dashboard
+            # still shows the current read; what stops is re-running the
+            # risk gate on a trade it has already judged.
+            _key = signal_repeat_key(sym, sig)
+            _spot = (analysis or {}).get("spot")
+            _regime = (self.bus.get(f"regime:{sym}") or {}).get("regime")
+            _prev = next((r for r in reversed(self._recent_signals)
+                          if r.get("key") == _key), None)
+            if cfg.get("signal_dedup_enabled", True) and _prev:
+                _changed, _why = signal_materially_changed(
+                    _prev, sig, _spot, _regime, cfg)
+                if not _changed:
+                    self.summary = (f"{sym}: {sig['signal']} "
+                                    f"{sig.get('strike', '')} not re-published "
+                                    f"— {_why}")
+                    self.bus.log(self.name, self.summary)
+                    self.bus.set("signal_suppressed_last",
+                                 {"symbol": sym, "signal": sig.get("signal"),
+                                  "strike": sig.get("strike"), "why": _why,
+                                  "ts": time.time()})
+                    return
             self.bus.log(self.name, self.summary)
             self.bus.alert("medium", "strategy", sym,
                            f"{sig['signal'].replace('_',' ')} {sig.get('strike','')} "
                            f"signal generated (confidence {sig['confidence']}%) — {trade_params}")
             self.bus.publish("signal", {"symbol": sym, "signal": sig,
                                         "analysis": analysis})
+            self._recent_signals.append({
+                "key": _key, "ts": time.time(),
+                "confidence": sig.get("confidence"), "spot": _spot,
+                "entry": sig.get("entry"), "stoploss": sig.get("stoploss"),
+                "target1": sig.get("target1"), "regime": _regime,
+            })
         else:
             self.summary = f"scanned {len(jobs)} indices — WAIT"
 
