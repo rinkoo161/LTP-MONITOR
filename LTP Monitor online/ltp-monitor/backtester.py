@@ -13,19 +13,78 @@ IST = timezone(timedelta(hours=5, minutes=30))
 def _now(): return datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S IST")
 
 
-def _completed_days(day_list):
-    """Exclude today's IST calendar date from a list of day strings.
+def _completed_days(day_list, symbol=None, kind="opt", log=None):
+    """Days that are BOTH finished and fully recorded.
 
-    The chain/index archives write data live during market hours, so
-    today shows up as a "day" with data long before the session has
-    actually closed. Replaying it treats the most recent captured
-    frame as if it were EOD and force-exits an open position on
-    partial, still-changing data — producing a spurious low-sample
-    trade row (e.g. a spread strategy showing "1 day, 2 trades") that
-    doesn't reflect a real, closed trading day. Only fully-closed days
-    should count toward backtest stats."""
+    Exclude today's IST calendar date: the archives write live during
+    market hours, so today shows up as a "day" long before the session
+    closes. Replaying it treats the latest captured frame as EOD and
+    force-exits on partial, still-changing data — a spurious low-sample
+    trade row that doesn't reflect a real closed day.
+
+    v59.81 extends the same principle from "not finished yet" to "not
+    fully recorded". A host sleep on 2026-08-13 left a 3.6-hour hole in
+    the middle of live trading; the day would otherwise have been
+    replayed tomorrow as a complete session and counted as one full
+    independent day toward the promotion gate's 10-day requirement. A
+    day with a hole in it is not a completed day.
+
+    The test is RELATIVE (a fraction of the median day for that symbol),
+    never an absolute bar count: contract sizes, strike counts and
+    session lengths all change, and a fixed threshold would silently
+    rot. Passing no `symbol` keeps the pre-v59.81 behaviour exactly, so
+    callers that genuinely want every day are unaffected.
+
+    Every exclusion is LOGGED. A day silently vanishing from the
+    evidence base is the same class of problem as a partial day
+    silently entering it."""
     today = datetime.now(IST).strftime("%Y-%m-%d")
-    return [d for d in day_list if d != today]
+    days = [d for d in day_list if d != today]
+    if not symbol or not days:
+        return days
+    try:
+        import config as _cfg
+        pct = float(_cfg.load().get("partial_day_min_coverage_pct", 60)) / 100.0
+        cov = history.day_bar_coverage(symbol, kind)
+        # The norm must come from days that HAVE data. Snapshot retention
+        # prunes old days to zero, and including those zeros halves the
+        # median — measured on the real archive, six 0-bar July days
+        # dragged NIFTY's median to 166, which is exactly what the
+        # 2026-08-13 incident day recorded, so the day this filter exists
+        # to catch would have passed. Zero-coverage days are excluded
+        # too, but for a different reason and with a different message:
+        # they cannot be replayed at all, which is not the same as being
+        # thin.
+        present = sorted(v for v in (cov.get(d, 0) for d in days) if v > 0)
+        if len(present) < 3:
+            return days          # too few real days to have a norm
+        median = present[len(present) // 2]
+        floor = median * pct
+        kept, thin, empty = [], [], []
+        for d in days:
+            n = cov.get(d, 0)
+            if n <= 0:
+                empty.append(d)
+            elif n < floor:
+                thin.append(d)
+            else:
+                kept.append(d)
+        dropped = thin + empty
+        if log and thin:
+            log(f"[coverage] {symbol}/{kind}: excluding {len(thin)} "
+                f"UNDER-RECORDED day(s) vs median {median} — "
+                + ", ".join(f"{d} ({cov.get(d, 0)})" for d in thin[:8])
+                + (" …" if len(thin) > 8 else ""))
+        if log and empty:
+            log(f"[coverage] {symbol}/{kind}: {len(empty)} day(s) have NO "
+                f"retained data (pruned or never captured) — "
+                + ", ".join(empty[:8]) + (" …" if len(empty) > 8 else ""))
+        # Never return an empty set because of this filter: a symbol
+        # whose whole archive is thin should still be replayable, just
+        # visibly so. Losing every day would look like "no signals".
+        return kept or days
+    except Exception:
+        return days              # coverage is a QUALITY check, never a blocker
 
 import statistics
 import collections
@@ -354,7 +413,8 @@ def replay_spreads(symbol, name, params=None, days=None, log=lambda m: None):
     max_open = int(cfg.get("max_concurrent_spreads", 2))
     cooldown = cfg.get("spread_reentry_cooldown_min", 15) * 60
     stop_n = cfg.get("spread_stop_after_consecutive_losses", 2)
-    for day in (days or _completed_days(history.chain_days(symbol))):
+    for day in (days or _completed_days(history.chain_days(symbol),
+                                    symbol, "opt", log)):
         # expiry= and as_of= (2026-08-08) — without them this replay ran
         # on a chain blended across every expiry on record (231 of 244
         # NIFTY strikes exist in more than one, and frames are keyed by
@@ -752,7 +812,8 @@ def replay_momentum(symbol, params=None, days=None, log=lambda m: None):
     lot = cfg["lot_sizes"].get(symbol, 75)
     fee = cfg.get("fee_per_lot", 40) * 2
     trades = []
-    for day in (days or _completed_days(history.chain_days(symbol))):
+    for day in (days or _completed_days(history.chain_days(symbol),
+                                    symbol, "opt", log)):
         # see the note in replay_spreads() — same two defects.
         frames = history.day_chain_frames(
             symbol, day, expiry=history.front_expiry_on(symbol, day))
@@ -898,7 +959,8 @@ def replay_pa(symbol, name, params=None, days=None, log=lambda m: None):
     lot = cfg["lot_sizes"].get(symbol, 75)
     fee = cfg.get("fee_per_lot", 40) * 2
     trades = []
-    for day in (days or _completed_days(history.index_days(symbol))):
+    for day in (days or _completed_days(history.index_days(symbol),
+                                    symbol, "idx", log)):
         c1 = history.day_index_candles(symbol, day, for_compute=True)
         if len(c1) < 60:
             continue
@@ -1015,7 +1077,8 @@ def replay_ew_reversal(symbol, params=None, days=None, log=lambda m: None):
     fee = cfg.get("fee_per_lot", 40) * 2
     dev = cfg.get("s8_zigzag_deviation_pct", 0.5)
     trades = []
-    for day in (days or _completed_days(history.index_days(symbol))):
+    for day in (days or _completed_days(history.index_days(symbol),
+                                    symbol, "idx", log)):
         c1 = history.day_index_candles(symbol, day, for_compute=True)
         if len(c1) < 60:
             continue
@@ -1092,7 +1155,8 @@ def replay_ta_elliott(symbol, params=None, days=None, log=lambda m: None):
     fee = cfg.get("fee_per_lot", 40) * 2
     dev = p.get("zigzag_deviation_pct", 0.5)
     trades = []
-    for day in (days or _completed_days(history.index_days(symbol))):
+    for day in (days or _completed_days(history.index_days(symbol),
+                                    symbol, "idx", log)):
         c1 = history.day_index_candles(symbol, day, for_compute=True)
         if len(c1) < 120:
             continue
