@@ -4,6 +4,118 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## Market-analysis audit — findings, no code change (2026-08-14)
+
+Run with the new `market-analysis-audit` skill, which complements
+`derivatives-third-eye` (that one covers measurement, statistics,
+mechanism and execution realism; it had no reference for indicator or
+stop-loss correctness). Nothing below is fixed — these are findings,
+recorded here so they are not lost to chat history.
+
+**The dominant defect: target distance is welded to stop width.**
+`analyzer.option_stop_geometry` returns `target1 = entry × (1 + stop ×
+2)`, so a wider stop mechanically buys a more distant target. 67.8% of
+long-option signals therefore carry RR exactly 2.00, which also makes
+the risk gate's `rr >= 1.95` check tautological for most signals — it
+can only fail when geometry is already broken, and never tests whether
+the target is *reachable*. Over 554 resolved shadow signals (breakeven
+at 2:1 is 33.3%):
+
+    move needed to reach T1     n     hit T1 first
+    <20%                      215        47.0%     <- profitable
+    20-40%                    144        22.9%
+    40-80%                    120        30.0%
+    >80%                       55        30.9%
+
+The median signal needs 28.6%, i.e. the worst bucket. A control shows
+this is geometry, not symbol: raw hit rates were NIFTY 23.1% vs SENSEX
+50.3% / FINNIFTY 48.1% / BANKNIFTY 51.8%, but NIFTY carries the widest
+stops (20.6% median vs 5.0%) and hence the most distant targets — and
+*within* the <20% band every symbol clears breakeven, NIFTY included
+(39.1%).
+
+**The two biggest gates behave differently.** Regime discriminates:
+`rangebound` hits T1 26.6% (n=229), correctly blocked. But `choppy`
+(41.3%, n=104) is blocked by the same rule while performing like the
+tradeable regimes — its interval spans breakeven so it is not proven
+profitable, but it is clearly not `rangebound`. Timeframe confluence,
+the single biggest blocker (78 rejections on 2026-08-14), shows **no
+discriminating power**: it blocks `no-alignment` (37.5%, n=395) while
+permitting `mixed-bull` (33.3%, n=114), intervals overlapping almost
+entirely.
+
+**Clean negatives, checked and not defects.** `STOP_BOUNDS` (0.05,
+0.60) is respected — only 6 inverted long-option stops exist and all
+were rejected. Two earlier readings of mine were wrong and are recorded
+so nobody re-derives them: "26.6% below the floor" included futures and
+spreads, whose geometry differs, and "9 approvals with inverted stops"
+were all `FUT_SHORT`, where a stop above entry is correct. The OI
+quadrant classifier is genuinely single-sourced. The regime gate fails
+open only 2.8% of the time.
+
+**Liquidity is fine except on FINNIFTY.** No spread/liquidity filter
+exists on strike selection (bid-ask appears only in the cost model),
+but over 380k+ archived quotes the median spread is 0.3-0.4% of premium
+on SENSEX/NIFTY and 1.0% on BANKNIFTY — negligible against a 15% stop.
+FINNIFTY is **4.1% median, 10.4% p90**, ten times NIFTY, with 166
+long-option signals against it.
+
+**OI walls: INSUFFICIENT EVIDENCE, point estimate the wrong way.**
+`scratch/wall_predictiveness.py` freezes the specification. 12 usable
+days, 62 wall observations: walls were breached *more* often than
+distance-matched non-walls (+2.7 pp touch, +6.6 pp close-beyond), both
+CIs spanning zero, and on the touch outcome a placebo (yesterday's
+wall) scored better than the real one. Smallest detectable effect is
+~13 pp, so a modest real effect would be invisible. This does not show
+the spreads don't work — selling premium can pay even with arbitrary
+strike selection — it shows the *wall story* is unsupported. Re-run
+unchanged at 60+ days rather than re-slicing these 12.
+
+**Minor.** Three `ema()` implementations with two seedings (SMA-seeded
+in `mtf_confluence_strategy`, first-value in `forensic_replay` and the
+nested one in `agents`); they diverge from index 19 by ~2 NIFTY points
+and converge by bar 100, so it matters only during warmup.
+`forensic_replay.atr` raises on current 6-field candles. And
+`option_stop_geometry` computes `meta["basis"]` — the provenance its
+docstring says exists so "why is this stop 43%?" is answerable — which
+the main call site discards via `[:3]`.
+
+**Not covered:** HTF repainting (B1), label leakage (B4), session
+boundaries (B5), expiry-day STT in the cost model (C6). B1 is the one
+that would invalidate the regime results above if it is present.
+
+## v59.85 — the daily-loss gate counted lots that would never be bought (2026-08-14)
+
+Entered late: the code shipped in `56a8afe` without this section, which
+is a definition-of-done miss on my part, not a deliberate omission.
+
+Live at 09:21 a NIFTY BUY_PE passed every gate including confidence 71
+and the 2x feasibility bar, then died on `✗ daily loss limit (risking
+₹13,292, day P&L ₹0)`. That figure is 5 lots × ₹2,658, taken from
+`cfg["lots_per_trade"]` — but `ExecutionAgent._place` sizes with
+`size_option_buy()` and then applies `cap_by_rupee_risk()`, giving 3
+lots and ₹7,975, comfortably inside the ₹10,000 limit. The gate was
+refusing trades on a loss that could not occur, by double-counting the
+very per-trade cap that runs immediately after it.
+
+Not a loosening: `daily_loss_limit` is unchanged and a trade that
+genuinely breaches it is still refused. `planned_option_lots()` answers
+"how many lots will actually be placed" by CALLING the same sizing
+chain rather than reproducing its arithmetic. It MIRRORS `_place`
+rather than being called by it — `_place` is the live order path and
+extracting it mid-session was judged not worth the risk — so
+`test_planned_lots_sync.py` pins the two chains together and fails if
+either drifts.
+
+Operator context: `option_risk_per_trade_rupees` was raised 2,000 →
+10,000 the same morning at the operator's instruction, after
+`sizing.risk_coherence()` showed the cap had drifted from its own
+invariant (`risk_pct_per_trade` 5% × `backtest_capital` 200,000 =
+₹10,000). Two coherence warnings remain OPEN and need operator
+numbers: `budget_option_daily_loss` is still ₹2,000 against a ₹10,000
+per-trade cap, so one loss ends option trading for the day; and
+`portfolio_max_drawdown` ₹15,000 permits only 1.5 concurrent trades.
+
 ## v59.83 — the dedup buffer that was never wired (2026-08-14)
 
 Second item from the 13 Aug journal review. `_recent_signals =
