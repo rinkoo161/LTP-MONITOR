@@ -4,6 +4,57 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.88 — replay/live parity for the reachability gate (2026-08-14)
+
+v59.86 added `edge_feasibility.target_reachable` to the live risk gate
+and not to the replay. `_edge_ok_pa`'s own docstring states the
+invariant it broke: *"the admission bar must match live or the replay
+measures a different strategy."*
+
+Closing it was not a copy-paste, and **both wrong turns produce a
+plausible-looking replay**, which is why they are recorded here:
+
+1. The live gate is a percentage of **premium**; the PA replays carry
+   only `entry_spot`/`t1_spot`. Applying the live threshold to spot
+   values compares a spot quantity against a premium one — the
+   dimensional bug `option_stop_geometry`'s comment documents, where
+   every "volatility-based" stop turned out to be the clamp.
+2. Gating the strategy's **own** spot target is still wrong: live
+   routes PriceAction/MTF signals through `option_stop_geometry`, which
+   DISCARDS that target and rebuilds target1 on the premium as
+   `entry × (1 + stop_pct × 2)`. Measured: gating the strategy target
+   blocked 3% of replay entries against 73% of live signals. That gap
+   is what exposed the mistake.
+
+The fix reads the **real** premium out of `chain_snapshots` and calls
+the same two functions live calls, with `atr_pct` from
+`historical_regime` (which feeds archived bars to the real
+`RegimeAgent._classify` rather than reimplementing it).
+
+**Known limitation, measured not assumed: the gate is active on only
+~17% of PA replay entries.** The PA replays run on candle days, which
+extend far past the 15 days of chain archive, so 83% of premium lookups
+find nothing and the gate **fails open** — a replay must never invent a
+refusal live would not have made. That share grows as the chain archive
+accumulates. It also means the PA replays have always measured a
+spot-proxy strategy without option geometry; this narrows that gap but
+cannot close it retroactively.
+
+**Also found while investigating:** `replay_spreads` DOES model costs
+(via `realistic_fees`, the notional-aware model including bid-ask) — an
+earlier reading of mine that it did not was wrong, caused by the trade
+row not exposing a `fees` field. And NIFTY and SENSEX produce **zero**
+spread entries across every replayed day at the current
+`wall_gap_frac`/`credit_min_frac` floors, while FINNIFTY shows a 100%
+win rate over 23 trades — the expected profile of premium selling with
+`profit_capture` at 18% (win small and often, lose rarely and large) in
+a window with no tail event, not evidence of edge. FINNIFTY's modelled
+cost is also likely understated against its measured 4.1% median
+bid-ask.
+
+**Gates:** golden replay bit-for-bit identical · version gate v59.88 ·
+suite shows only the 4 known clock-dependent failures.
+
 ## v59.87 — the 14-Aug journal review, validated and applied (2026-08-14)
 
 An external review of the 14-Aug journal and P&L proposed a large
