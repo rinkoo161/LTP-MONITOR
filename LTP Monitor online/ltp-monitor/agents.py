@@ -3622,6 +3622,14 @@ class FundamentalAgent(Agent):
         self.summary = f"daily brief: {brief['stance']}"
 
 
+# v59.87 — ONE definition, because StrategyAgent's 15-minute backoff
+# arms by MATCHING this text in the risk agent's ✗ lines. Renaming the
+# label without renaming the matcher would silently stop the backoff
+# arming for the reason that fires most often, and nothing would report
+# it. Shared constant instead of two string literals.
+DAILY_BUDGET_LABEL = "daily risk budget"
+
+
 def planned_option_lots(cfg, bus, symbol, sig):
     """How many lots this option signal will ACTUALLY be placed at.
 
@@ -3629,18 +3637,19 @@ def planned_option_lots(cfg, bus, symbol, sig):
     execution sized properly and then applied the per-trade rupee cap,
     so the gate rejected trades on a loss that could never occur.
 
-    This MIRRORS ExecutionAgent._place's sizing chain — same functions,
-    same order, same cap key. It is not yet called BY _place: that is
-    the live order path and extracting it mid-session was judged not
-    worth the risk. Two implementations of one quantity is exactly the
-    drift that has bitten this codebase three times already
-    (market-session check, news regexes, OI quadrants), so
-    test_planned_lots_sync.py pins the two together and fails if either
-    side changes its chain. Collapse them the next time _place is open
-    for other reasons.
+    v59.87 — now THE definition: ExecutionAgent._place calls this
+    rather than repeating the chain. v59.86 shipped it as a MIRROR of
+    _place because that is the live order path and extracting it
+    mid-session was judged not worth the risk; the 14-Aug journal
+    review then asked for exactly one authoritative risk calculation,
+    which is right, and this is it. Two implementations of one quantity
+    is the drift that has already bitten this codebase three times
+    (market-session check, news regexes, OI quadrants).
 
-    Returns (lots, why). lots may be 0, meaning the per-trade cap
-    refuses the trade at any size.
+    Returns (lots, sizing_why, cap_why). `lots` may be 0, meaning the
+    per-trade rupee cap refuses the trade at any size and `cap_why` is
+    the reason to report. Callers needing only the count ignore the
+    rest.
     """
     import sizing
     deployed = sizing.deployed_capital(
@@ -3655,7 +3664,7 @@ def planned_option_lots(cfg, bus, symbol, sig):
     lots, cap_why = sizing.cap_by_rupee_risk(
         cfg, symbol, sig.get("entry") or 0, sig.get("stoploss") or 0, lots,
         key="option_risk_per_trade_rupees")
-    return lots, (f"{why}; {cap_why}" if cap_why else why)
+    return lots, why, cap_why
 
 
 def signal_repeat_key(sym, sig):
@@ -3775,7 +3784,10 @@ class StrategyAgent(Agent):
         last_verdict = self.bus.get("last_risk_check") or {}
         if last_verdict.get("verdict") == "REJECTED":
             failed = [c for c in last_verdict.get("checks", []) if c.startswith("✗")]
-            hard_reasons = ("daily loss limit", "halted", "cooldown",
+            # DAILY_BUDGET_LABEL, not a second copy of the text — see
+            # its definition. This tuple is matched against the risk
+            # agent's ✗ lines, so the two must move together.
+            hard_reasons = (DAILY_BUDGET_LABEL, "halted", "cooldown",
                             "trades ", "market open")
             if any(any(hr in f for hr in hard_reasons) for f in failed):
                 # 15-min backoff — the reason isn't going to change quickly
@@ -4177,9 +4189,22 @@ class RiskAgent(Agent):
         checks = []
         ok = True
 
-        def check(cond, label):
+        def check(cond, label, fail_label=None):
+            """v59.87 — `fail_label` lets a check state the FAILURE in its
+            own words instead of leaving the reader to invert a
+            requirement.
+
+            The ✓/✗ prefix always carried the verdict, but the label
+            stated the REQUIREMENT, so a failing confidence check read
+            `✗ confidence 65≥70` — which three separate reviewers
+            (2026-08-13, 2026-08-14, and the 14-Aug journal review) each
+            read as a reversed comparison and filed as a P0 bug. The
+            comparison was always correct; the phrasing was not. When a
+            line is misread that consistently, the line is the defect.
+            """
             nonlocal ok
-            checks.append(("✓" if cond else "✗") + " " + label)
+            text = label if cond or not fail_label else fail_label
+            checks.append(("✓" if cond else "✗") + " " + text)
             ok = ok and cond
 
         # v59.82 — the signal VALUE is itself a gate, stated first and
@@ -4426,7 +4451,9 @@ class RiskAgent(Agent):
                     cfg.get("require_basis_agreement", False)):
                 check(True, _why)
         check(sig["confidence"] >= cfg["min_confidence"],
-              f"confidence {sig['confidence']}≥{cfg['min_confidence']}")
+              f"confidence {sig['confidence']}≥{cfg['min_confidence']}",
+              f"confidence {sig['confidence']} < required "
+              f"{cfg['min_confidence']}")
         check(sig.get("entry", 0) > 0 and sig.get("stoploss", 0) > 0,
               "valid price points")
         entry, sl, t1 = sig.get("entry", 0), sig.get("stoploss", 0), sig.get("target1", 0)
@@ -4539,13 +4566,25 @@ class RiskAgent(Agent):
         # rather than reproducing the arithmetic — deriving a field by
         # hand instead of calling the live function is a failure mode
         # this codebase has been bitten by before.
-        _plan_lots, _plan_why = planned_option_lots(
+        _plan_lots, _plan_why, _plan_cap = planned_option_lots(
             cfg, self.bus, job["symbol"], sig)
         max_loss = (sig.get("entry", 0) - sig.get("stoploss", 0)) \
             * cfg["lot_sizes"].get(job["symbol"], 75) * max(1, _plan_lots)
-        check(self.daily_pnl - max_loss > -abs(cfg.get("daily_loss_limit", 5000)),
-              f"daily loss limit (risking ₹{max_loss:.0f} at {max(1, _plan_lots)} "
-              f"lot(s), day P&L ₹{self.daily_pnl:.0f})")
+        # v59.87 — named for what it MEASURES. This compares a
+        # PROSPECTIVE trade's worst case against the day's allowance; it
+        # is a forward-looking budget, not a realised-loss trip. Logging
+        # it as "daily loss limit (day P&L ₹0)" read as though the
+        # account had already lost the limit, which is what the 14-Aug
+        # journal review flagged. The control is unchanged.
+        _limit = abs(cfg.get("daily_loss_limit", 5000))
+        _remaining = max(0.0, _limit + min(0.0, self.daily_pnl))
+        check(self.daily_pnl - max_loss > -_limit,
+              f"{DAILY_BUDGET_LABEL}: trade risk ₹{max_loss:.0f} at "
+              f"{max(1, _plan_lots)} lot(s) fits ₹{_remaining:.0f} remaining "
+              f"(day P&L ₹{self.daily_pnl:.0f})",
+              f"{DAILY_BUDGET_LABEL} exceeded: trade risk ₹{max_loss:.0f} at "
+              f"{max(1, _plan_lots)} lot(s) > ₹{_remaining:.0f} remaining "
+              f"of the ₹{_limit:.0f} budget (day P&L ₹{self.daily_pnl:.0f})")
         # v59.73 (third-eye Tier 2) — structural feasibility: the trade's
         # own FIRST target must clear min_edge_cost_ratio × the modelled
         # round trip. The August record grossed ₹158/trade against ₹176
@@ -4975,10 +5014,13 @@ class ExecutionAgent(Agent):
         _risk_cap = float(cfg.get("futures_risk_per_trade_rupees", 2500))
         _limit = abs(cfg.get("daily_loss_limit", 5000))
         if _day - _risk_cap <= -_limit:
-            return {"error": f"daily loss limit: day P&L ₹{_day:.0f}, "
+            # v59.87 — same rename as the options path: this compares a
+            # PROSPECTIVE risk against the day's allowance, so it is a
+            # budget, not a realised-loss trip.
+            return {"error": f"{DAILY_BUDGET_LABEL}: day P&L ₹{_day:.0f}, "
                              f"risking ₹{_risk_cap:.0f} more would breach "
-                             f"-₹{_limit:.0f} — no futures entries for the "
-                             f"rest of the day"}
+                             f"the ₹{_limit:.0f} budget — no futures entries "
+                             f"for the rest of the day"}
         futs = self.bus.get("futures_positions", {}) or {}
         if symbol in futs:
             return {"error": f"{symbol} already has an open futures "
@@ -6870,20 +6912,14 @@ class ExecutionAgent(Agent):
                                  f"{_age:.0f}s ago, need {_cool}s"}
         lot = cfg["lot_sizes"].get(sym, 75)
         import sizing
-        deployed = sizing.deployed_capital(
-            cfg, self.bus.get("positions", {}), self.bus.get("spreads", {}))
-        if sig.get("source") == "mtf_confluence" and sig.get("atr"):
-            # rinkoo.docx's exact ATR-based formula for this specific
-            # strategy — delta=0.5 since this is an ATM option, not a
-            # future (see mtf_confluence_strategy.py / size_by_atr_risk
-            # docstrings for the reasoning). Every other strategy keeps
-            # the existing risk_pct-based size_option_buy — this hook
-            # only fires for signals explicitly tagged mtf_confluence.
-            n_lots, sizing_why = sizing.size_by_atr_risk(
-                cfg, sym, sig["atr"], delta=0.5, deployed=deployed)
-        else:
-            n_lots, sizing_why = sizing.size_option_buy(
-                cfg, sym, sig["entry"], sig["stoploss"], deployed)
+        # v59.87 — ONE risk calculation, shared with the risk gate. This
+        # used to repeat the size_option_buy/size_by_atr_risk branch and
+        # then apply the cap below; the gate reproduced the same chain
+        # separately, which is precisely the two-copies failure this
+        # codebase keeps re-learning. planned_option_lots() is now the
+        # single definition and both callers ask it.
+        n_lots, sizing_why, _cap_why = planned_option_lots(
+            cfg, self.bus, sym, sig)
         self.bus.log(self.name, f"{sym} sizing: {sizing_why}")
         # v59.0 (2026-08-02) — PER-TRADE RUPEE CAP ON THE OPTIONS PATH.
         #
@@ -6911,16 +6947,14 @@ class ExecutionAgent(Agent):
         # and that is not a risk control, it is a shutdown. Tightening
         # further requires narrowing the STOPS first, which is a strategy
         # change, not a risk-layer change.
-        _cap_lots, _cap_why = sizing.cap_by_rupee_risk(
-            cfg, sym, sig["entry"], sig["stoploss"], n_lots,
-            key="option_risk_per_trade_rupees")
+        # (the cap itself is applied inside planned_option_lots above —
+        # this block only reports and refuses on its verdict)
         if _cap_why:
             self.bus.log(self.name, f"🛡 {sym} option risk cap: {_cap_why}")
-        if _cap_lots < 1:
+        if n_lots < 1:
             self.bus.alert("medium", self.name, sym,
                            f"option trade refused — {_cap_why}")
             return {"error": f"per-trade risk cap: {_cap_why}"}
-        n_lots = _cap_lots
         if n_lots < 1:
             self.bus.log(self.name, f"⚠ {sym} order skipped — not enough "
                                     f"available capital for even 1 lot")

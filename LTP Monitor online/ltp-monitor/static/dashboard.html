@@ -523,7 +523,7 @@ hr{border:none;border-top:1px solid var(--line);}
   <div class="dashgrid">
     <div class="dc8">
       <div class="panel" style="margin-bottom:8px">
-        <h2>&#128200; Live Chart (TradingView Lightweight Charts) <span class="badge" style="font-weight:400">v59.86</span> <span class="sub" id="lwChartStatus">connecting...</span>
+        <h2>&#128200; Live Chart (TradingView Lightweight Charts) <span class="badge" style="font-weight:400">v59.87</span> <span class="sub" id="lwChartStatus">connecting...</span>
           <select id="lwChartSymbol" style="margin-left:auto" onchange="switchLwChart(this.value)"></select></h2>
         <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;flex-wrap:wrap">
           <button class="lwIntervalBtn active" data-interval="1" onclick="switchLwInterval('1')">1m</button>
@@ -3278,11 +3278,12 @@ async function loadShadowJournal(){
     '<div><label>Total signals</label><b>'+(st.total||0)+'</b></div>'+
     '<div><label>Approved</label><b class="bull">'+(st.approved||0)+'</b></div>'+
     '<div><label>Rejected</label><b class="bear">'+(st.rejected||0)+'</b></div>'+
-    '<div><label>Rejections resolved</label><b>'+(st.rejected_resolved||0)+'</b></div>'+
+    '<div><label>Rejections with an outcome</label><b>'+(st.rejected_resolved||0)+'</b></div>'+
+    '<div><label>...conclusive (won or lost)</label><b>'+(st.rejected_conclusive||0)+'</b></div>'+
     '<div><label>...timed out (inconclusive)</label><b class="reasons">'+(st.rejected_timed_out||0)+'</b></div>'+
     '<div><label>Would have WON</label><b class="bear">'+(st.rejected_would_have_won||0)+' <span class="reasons">(rejection cost a win)</span></b></div>'+
     '<div><label>Would have LOST</label><b class="bull">'+(st.rejected_would_have_lost||0)+' <span class="reasons">(rejection was correct)</span></b></div>'+
-    (st.risk_agent_accuracy_pct!=null?('<div><label>Risk agent accuracy</label><b>'+st.risk_agent_accuracy_pct+'%</b></div>'):'');
+    (st.risk_agent_accuracy_pct!=null?('<div><label>Risk-gate accuracy <span class="reasons">(rejections only — NOT system P&amp;L)</span></label><b>'+st.risk_agent_accuracy_pct+'% <span class="reasons">of '+(st.rejected_conclusive||0)+' conclusive</span></b></div>'):'');
   const tb=document.querySelector("#shadowTable tbody");
   const sigs=d.signals||[];
   tb.innerHTML=sigs.map(function(e){

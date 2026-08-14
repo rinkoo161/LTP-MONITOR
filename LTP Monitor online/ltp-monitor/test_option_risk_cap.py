@@ -190,9 +190,24 @@ print("\n6) a refusal is LOUD")
 # ambiguous-anchor slip of this work. Scope to the EXECUTION body
 # explicitly, and assert the risk-gate site separately below.
 _exec_body = AG.split("    def _place(self, job, manual=False):")[1]
-assert 'key="option_risk_per_trade_rupees"' in _exec_body, \
-    "the cap left ExecutionAgent._place — check 7's ordering assumes it is there"
-blk = _exec_body.split('key="option_risk_per_trade_rupees"')[1][:900]
+# v59.87 — the cap now lives in planned_option_lots(), the ONE risk
+# calculation shared by the risk gate and execution (the 14-Aug review
+# asked for exactly that). _place no longer applies it inline; it calls
+# the helper and acts on the verdict. The invariant is unchanged: the
+# cap is applied before any order leaves.
+assert "planned_option_lots(" in _exec_body, \
+    "_place no longer routes through the shared risk calculation"
+_helper = AG.split("def planned_option_lots(")[1].split("\ndef ")[0]
+assert 'key="option_risk_per_trade_rupees"' in _helper, \
+    "the option cap key left planned_option_lots()"
+# The cap VERDICT now arrives from planned_option_lots(); the logging,
+# alert and refusal that act on it still live here in _place.
+# Anchor on the ASSIGNMENT, not the bare name — the comment above
+# the call names the helper too, and a bare split matched that.
+# 2500, not 900: the load-bearing v59.0 comment explaining WHY the
+# cap is set at the portfolio level sits between the call and the
+# refusal, and 900 chars stopped inside it.
+blk = _exec_body.split("_cap_why = planned_option_lots(")[1][:2500]
 check("the cap logs when it bites", "bus.log" in blk)
 check("a refusal raises an alert, not a silent return", "bus.alert" in blk,
       "a silently-skipped trade is indistinguishable from no signal")
@@ -202,11 +217,15 @@ print("\n6b) and it is ALSO evaluated at the risk gate, before approval")
 _risk_body = AG.split("    def evaluate(self, job):")[1]
 _risk_body = _risk_body[:_risk_body.index("\n    def ")]
 check("RiskAgent.evaluate() applies the same cap",
-      'key="option_risk_per_trade_rupees"' in _risk_body,
+      'key="option_risk_per_trade_rupees"' in _risk_body
+      or "planned_option_lots(" in _risk_body,
       "APPROVED for an order the rupee cap will refuse is a misleading "
       "gate line — observed 4 times in 19s on 2026-08-06")
+# v59.87 — "the SHARED helper" is now planned_option_lots(), which owns
+# the whole chain (size -> cap) and is called by BOTH the risk gate and
+# execution. Previously each side called cap_by_rupee_risk itself.
 check("it reuses the SHARED helper, not a second implementation",
-      "cap_by_rupee_risk" in _risk_body,
+      "planned_option_lots(" in _risk_body,
       "a per-trade cap that drifts from sizing.py's is the two-copies "
       "failure this codebase keeps re-learning")
 check("a failure to EVALUATE the cap does not silently approve",
