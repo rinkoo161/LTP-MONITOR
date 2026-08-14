@@ -8,7 +8,12 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&family=Roboto+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
-<script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+<!-- v59.89 — pinned to an exact version deliberately. v5 REMOVED
+     addLineSeries/addCandlestickSeries/addHistogramSeries outright
+     (verified: 0 occurrences in the 5.2.1 bundle, 1+ in 4.1.3), so a
+     floating range that drifted 4.x -> 5.x would not degrade — every
+     chart on this dashboard would throw at construction. -->
+<script src="https://unpkg.com/lightweight-charts@5.2.1/dist/lightweight-charts.standalone.production.js"></script>
 <style>
   /* 2026-07-27 — re-themed to match the "Azia" design wireframe
      (ltp-monitor-ui-revE.html) per explicit request for items #7/#8:
@@ -523,7 +528,7 @@ hr{border:none;border-top:1px solid var(--line);}
   <div class="dashgrid">
     <div class="dc8">
       <div class="panel" style="margin-bottom:8px">
-        <h2>&#128200; Live Chart (TradingView Lightweight Charts) <span class="badge" style="font-weight:400">v59.88</span> <span class="sub" id="lwChartStatus">connecting...</span>
+        <h2>&#128200; Live Chart (TradingView Lightweight Charts) <span class="badge" style="font-weight:400">v59.89</span> <span class="sub" id="lwChartStatus">connecting...</span>
           <select id="lwChartSymbol" style="margin-left:auto" onchange="switchLwChart(this.value)"></select></h2>
         <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;flex-wrap:wrap">
           <button class="lwIntervalBtn active" data-interval="1" onclick="switchLwInterval('1')">1m</button>
@@ -3404,6 +3409,14 @@ function renderBiasBadge(bias){
 }
 
 let lwChart=null, lwSeries=null, lwSocket=null, lwCurrentSymbol=null, lwHistoryLoaded=false, lwPriceLines=[];
+// v59.89 — in LWC v5 markers are no longer a method on the series; they
+// are a primitive attached to it, and the ATTACH returns the only handle
+// that can set them. So the handle has to live as long as the series it
+// is bound to, and be recreated whenever the series is (initLwChart runs
+// again on rebuild). A stale handle points at a destroyed series and
+// silently draws nothing — which is why this is a module-level binding
+// reassigned next to addSeries(), not a local inside initLwChart().
+let lwMarkers=null;
 let lwFitPending=false;   // fit-to-panel once a newly selected symbol's bars are drawn (2026-07-26)
 let lwChartHasData=new Map();   // chart -> bool; empty charts must never drive the range sync (v50)
 let lwRangeLockUntil=0;         // for ~1.5s after (re)connect only the main chart may drive the range (v50)
@@ -3427,13 +3440,16 @@ function lwRedrawMarkers(){
   // requires it (previously trade_markers + capped flag markers were
   // concatenated unsorted, a latent bug this fixes for the existing
   // layers too, not only the new one).
-  if(!lwSeries) return;
+  // v59.89 — the replace-the-whole-set semantics survived the v5 move to
+  // a primitive unchanged, so the funnel and the sort still carry their
+  // original reasons; only the object the call lands on changed.
+  if(!lwSeries || !lwMarkers) return;
   const all=[].concat(
     lwTradeAndFlagMarkers||[],
     lwZigzagVisible ? (lwZigzagMarkers||[]) : [],
     lwSignalsVisible ? (lwSignalMarkers||[]) : []);
   all.sort(function(a,b){ return a.time-b.time; });
-  lwSeries.setMarkers(all);
+  lwMarkers.setMarkers(all);
 }
 const IST_OFFSET_SECONDS=19800;   // +5:30 — see toLwTime() below
 function toLwTime(unixSeconds){
@@ -3470,7 +3486,7 @@ function initLwChart(){
     handleScroll:{mouseWheel:true, pressedMouseMove:true,
                   horzTouchDrag:true, vertTouchDrag:true},
   });
-  lwSeries=lwChart.addCandlestickSeries({
+  lwSeries=lwChart.addSeries(LightweightCharts.CandlestickSeries,{
     upColor:"#3fb950",downColor:"#f85149",borderVisible:false,
     wickUpColor:"#3fb950",wickDownColor:"#f85149",
     // Vertical candle zoom (see lwVerticalZoom): scale the autoscale
@@ -3486,6 +3502,9 @@ function initLwChart(){
               margins:r.margins};
     },
   });
+  // v59.89 — bind the marker primitive to THIS series instance, right
+  // where it is created, so the two can never be out of step.
+  lwMarkers=LightweightCharts.createSeriesMarkers(lwSeries, []);
   // Feature #7 chart integration — indicator overlay lines, per
   // explicit request ("candle and strategies indicators on the
   // chart"). Created once here, populated/updated via the "overlays"
@@ -3506,7 +3525,7 @@ function initLwChart(){
   };
   lwOverlaySeries={};
   Object.keys(overlayStyle).forEach(function(key){
-    lwOverlaySeries[key]=lwChart.addLineSeries(Object.assign(
+    lwOverlaySeries[key]=lwChart.addSeries(LightweightCharts.LineSeries, Object.assign(
       // autoscaleInfoProvider:()=>null takes this series OUT of the
       // price scale's autoscale calculation (2026-07-26). Reported
       // live: on SENSEX/FINNIFTY the axis was spanning -80,000 to
@@ -3531,7 +3550,7 @@ function initLwChart(){
   // not a custom-drawn shape) plus HH/HL/LH/LL text at each turning
   // point via Series Markers (the same native marker API already used
   // for trade events above).
-  lwZigzagSeries=lwChart.addLineSeries({
+  lwZigzagSeries=lwChart.addSeries(LightweightCharts.LineSeries,{
     color:"#58a6ffcc", lineWidth:1, priceLineVisible:false,
     lastValueVisible:false, crosshairMarkerVisible:false,
     autoscaleInfoProvider:function(){return null;},   // see note above
@@ -3542,7 +3561,7 @@ function initLwChart(){
   // ~20% of the chart) rather than a second synced chart instance —
   // the officially recommended approach for price+volume specifically
   // (unlike the oscillator panes, which DO need separate instances).
-  lwVolumeSeries=lwChart.addHistogramSeries({
+  lwVolumeSeries=lwChart.addSeries(LightweightCharts.HistogramSeries,{
     priceFormat:{type:"volume"}, priceScaleId:"lw-volume",
     color:"#58a6ff88",
   });
@@ -3581,6 +3600,14 @@ function createPaneChart(containerId, height, showTimeAxis){
     timeScale:{timeVisible:true,secondsVisible:false,visible:!!showTimeAxis},
     rightPriceScale:{borderVisible:false},
   });
+  // v59.89 — attributionLogo is NEW since 4.1.3 and defaults to true, so
+  // the upgrade would have silently stamped a logo onto all six chart
+  // instances. Left ON for the price chart and the backtest chart, where
+  // there is room and where it satisfies the library's attribution; OFF
+  // here only, because these panes are 90-110px tall and the logo covers
+  // a meaningful share of the oscillator itself. Same page, so the
+  // attribution is still displayed alongside them.
+  chart.applyOptions({layout:{attributionLogo:false}});
   new ResizeObserver(function(entries){
     if(entries.length) chart.applyOptions({width:entries[0].contentRect.width});
   }).observe(container);
@@ -3602,26 +3629,26 @@ function initLwPanes(){
   if(typeof LightweightCharts==="undefined") return;
 
   const macdChart=createPaneChart("lwMacdContainer", 110, false);
-  const macdHist=macdChart.addHistogramSeries({priceFormat:{type:"price",precision:2}, priceLineVisible:false, lastValueVisible:false});
-  const macdLine=macdChart.addLineSeries({color:"#58a6ff", lineWidth:1, priceLineVisible:false, lastValueVisible:false});
-  const macdSignal=macdChart.addLineSeries({color:"#d29922", lineWidth:1, priceLineVisible:false, lastValueVisible:false});
+  const macdHist=macdChart.addSeries(LightweightCharts.HistogramSeries,{priceFormat:{type:"price",precision:2}, priceLineVisible:false, lastValueVisible:false});
+  const macdLine=macdChart.addSeries(LightweightCharts.LineSeries,{color:"#58a6ff", lineWidth:1, priceLineVisible:false, lastValueVisible:false});
+  const macdSignal=macdChart.addSeries(LightweightCharts.LineSeries,{color:"#d29922", lineWidth:1, priceLineVisible:false, lastValueVisible:false});
   lwPanes.macd={chart:macdChart, primary:macdLine, series:{hist:macdHist, line:macdLine, signal:macdSignal}, dataByTime:{}};
 
   const rsiChart=createPaneChart("lwRsiContainer", 110, false);
-  const rsiLine=rsiChart.addLineSeries({color:"#a371f7", lineWidth:1, priceLineVisible:false});
+  const rsiLine=rsiChart.addSeries(LightweightCharts.LineSeries,{color:"#a371f7", lineWidth:1, priceLineVisible:false});
   rsiLine.createPriceLine({price:70, color:"#f85149", lineWidth:1, lineStyle:2, axisLabelVisible:true, title:"70"});
   rsiLine.createPriceLine({price:30, color:"#3fb950", lineWidth:1, lineStyle:2, axisLabelVisible:true, title:"30"});
   lwPanes.rsi={chart:rsiChart, primary:rsiLine, series:{line:rsiLine}, dataByTime:{}};
 
   const stochChart=createPaneChart("lwStochContainer", 110, false);
-  const stochK=stochChart.addLineSeries({color:"#58a6ff", lineWidth:1, priceLineVisible:false});
-  const stochD=stochChart.addLineSeries({color:"#d29922", lineWidth:1, priceLineVisible:false});
+  const stochK=stochChart.addSeries(LightweightCharts.LineSeries,{color:"#58a6ff", lineWidth:1, priceLineVisible:false});
+  const stochD=stochChart.addSeries(LightweightCharts.LineSeries,{color:"#d29922", lineWidth:1, priceLineVisible:false});
   stochK.createPriceLine({price:80, color:"#f85149", lineWidth:1, lineStyle:2, axisLabelVisible:true, title:"80"});
   stochK.createPriceLine({price:20, color:"#3fb950", lineWidth:1, lineStyle:2, axisLabelVisible:true, title:"20"});
   lwPanes.stoch={chart:stochChart, primary:stochK, series:{k:stochK, d:stochD}, dataByTime:{}};
 
   const atrChart=createPaneChart("lwAtrContainer", 90, true);   // last pane shows the shared time axis
-  const atrLine=atrChart.addLineSeries({color:"#f85149", lineWidth:1, priceLineVisible:false});
+  const atrLine=atrChart.addSeries(LightweightCharts.LineSeries,{color:"#f85149", lineWidth:1, priceLineVisible:false});
   lwPanes.atr={chart:atrChart, primary:atrLine, series:{line:atrLine}, dataByTime:{}};
 
   lwAllCharts=[lwChart, macdChart, rsiChart, stochChart, atrChart];
@@ -3760,7 +3787,8 @@ function toggleLwZigzag(visible){
 function resetLwChartData(){
   lwChartHasData=new Map();
   lwRangeLockUntil=Date.now()+1500;   // absorb async stale range events from the teardown
-  if(lwSeries){ lwSeries.setData([]); lwSeries.setMarkers([]); }
+  if(lwSeries){ lwSeries.setData([]); }
+  if(lwMarkers){ lwMarkers.setMarkers([]); }
   lwCandleByTime={};
   lwTradeAndFlagMarkers=[];
   lwZigzagMarkers=[];
@@ -4944,7 +4972,7 @@ async function loadBacktest(){
 // streaming) Lightweight Charts instance from the Live Chart's
 // websocket-driven one — this only ever needs a one-time setData() per
 // day selection, no live updates, no panes/indicators.
-let btChart=null, btSeries=null, btSelection=null;
+let btChart=null, btSeries=null, btSelection=null, btMarkers=null;   // btMarkers: v5 marker primitive, see lwMarkers
 function initBtChart(){
   if(btChart || typeof LightweightCharts==="undefined") return;
   const container=document.getElementById("btChartContainer");
@@ -4956,10 +4984,11 @@ function initBtChart(){
     timeScale:{timeVisible:true,secondsVisible:false},
     rightPriceScale:{autoScale:true, scaleMargins:{top:0.12, bottom:0.12}},
   });
-  btSeries=btChart.addCandlestickSeries({
+  btSeries=btChart.addSeries(LightweightCharts.CandlestickSeries,{
     upColor:"#3fb950",downColor:"#f85149",borderVisible:false,
     wickUpColor:"#3fb950",wickDownColor:"#f85149",
   });
+  btMarkers=LightweightCharts.createSeriesMarkers(btSeries, []);
 }
 // Selecting a strategy row: pull that (name,symbol)'s trades (already
 // fetched into window._btResults by loadBacktest — no extra call),
@@ -5081,7 +5110,7 @@ async function renderBtChartDay(){
     });
   }
   markers.sort(function(a,b){return a.time-b.time;});
-  btSeries.setMarkers(markers);
+  btMarkers.setMarkers(markers);
   // Open on the MOST RECENT session and let the user scroll left, which
   // is the whole point. fitContent() would squeeze 30 sessions into one
   // screen and make individual candles unreadable.

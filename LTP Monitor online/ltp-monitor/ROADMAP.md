@@ -4,6 +4,98 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.89 — lightweight-charts 4.1.3 → 5.2.1 (2026-08-15)
+
+Asked whether the dashboard could move to TradingView **Advanced Charts**
+(the Charting Library) instead. It cannot, and the reason is licensing,
+not effort — recorded here so the question does not get re-opened from
+scratch:
+
+* TradingView's terms state Advanced Charts licences are "not available
+  for personal use, hobbies, studies, or testing" and are "only available
+  to companies for use in public web projects". This is a single-operator
+  app on 127.0.0.1 behind a session cookie.
+* It is self-hosted only, with no CDN distribution, and TradingView
+  prohibits "any part of the library in public repositories". This repo
+  is public.
+* Both of the above collide with CLAUDE.md rule 4 (never copy
+  third-party code into this repo; license-check first).
+
+There is also a design reason worth keeping: Advanced Charts' draw is its
+~100 built-in CLIENT-SIDE indicators, which would become a second
+implementation of quantities the server already computes. This codebase
+has been bitten three times by exactly that (market-session check, news
+sentiment regexes, OI quadrant classifier), and v59.88 was spent closing
+a replay/live parity gap of the same kind. For discretionary chart
+reading, tradingview.com itself plus `pine/*.pine` is the sanctioned path
+and already exists.
+
+So: stay on Lightweight Charts, and take the v5 line.
+
+**The upgrade is not optional-shaped.** v5 REMOVED `addLineSeries`,
+`addCandlestickSeries` and `addHistogramSeries` outright — verified by
+grepping both bundles (0 occurrences in 5.2.1, present in 4.1.3). There
+is no deprecation window, so a missed call site does not degrade, it
+throws at chart construction. All 12 series-creation sites moved to
+`addSeries(LightweightCharts.XSeries, opts)`.
+
+Markers changed shape rather than name: they are no longer a method on
+the series but a primitive attached to it, and the attach call returns
+the only handle that can set them. `lwMarkers`/`btMarkers` are bound
+right where their series are created, because a handle that outlives its
+series draws nothing and throws nothing.
+
+`layout.attributionLogo` is NEW since 4.1.3 and defaults to **true**, so
+the upgrade would silently have stamped a TradingView logo onto all six
+chart instances. Left ON for the price chart and the backtest chart
+(where it satisfies the library's attribution); turned OFF only for the
+four oscillator panes, which are 90–110px tall.
+
+### The bug this exposed, which is the more important finding
+
+`test_chart_hour_zoom_and_1x3_row.py` is the only test that drives a real
+browser against the real charting library. **Its browser section had been
+dead since login was introduced**: `GET /` serves the sign-in page to an
+unauthenticated browser, so the dashboard's script never ran and the
+block died on `lwChart is not defined`. Confirmed pre-existing by running
+the unmodified test on unmodified main — it fails identically on 4.1.3,
+so it was never a charting-library problem. It went unnoticed because the
+failure looked exactly like the sandbox's usual "CDN unreachable" noise.
+
+Fixed by minting an in-memory session (`auth._sessions`) and setting the
+cookie on the browser context — no password or TOTP secret in a test, and
+no test-only bypass added to the auth path. Three hardening changes came
+with it, each aimed at the same class of silent pass:
+
+* Assert we are ON the dashboard (`#lwChartContainer` exists) before
+  asserting anything about it. The sign-in page passes every DOM check
+  that merely looks for absence.
+* Capture `pageerror`. `initLwChart()` runs from an event handler, so a
+  throw inside it leaves the page rendering fine and the chart simply
+  missing — which is precisely the shape v5's removals would take.
+* Scrape the library version from the dashboard's own script tag instead
+  of hard-coding it, and version-stamp the npm install directory. Pinned
+  at 4.1.3 while the dashboard moved to 5.x, the test would have kept
+  passing against the OLD library; and the shared install dir would have
+  served a cached 4.1.3 tree in place of the version under test. A test
+  that supplies its own version cannot detect a mismatch with the thing
+  it is testing — the same failure mode CLAUDE.md already records for bus
+  quadrant strings.
+
+Now 29/29, in a real browser, exercising all 12 migrated call sites:
+11 overlay lines, volume histogram, 4 oscillator panes, the candlestick
+series, and a marker round-trip (2 set, 2 read back).
+
+**Verification:** golden replay bit-for-bit identical (sha `ae44f3d1e7f5`)
+— this is a frontend-only change and the hot path must not move. Suite
+152/163 on the branch vs 153/163 on main; the single delta is
+`test_rollback.py`, which asserts a clean working tree and passes once
+committed. The other 8 failures are pre-existing and clock/session
+dependent (run at 00:30 on a Saturday).
+
+**Not done:** drawing tools. Neither v5 nor anything else in-dashboard
+provides them; that remains a reason to use tradingview.com directly.
+
 ## v59.88 — replay/live parity for the reachability gate (2026-08-14)
 
 v59.86 added `edge_feasibility.target_reachable` to the live risk gate

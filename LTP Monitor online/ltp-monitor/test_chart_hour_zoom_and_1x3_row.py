@@ -107,16 +107,45 @@ print("\n6) REAL BROWSER + REAL CHARTING LIBRARY VERIFICATION — the "
 # in this sandboxed test environment — use a locally npm-installed
 # copy instead (an allowed domain here), checking a few plausible
 # locations before giving up and skipping this one sub-check.
-candidate_paths = [
-    "/tmp/node_modules/lightweight-charts/dist/lightweight-charts.standalone.production.js",
-    "/tmp/lwc_test_install/node_modules/lightweight-charts/dist/lightweight-charts.standalone.production.js",
-]
-lwc_file = next((p for p in candidate_paths if os.path.exists(p)), None)
-if lwc_file is None:
-    os.makedirs("/tmp/lwc_test_install", exist_ok=True)
-    subprocess.run(["npm", "install", "lightweight-charts@4.1.3"],
-                  cwd="/tmp/lwc_test_install", capture_output=True, timeout=120)
+#
+# v59.89 — the version is SCRAPED from the dashboard's own script tag
+# rather than written here. Two reasons, both learned on the v4->v5
+# upgrade:
+#
+#   * A hard-coded version in a test is a second source of truth. Pinned
+#     at 4.1.3 while the dashboard moved to 5.x, this test would have
+#     kept passing — against the OLD library — while every chart in the
+#     real browser threw, because v5 REMOVED addLineSeries et al. A test
+#     that supplies its own version cannot detect a mismatch with the
+#     thing it is testing.
+#   * The install directory is now version-stamped. It used to be reused
+#     across versions, so a cached 4.1.3 tree from an earlier run would
+#     be found first and silently served in place of the version under
+#     test — the same failure by a different route.
+_m = re.search(r'lightweight-charts@([0-9]+\.[0-9]+\.[0-9]+)/', h)
+if not _m:
+    print("  FAIL  could not read the lightweight-charts version from the "
+          "dashboard script tag — the browser check cannot be trusted")
+    results.append(("dashboard pins a lightweight-charts version", False))
+    LWC_VERSION = None
+else:
+    LWC_VERSION = _m.group(1)
+    print(f"  ..    dashboard pins lightweight-charts@{LWC_VERSION}; the "
+          f"browser check below runs against exactly that build")
+
+if LWC_VERSION is None:
+    lwc_file = None
+else:
+    _root = f"/tmp/lwc_test_install_{LWC_VERSION}"
+    candidate_paths = [
+        f"{_root}/node_modules/lightweight-charts/dist/lightweight-charts.standalone.production.js",
+    ]
     lwc_file = next((p for p in candidate_paths if os.path.exists(p)), None)
+    if lwc_file is None:
+        os.makedirs(_root, exist_ok=True)
+        subprocess.run(["npm", "install", f"lightweight-charts@{LWC_VERSION}"],
+                      cwd=_root, capture_output=True, timeout=120)
+        lwc_file = next((p for p in candidate_paths if os.path.exists(p)), None)
 
 if lwc_file is None:
     print("  SKIP  could not install lightweight-charts locally (no npm "
@@ -124,6 +153,7 @@ if lwc_file is None:
          "all source-level checks above still ran")
 else:
     import app as app_module
+    import auth as auth_module
     import uvicorn
     from playwright.sync_api import sync_playwright
 
@@ -133,10 +163,36 @@ else:
     thread.start()
     time.sleep(2)
 
+    # v59.89 — this whole section had been dead since login was added:
+    # GET / serves the SIGN-IN page to an unauthenticated browser, so the
+    # dashboard's script never ran, `LightweightCharts` was undefined and
+    # the block died on `lwChart is not defined`. It failed identically
+    # on 4.1.3, so it was never a charting-library problem — the browser
+    # check simply stopped testing the dashboard and nobody noticed,
+    # because the failure looked like the sandbox's usual CDN trouble.
+    #
+    # Sessions live in memory (auth._sessions), so one can be minted
+    # here directly. That deliberately avoids putting a password or a
+    # TOTP secret in a test, and avoids adding a test-only bypass to the
+    # auth path — the app is exercised exactly as it ships.
+    _token = "test-session-" + "0" * 24
+    auth_module._sessions[_token] = {
+        "user": "test-browser", "role": "admin", "expires": time.time() + 3600}
+
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch()
-            page = browser.new_page(viewport={"width": 1400, "height": 900})
+            context = browser.new_context(viewport={"width": 1400, "height": 900})
+            context.add_cookies([{"name": app_module.SESSION_COOKIE,
+                                  "value": _token, "domain": "127.0.0.1",
+                                  "path": "/"}])
+            page = context.new_page()
+            # v59.89 — capture uncaught exceptions. initLwChart() is
+            # called from an event handler, so a throw inside it leaves
+            # the page looking fine and the chart simply absent. Without
+            # this the v4->v5 breakage would have been invisible here.
+            page_errors = []
+            page.on("pageerror", lambda e: page_errors.append(str(e)))
 
             with open(lwc_file) as f:
                 lwc_source = f.read()
@@ -147,6 +203,14 @@ else:
             page.route("**/unpkg.com/lightweight-charts**", handle_route)
             page.goto("http://127.0.0.1:8938/", wait_until="domcontentloaded", timeout=15000)
             page.wait_for_timeout(2000)
+
+            # Assert we are on the DASHBOARD before asserting anything
+            # about it. Without this the sign-in page passes silently
+            # through every DOM check that merely looks for absence.
+            check("the browser is authenticated and on the dashboard, "
+                 "not the sign-in page",
+                  page.query_selector("#lwChartContainer") is not None,
+                  page.title())
 
             has_lwc = page.evaluate('typeof LightweightCharts')
             check("the real charting library loaded (via local install, "
@@ -178,10 +242,30 @@ else:
               const range = lwChart.timeScale().getVisibleRange();
               const latest = candles[candles.length-1].time;
               const oldest = candles[0].time;
+              // v59.89 — drive the marker path too. In v5 markers moved
+              // off the series onto a primitive whose handle is returned
+              // by the attach call; a stale or missing handle draws
+              // NOTHING and throws nothing, so only reading the markers
+              // back proves the layer is still wired.
+              let markers_readback = -1;
+              try {
+                lwTradeAndFlagMarkers = [
+                  {time: candles[10].time, position:'belowBar',
+                   color:'#3fb950', shape:'arrowUp', text:'T'},
+                  {time: candles[20].time, position:'aboveBar',
+                   color:'#f85149', shape:'arrowDown', text:'X'}];
+                lwZigzagMarkers = []; lwSignalMarkers = [];
+                lwRedrawMarkers();
+                markers_readback = lwMarkers.markers().length;
+              } catch (e) { markers_readback = 'threw: ' + e.message; }
               return {
                 span_minutes: (range.to-range.from)/60,
                 oldest_excluded: oldest < range.from,
-                latest_included: latest <= range.to && latest >= range.from
+                latest_included: latest <= range.to && latest >= range.from,
+                markers_readback: markers_readback,
+                has_volume: !!lwVolumeSeries,
+                overlay_count: Object.keys(lwOverlaySeries||{}).length,
+                pane_count: Object.keys(lwPanes||{}).length
               };
             }
             ''')
@@ -198,6 +282,27 @@ else:
                 check("the newest candle is correctly INCLUDED in the "
                      "visible range",
                       result["latest_included"])
+                # v59.89 — the v4->v5 migration checks. Every one of
+                # these objects is built by a call that v5 renamed or
+                # moved; if any site was missed, the construction throws
+                # and the count is 0 rather than merely wrong.
+                check("the marker layer round-trips through the v5 "
+                     "primitive (2 set, 2 read back)",
+                      result["markers_readback"] == 2,
+                      str(result["markers_readback"]))
+                check("the volume histogram was created",
+                      result["has_volume"])
+                check("all 11 indicator overlay line series were created",
+                      result["overlay_count"] == 11,
+                      str(result["overlay_count"]))
+                check("all 4 oscillator panes were created "
+                     "(macd/rsi/stoch/atr)",
+                      result["pane_count"] == 4, str(result["pane_count"]))
+                # A page that threw during chart construction still
+                # renders; only the console records it. v5 removing the
+                # v4 series methods makes that the exact failure shape.
+                check("no uncaught page errors during chart construction",
+                      not page_errors, "; ".join(page_errors[:3]))
 
             # Confirm the new 1x3 row also renders correctly in this
             # same real page load
