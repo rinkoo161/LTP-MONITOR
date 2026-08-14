@@ -890,6 +890,78 @@ def _edge_ok_pa(ev, lot, fee, cfg):
     return ef.feasible(designed, fee, cfg)[0]
 
 
+def _atm_premium_at(symbol, ts, spot, leg, _cache={}):
+    """Real archived ATM premium for `symbol` at `ts`, or None.
+
+    v59.88. Reads the same `chain_snapshots` archive the spread replay
+    walks, so the number is observed rather than assumed. Cached per
+    (symbol, 5-min bucket) because the PA replays evaluate every bar and
+    the chain only moves every 60s.
+    """
+    if not (ts and spot):
+        return None
+    key = (symbol, int(ts) // 300, leg)
+    if key in _cache:
+        return _cache[key]
+    try:
+        import history
+        snap = history.get_chain_snapshot_map(symbol, int(ts))
+        strikes = sorted({k for (k, _lg) in (snap or {})})
+        prem = None
+        if strikes:
+            atm = min(strikes, key=lambda k: abs(k - float(spot)))
+            prem = ((snap.get((atm, leg)) or {}).get("ltp")) or None
+    except Exception:
+        prem = None
+    _cache[key] = prem
+    return prem
+
+
+def _reachable_ok_pa(ev, symbol, ts, cfg):
+    """v59.88 — replay/live parity for the v59.86 reachability gate.
+
+    The live gate states the target as a percentage of PREMIUM; these
+    replays are spot-proxy and carry only `entry_spot`/`t1_spot`.
+    Applying the live threshold to spot values would compare a spot
+    quantity against a premium one — the exact dimensional bug
+    analyzer.option_stop_geometry's comment documents, where every
+    "volatility-based" stop turned out to be the clamp.
+
+    So instead of approximating the gate, look the REAL premium up from
+    the chain archive and call the SAME function live calls. The spot
+    move is translated at the same 0.5 delta `_edge_ok_pa` already uses
+    for costs, so both admission checks share one convention.
+
+    Fails OPEN when the archive has no chain for that moment (pruned or
+    never captured): a replay must not invent a refusal live would not
+    have made. Those days are logged by the coverage filter already.
+    """
+    entry_spot = float(ev.get("entry_spot") or 0)
+    t1_spot = float(ev.get("t1_spot") or 0)
+    if not (entry_spot > 0 and t1_spot > 0):
+        return True
+    leg = "ce" if t1_spot > entry_spot else "pe"
+    prem = _atm_premium_at(symbol, ts, entry_spot, leg)
+    if not prem or prem <= 0:
+        return True
+    # The strategy's OWN spot target is not what live gates. PriceAction
+    # and MTF signals are routed through analyzer.option_stop_geometry
+    # (agents.py, "routed through analyzer.option_stop_geometry()"),
+    # which DISCARDS the spot target and rebuilds target1 on the premium
+    # as entry x (1 + stop_pct x 2). Gating the strategy's spot target
+    # would therefore check a target live never uses — measured at 3% of
+    # entries blocked here against 73% of live signals, which is what
+    # exposed the mistake. Build the same geometry from the same inputs.
+    import analyzer as _an
+    import edge_feasibility as ef
+    reg = historical_regime(symbol, ts) or {}
+    _sl, _t1, _t2, _meta = _an.option_stop_geometry(
+        prem, cfg=cfg, atr_pct=reg.get("atr_pct"), spot=entry_spot)
+    if not _t1:
+        return True
+    return ef.target_reachable(prem, _t1, cfg)[0]
+
+
 def _bar_exit(pos, bar, is_last):
     """Intrabar exit resolution for the spot-proxy replays (v59.69,
     third-eye Tier 3). The old test compared CLOSES only: a bar that
@@ -1048,6 +1120,8 @@ def replay_pa(symbol, name, params=None, days=None, log=lambda m: None):
                                  precomputed=precomputed)
             if ev and not _edge_ok_pa(ev, lot, fee, cfg):
                 ev = None             # Tier 2: designed edge below cost
+            if ev and not _reachable_ok_pa(ev, symbol, win[-1]["ts"], cfg):
+                ev = None             # v59.86 parity: target unreachable
             if ev and not _runway_ok(win[-1]["ts"], cfg):
                 ev = None             # v59.78: no runway to the target
             if ev:
@@ -1132,6 +1206,8 @@ def replay_ew_reversal(symbol, params=None, days=None, log=lambda m: None):
                                             taken_today=taken, pivots=pivots)
             if ev and not _edge_ok_pa(ev, lot, fee, cfg):
                 ev = None             # Tier 2: designed edge below cost
+            if ev and not _reachable_ok_pa(ev, symbol, win[-1]["ts"], cfg):
+                ev = None             # v59.86 parity: target unreachable
             if ev and not _runway_ok(win[-1]["ts"], cfg):
                 ev = None             # v59.78: no runway to the target
             if ev:
@@ -1210,6 +1286,8 @@ def replay_ta_elliott(symbol, params=None, days=None, log=lambda m: None):
                                       taken_today=taken, pivots=pivots)
             if ev and not _edge_ok_pa(ev, lot, fee, cfg):
                 ev = None             # Tier 2: designed edge below cost
+            if ev and not _reachable_ok_pa(ev, symbol, win[-1]["ts"], cfg):
+                ev = None             # v59.86 parity: target unreachable
             if ev and not _runway_ok(win[-1]["ts"], cfg):
                 ev = None             # v59.78: no runway to the target
             if ev:
