@@ -27,7 +27,7 @@ from agents import Orchestrator, compute_momentum
 import agents
 
 BASE = os.path.dirname(os.path.abspath(__file__))
-APP_VERSION = "v59.86"   # maintained per explicit request; last delivered was v49
+APP_VERSION = "v59.87"   # maintained per explicit request; last delivered was v49
 
 app = FastAPI(title="LTP Option Chain Monitor")
 
@@ -2847,7 +2847,18 @@ def api_journal_shadow(limit: int = 200, from_date: str = "", to_date: str = "",
             "stats": {"total": len(out),
                       "approved": sum(1 for e in out if e["verdict"] == "APPROVED"),
                       "rejected": sum(1 for e in out if e["verdict"] == "REJECTED"),
+                      # v59.87 — `rejected_resolved` counts entries that
+                      # have ANY outcome, including unresolved_timeout.
+                      # A field named "resolved" that includes
+                      # "unresolved" is how the 14-Aug journal review
+                      # read 76 resolved rejections when 38 were
+                      # conclusive and 38 timed out, and then computed
+                      # a rejection count that did not match its own
+                      # accuracy denominator. Kept for compatibility;
+                      # `rejected_conclusive` is the honest number and
+                      # is the denominator of the accuracy below.
                       "rejected_resolved": len(rejected_resolved),
+                      "rejected_conclusive": conclusive,
                       "rejected_timed_out": timed_out,
                       "rejected_would_have_won": hit_target,
                       "rejected_would_have_lost": hit_sl,

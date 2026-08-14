@@ -47,7 +47,11 @@ check("manual_trade() re-runs risk.evaluate() server-side before "
       "ex.place(job, manual=True)" in agents_src)
 check("each check string is prefixed with \u2713/\u2717 — confirms the exact "
       "format the frontend fix parses",
-      '("\u2713" if cond else "\u2717") + " " + label' in agents_src)
+      # v59.87 renamed the variable after the prefix (`label` -> `text`,
+      # since a check may now carry a separate failure phrasing). The
+      # EMITTED format is byte-identical, so assert the prefix
+      # construction rather than the variable name that follows it.
+      '("\u2713" if cond else "\u2717") + " "' in agents_src)
 
 print("\n2) the shipped frontend fix: canTrade now actually consults "
      "risk_preview_checks, not just the signal direction")

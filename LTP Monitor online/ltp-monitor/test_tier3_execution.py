@@ -85,8 +85,12 @@ try:
                            "paused_symbols": []}
     ex.bus = FakeBus({"closed_trades": [{"pnl": -4000, "closed_date": TODAY}]})
     r = ex.enter_future("NIFTY", "LONG", lots=1)
+    # v59.87 renamed this to "daily risk budget" — it compares a
+    # PROSPECTIVE risk against the day's allowance, so it was never a
+    # realised-loss trip. Assert the control FIRED and names the budget,
+    # not the exact former wording.
     check("futures entry BLOCKED when the day + risk would breach the limit",
-          "daily loss limit" in (r.get("error") or ""), str(r))
+          agents.DAILY_BUDGET_LABEL in (r.get("error") or ""), str(r))
     ex.bus = FakeBus({"closed_trades": [{"pnl": -1000, "closed_date": TODAY}]})
     r2 = ex.enter_future("NIFTY", "LONG", lots=1)
     check("futures entry passes the gate when headroom remains "

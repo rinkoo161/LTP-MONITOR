@@ -44,24 +44,39 @@ _h = SRC.index("def planned_option_lots(")
 HELPER = SRC[_h:SRC.index("\ndef ", _h + 10)]
 check("both bodies sliced", len(PLACE) > 500 and len(HELPER) > 300,
       f"place={len(PLACE)} helper={len(HELPER)}")
+# Strip comments before asserting on what _place DOES: the comment
+# explaining the collapse names the very functions it no longer calls,
+# and matched them.
+PLACE_CODE = "\n".join(l for l in PLACE.split("\n")
+                       if not l.lstrip().startswith("#"))
 
-print("\n1) the two sizing chains still match")
+print("\n1) there is exactly ONE sizing chain, and _place calls it")
+# v59.87 — this section used to assert the two chains MIRRORED each
+# other, because planned_option_lots was a copy of _place's logic. The
+# 14-Aug journal review asked for one authoritative risk calculation,
+# so they were collapsed. The invariant is now stronger: _place must
+# NOT contain a chain of its own.
 for fn in ("deployed_capital", "size_by_atr_risk", "size_option_buy",
            "cap_by_rupee_risk"):
-    check(f"_place uses {fn}", fn in PLACE)
-    check(f"planned_option_lots uses {fn}", fn in HELPER)
-check("both cap against the OPTION key, not the futures one",
-      PLACE.count('key="option_risk_per_trade_rupees"') == 1
-      and HELPER.count('key="option_risk_per_trade_rupees"') == 1,
+    check(f"planned_option_lots owns {fn}", fn in HELPER)
+    check(f"_place does NOT re-derive {fn}", fn not in PLACE_CODE,
+          "a second copy is the drift this collapse removes")
+check("_place gets its lots from the shared helper",
+      "planned_option_lots(" in PLACE)
+check("the cap targets the OPTION key, not the futures default",
+      HELPER.count('key="option_risk_per_trade_rupees"') == 1,
       "cap_by_rupee_risk defaults to futures_risk_per_trade_rupees")
-check("both branch on the same mtf_confluence condition",
-      '"mtf_confluence"' in PLACE and '"mtf_confluence"' in HELPER)
+check("the mtf_confluence branch survives the collapse",
+      '"mtf_confluence"' in HELPER)
+check("the risk gate uses the same helper",
+      SRC.count("planned_option_lots(") >= 3,
+      "definition + risk gate + execution")
 
-print("\n2) the daily-loss check no longer assumes lots_per_trade")
+print("\n2) the daily RISK BUDGET check no longer assumes lots_per_trade")
 # Anchor on the f-string, not the bare phrase — the phrase also appears
 # in the comment above the check (quoting the live log line), so
 # index() found the comment and scanned the wrong window entirely.
-_d = SRC.index('f"daily loss limit (risking')
+_d = SRC.index('f"{DAILY_BUDGET_LABEL}: trade risk')
 _ctx = SRC[_d - 900:_d + 300]
 check("the anchor found the CODE, not the comment", "check(" in _ctx)
 check("it sizes from planned_option_lots", "planned_option_lots" in _ctx)
@@ -85,7 +100,7 @@ class _Bus:
 
 SIG = {"signal": "BUY_PE", "strike": 24300, "entry": 130.45,
        "stoploss": 89.55, "target1": 212.2, "confidence": 71}
-lots, why = agents.planned_option_lots(CFG, _Bus(), "NIFTY", SIG)
+lots, why, _cap = agents.planned_option_lots(CFG, _Bus(), "NIFTY", SIG)
 risk = (SIG["entry"] - SIG["stoploss"]) * 65 * max(1, lots)
 check("the real signal sizes to 3 lots, not 5", lots == 3, f"{lots} lots — {why}")
 check("its risk is inside the daily limit", risk < 10000, f"₹{risk:,.0f}")
@@ -95,7 +110,7 @@ check("the old arithmetic would have breached it",
 
 print("\n4) it still refuses what the per-trade cap genuinely refuses")
 _tight = {**CFG, "option_risk_per_trade_rupees": 500}
-lots2, why2 = agents.planned_option_lots(_tight, _Bus(), "NIFTY", SIG)
+lots2, why2, _cap2 = agents.planned_option_lots(_tight, _Bus(), "NIFTY", SIG)
 check("an unaffordable trade sizes to 0", lots2 == 0, f"{lots2} — {why2}")
 
 print()

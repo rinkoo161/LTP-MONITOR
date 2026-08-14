@@ -4,6 +4,76 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.87 — the 14-Aug journal review, validated and applied (2026-08-14)
+
+An external review of the 14-Aug journal and P&L proposed a large
+correction programme. Its headline finding was **not valid**; four of
+its secondary findings were, and are applied here.
+
+**The claimed P0 — a BANKNIFTY per-trade risk-cap bypass — does not
+exist.** The review computed the trade's ₹3,936 stop-risk against a
+₹2,000 cap and concluded the cap had been bypassed. But that trade
+entered at **14:03:49**, and the cap was raised 2,000 → 10,000 at
+**09:46:51** on operator instruction. ₹3,936 was comfortably inside the
+cap actually in force; the approval was correct. Reviewing a journal
+without the config timeline is exactly the drift hazard
+`derivatives-third-eye` warns about — and the review's own §14 cautions
+against overfitting to the 14-Aug sample, which is what its P0 did.
+A bypass is also not *possible*: `evaluate()` gates on whether one lot
+fits, and execution re-applies the cap with the real lot count.
+
+**What the review missed** is why the two approvals lost. Both targets
+were unreachable — NIFTY needed **+102.4%**, BANKNIFTY **+43.8%**, and
+BANKNIFTY's MFE was **+₹8**, i.e. it never moved. Both are blocked by
+v59.86, which shipped hours earlier from an independent direction.
+
+**Applied:**
+
+1. *One authoritative risk calculation* (the review's real §2 point, and
+   a gap flagged when v59.85 shipped). `planned_option_lots()` was a
+   MIRROR of `_place`'s chain; `_place` now calls it. One definition,
+   both callers.
+2. *"daily loss limit" → "daily risk budget"* on both the options and
+   futures paths. It compares a PROSPECTIVE trade's worst case against
+   the day's allowance, so logging `daily loss limit (day P&L ₹0)` read
+   as though the account had already lost the limit. The control is
+   unchanged. **The trap:** `StrategyAgent`'s 15-minute backoff arms by
+   MATCHING that text, so a naive rename would have silently stopped it
+   arming for the reason that fires most often. Both now derive from
+   `DAILY_BUDGET_LABEL`, and a test pins the coupling.
+3. *Outcome-aware check labels.* `check()` takes an optional
+   `fail_label`. A failing confidence check now reads
+   `✗ confidence 65 < required 70` instead of `✗ confidence 65≥70`.
+   The comparison was always correct — but **three** separate reviewers
+   read that line as a reversed comparison and filed it as a P0. When a
+   line is misread that consistently, the line is the defect.
+4. *KPI honesty.* `rejected_resolved` counted entries with ANY outcome,
+   including `unresolved_timeout` — which is how the review read "76
+   resolved rejections" when 38 were conclusive and 38 timed out. Added
+   `rejected_conclusive` (the accuracy's actual denominator), and the
+   dashboard now labels the figure "Risk-gate accuracy (rejections only
+   — NOT system P&L)" with its n. 92.1% shown bare on a day that lost
+   ₹3,518 is the framing that needed killing.
+
+**Declined:** the P0 rewrite, and the BUY NOW/WAIT/WATCH/REJECT taxonomy
+(§5) — the system already has WAIT and a reasoned check list, and new
+states without evidence they change decisions are churn. MFE/MAE (§6-7)
+are **already implemented** (`agents.py` position and spread tracking);
+the R-multiples and timing fields are not, and remain open.
+
+**Gates:** golden replay bit-for-bit identical · bench p99 61.3 ms/frame,
+unchanged in character · version gate v59.87 · suite shows only the 4
+known clock-dependent failures, verified failing identically on
+unchanged `main`.
+
+Six existing tests needed re-pointing, all asserting structure rather
+than behaviour (a variable name after the ✓/✗ prefix, the cap's file
+location, the old label text). Each was updated to assert the same
+intent against the new shape, not weakened — and one re-pointing hit
+the ambiguous-anchor trap this repo has now logged six times: a split
+on `planned_option_lots(` matched the *comment* naming the helper
+rather than the call.
+
 ## v59.86 — targets the premium will not travel to (2026-08-14)
 
 Acts on the one finding in the whole audit that had measured edge, and
