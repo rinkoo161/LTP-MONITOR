@@ -4,6 +4,75 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.86 — targets the premium will not travel to (2026-08-14)
+
+Acts on the one finding in the whole audit that had measured edge, and
+the only positive result in ~1,600 signals.
+
+`analyzer.option_stop_geometry` builds `target1 = entry × (1 + stop_pct
+× 2)`, so target distance is WELDED to stop width — a wider stop
+mechanically buys a more distant target. The existing feasibility gate
+(v59.73) asks whether the designed edge clears its COSTS. Nothing asked
+whether the target could be REACHED. Over the resolved shadow journal,
+with RR median 2.00 in every bucket so hit rates compare directly:
+
+    move needed to reach T1     n    hit T1 first   E[R]
+    <20%                      215       47.0%      +0.307
+    20-40%                    144       22.9%      -0.398
+    40-80%                    120       30.0%      -0.110
+    >80%                        55      30.9%      +0.033
+
+The median signal needed 28.6% — inside the WORST bucket. Note the cut
+must be at 20%, not higher: 20-40% is the worst band, so a looser cap
+would re-admit precisely the population that loses most.
+
+**Three falsification attempts, all survived.** (1) RR is 2.00 median
+in every bucket, so the hit rates are not confounded by differing
+payoffs. (2) The effect holds independently in both halves of the
+sample — first half 51.9% vs 35.0%, second half 46.9% vs 21.9%. (3) It
+is not one strategy or symbol in disguise: the <20% population spans
+five sources (vwap_pullback, momentum_confluence, orb, AI, unattributed)
+and all four symbols.
+
+`edge_feasibility.target_reachable()` sits beside the cost-feasibility
+gate it complements. `signal_max_target_move_pct` (default 20.0, 0
+disables) is registered in DEFAULTS and SettingsIn.
+
+**Impact is large and deliberate: 73.2% of long-option signals with
+geometry would be blocked (919 of 1,256), including 53 of the 75 that
+were previously APPROVED.** That is the point — the blocked population
+is the one with measured negative expectancy — but it is a big
+behaviour change and the operator should know the number. The shadow
+journal keeps recording and resolving blocked signals, so suppression
+does not stop the measurement.
+
+`test_target_reachability.py` re-derives the relationship from the
+journal rather than trusting the constant: if targets under the cap
+stop being reached more often than those just beyond it, the test fails
+loudly rather than letting a threshold sit in config looking
+authoritative.
+
+**Honest limits.** This is an in-sample cut acted on with ~12
+independent days. The relationship is NOT monotone — >80% is mildly
+positive (+0.033, n=55) — so 20% is where the evidence is, not a smooth
+law. Resolution excludes 446 timed-out signals, and E[R] assumes stops
+and targets fill exactly, which overstates it.
+
+**Dropped deliberately:** the closed-bar regime fix proposed after B1.
+The offline comparison (scratchpad) recomputed every historical label
+with and without the forming bar by calling the real `_classify`, and
+found no performance difference — `rangebound`, the only category doing
+real work, scored 27.1% live vs 27.0% closed-bar. The correctness
+argument stands (backtest/live parity, verdict stability, the v59.83
+dedup interaction) but it is not worth 23 call sites while the system
+is losing money. Revisit when that code is open for another reason.
+
+**Gates:** golden replay bit-for-bit identical · `bench_hotpath` p99
+56.8 ms/frame, unchanged in character · version gate v59.86 · suite
+shows no new failures (4 tests fail on `entry runway` at any hour past
+15:00 — verified failing identically on unchanged `main`, so they are
+clock-dependent, not regressions).
+
 ## Market-analysis audit — findings, no code change (2026-08-14)
 
 Run with the new `market-analysis-audit` skill, which complements

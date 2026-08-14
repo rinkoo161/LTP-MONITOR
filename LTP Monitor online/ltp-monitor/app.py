@@ -27,7 +27,7 @@ from agents import Orchestrator, compute_momentum
 import agents
 
 BASE = os.path.dirname(os.path.abspath(__file__))
-APP_VERSION = "v59.85"   # maintained per explicit request; last delivered was v49
+APP_VERSION = "v59.86"   # maintained per explicit request; last delivered was v49
 
 app = FastAPI(title="LTP Option Chain Monitor")
 
@@ -688,6 +688,7 @@ class SettingsIn(BaseModel):
     paper_mode: bool | None = None
     auto_execute: bool | None = None
     min_confidence: int | None = None
+    signal_max_target_move_pct: float | None = None
     signal_dedup_enabled: bool | None = None
     signal_repeat_window_sec: int | None = None
     signal_repeat_conf_delta: float | None = None

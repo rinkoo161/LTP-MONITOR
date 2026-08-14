@@ -119,3 +119,53 @@ def future_feasible(symbol, entry, target, lot_size, lots, cfg=None):
               f"({'clears' if ok else 'BELOW'} the "
               f"{min_ratio(cfg):.1f}x feasibility bar)")
     return ok, detail
+
+
+def target_reachable(entry, target1, cfg=None):
+    """(ok, human_detail) — is target1 close enough to actually be hit?
+
+    v59.86. The existing feasibility gate above asks whether the
+    designed edge clears its COSTS. This asks the other structural
+    question, which nothing was asking: can the target be REACHED?
+
+    `analyzer.option_stop_geometry` builds target1 as
+    `entry × (1 + stop_pct × 2)`, so target distance is welded to stop
+    width — a wider stop mechanically buys a more distant target. The
+    consequence, measured over 534 resolved shadow signals (all four
+    symbols, five signal sources, RR median 2.00 in every bucket so the
+    hit rates are directly comparable):
+
+        move needed to reach T1     n    hit T1 first   E[R]
+        <20%                      215       47.0%      +0.307
+        20-40%                    144       22.9%      -0.398
+        40-80%                    120       30.0%      -0.110
+        >80%                       55       30.9%      +0.033
+
+    The median signal needed 28.6%, i.e. the worst bucket. Survives
+    three falsification checks: RR is constant across buckets, the
+    effect holds independently in BOTH halves of the sample (first
+    half 51.9% vs 35.0%, second half 46.9% vs 21.9%), and it is not one
+    strategy or symbol in disguise.
+
+    Honest caveats, because this is an in-sample cut acted on with ~12
+    independent days: >80% is mildly positive (+0.033, n=55) so the
+    relationship is NOT monotone — the cut at 20% is where the evidence
+    is, not a smooth law. Resolution excludes 446 signals that timed
+    out, and E[R] assumes stops and targets fill exactly, which
+    overstates it. Re-derive from the shadow journal before trusting
+    the numbers above at a larger sample.
+
+    Set `signal_max_target_move_pct` to 0 to disable.
+    """
+    cfg = cfg if cfg is not None else _config.load()
+    cap = float(cfg.get("signal_max_target_move_pct", 20.0) or 0)
+    entry, target1 = float(entry or 0), float(target1 or 0)
+    if cap <= 0:
+        return True, "target reachability not enforced (cap disabled)"
+    if entry <= 0 or target1 <= 0:
+        return True, "target reachability not checked (no geometry)"
+    move = (target1 - entry) / entry * 100
+    ok = move <= cap
+    return ok, (f"target1 needs a {move:.1f}% move "
+                f"({'within' if ok else 'BEYOND'} the {cap:.0f}% "
+                f"reachability cap)")

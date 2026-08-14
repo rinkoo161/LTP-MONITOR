@@ -152,6 +152,18 @@ DEFAULTS = {
     # bounds, NOT entry criteria — loosening them cannot create a
     # trade that the risk gate would otherwise refuse, it can only
     # re-ask a question already answered.
+    # v59.86 target reachability. analyzer.option_stop_geometry builds
+    # target1 as entry x (1 + stop_pct x 2), so a wider stop mechanically
+    # buys a more DISTANT target. Measured over 534 resolved shadow
+    # signals, with RR median 2.00 in every bucket so hit rates compare
+    # directly: a target needing <20% of premium was reached 47.0% of
+    # the time (E[R] +0.307); 20-40% was reached 22.9% (E[R] -0.398),
+    # and the median signal sat at 28.6% -- inside the worst bucket.
+    # Holds independently in both halves of the sample. This is a
+    # SUPPRESSION bound: raising it cannot create a trade the other
+    # gates would refuse, only re-admit ones measured to lose. Set 0
+    # to disable the check entirely.
+    "signal_max_target_move_pct": 20.0,
     "signal_dedup_enabled": True,
     "signal_repeat_window_sec": 900,   # same setup stays suppressed this long
     "signal_repeat_conf_delta": 5,     # confidence points that count as news

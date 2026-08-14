@@ -4557,6 +4557,14 @@ class RiskAgent(Agent):
             sig.get("entry", 0), sig.get("target1", 0),
             cfg["lot_sizes"].get(job["symbol"], 75), cfg)
         check(_edge_ok, _edge_detail)
+        # v59.86 — the sibling question that gate does NOT ask: the edge
+        # may clear its costs and still sit somewhere the premium will
+        # not travel. See edge_feasibility.target_reachable for the
+        # measured basis (E[R] +0.307 under a 20% move, -0.398 between
+        # 20-40%, where the median signal actually sat).
+        _reach_ok, _reach_why = edge_feasibility.target_reachable(
+            sig.get("entry", 0), sig.get("target1", 0), cfg)
+        check(_reach_ok, _reach_why)
         # v59.78 — entry RUNWAY: enough session left to plausibly reach
         # the target before the forced square-off.
         _runway = int(cfg.get("min_entry_runway_min", 30) or 0)
