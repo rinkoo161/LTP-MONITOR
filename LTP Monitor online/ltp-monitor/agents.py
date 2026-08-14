@@ -3622,6 +3622,42 @@ class FundamentalAgent(Agent):
         self.summary = f"daily brief: {brief['stance']}"
 
 
+def planned_option_lots(cfg, bus, symbol, sig):
+    """How many lots this option signal will ACTUALLY be placed at.
+
+    v59.85. The risk gate used to assume cfg["lots_per_trade"] while
+    execution sized properly and then applied the per-trade rupee cap,
+    so the gate rejected trades on a loss that could never occur.
+
+    This MIRRORS ExecutionAgent._place's sizing chain — same functions,
+    same order, same cap key. It is not yet called BY _place: that is
+    the live order path and extracting it mid-session was judged not
+    worth the risk. Two implementations of one quantity is exactly the
+    drift that has bitten this codebase three times already
+    (market-session check, news regexes, OI quadrants), so
+    test_planned_lots_sync.py pins the two together and fails if either
+    side changes its chain. Collapse them the next time _place is open
+    for other reasons.
+
+    Returns (lots, why). lots may be 0, meaning the per-trade cap
+    refuses the trade at any size.
+    """
+    import sizing
+    deployed = sizing.deployed_capital(
+        cfg, bus.get("positions", {}) or {}, bus.get("spreads", {}) or {})
+    if sig.get("source") == "mtf_confluence" and sig.get("atr"):
+        lots, why = sizing.size_by_atr_risk(
+            cfg, symbol, sig["atr"], delta=0.5, deployed=deployed)
+    else:
+        lots, why = sizing.size_option_buy(
+            cfg, symbol, sig.get("entry") or 0, sig.get("stoploss") or 0,
+            deployed)
+    lots, cap_why = sizing.cap_by_rupee_risk(
+        cfg, symbol, sig.get("entry") or 0, sig.get("stoploss") or 0, lots,
+        key="option_risk_per_trade_rupees")
+    return lots, (f"{why}; {cap_why}" if cap_why else why)
+
+
 def signal_repeat_key(sym, sig):
     """The identity of a setup for repeat-suppression purposes.
 
@@ -4484,10 +4520,32 @@ class RiskAgent(Agent):
             news, sig.get("signal"), cfg)
         self.bus.set(f"news_score:{job['symbol']}", news_score)
         check(not news_block, news_note)
+        # v59.85 — size this against the lots that will ACTUALLY be
+        # placed, not cfg["lots_per_trade"].
+        #
+        # This read `* cfg["lots_per_trade"]` (5) while ExecutionAgent
+        # sizes with size_option_buy() and then caps with
+        # cap_by_rupee_risk(), which on 2026-08-14 gave 3. The gate was
+        # therefore refusing trades on a loss that could not occur:
+        #
+        #   09:21:21 NIFTY BUY_PE  ✗ daily loss limit (risking ₹13,292)
+        #            5 lots x ₹2,658 — but the per-trade cap would have
+        #            placed 3, risking ₹7,974, inside the ₹10,000 limit.
+        #
+        # Note this is NOT a loosening: the limit is unchanged and a
+        # trade that genuinely breaches it is still refused. It stops
+        # the gate double-counting the very per-trade cap that runs
+        # immediately after it. Deliberately CALLS the sizing chain
+        # rather than reproducing the arithmetic — deriving a field by
+        # hand instead of calling the live function is a failure mode
+        # this codebase has been bitten by before.
+        _plan_lots, _plan_why = planned_option_lots(
+            cfg, self.bus, job["symbol"], sig)
         max_loss = (sig.get("entry", 0) - sig.get("stoploss", 0)) \
-            * cfg["lot_sizes"].get(job["symbol"], 75) * cfg["lots_per_trade"]
+            * cfg["lot_sizes"].get(job["symbol"], 75) * max(1, _plan_lots)
         check(self.daily_pnl - max_loss > -abs(cfg.get("daily_loss_limit", 5000)),
-              f"daily loss limit (risking ₹{max_loss:.0f}, day P&L ₹{self.daily_pnl:.0f})")
+              f"daily loss limit (risking ₹{max_loss:.0f} at {max(1, _plan_lots)} "
+              f"lot(s), day P&L ₹{self.daily_pnl:.0f})")
         # v59.73 (third-eye Tier 2) — structural feasibility: the trade's
         # own FIRST target must clear min_edge_cost_ratio × the modelled
         # round trip. The August record grossed ₹158/trade against ₹176
