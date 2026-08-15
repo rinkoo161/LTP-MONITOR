@@ -4,6 +4,89 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.94 — Category A closed: SEAS-3 null, SEAS-1b dies on costs (2026-08-15)
+
+Adds `tools/fetch_expiry_calendar.py`, `tools/seasonality_expiry.py`,
+`docs/seasonality-category-a-final.md`. No hot-path file touched beyond
+the three version strings.
+
+### The expiry calendar, and the shortcut that would have lied
+
+Reconstructed from NSE's own bhavcopies — 150 sampled files, both
+formats (legacy + UDiFF), ~4 minutes, no dependency, no payment. NIFTY
+441 expiries from 2017-01-25; BANKNIFTY 450; FINNIFTY 228;
+MIDCPNIFTY 172.
+
+The weekday it actually landed on:
+
+    NIFTY      2017-2024 Thu    2025 Thu:34/Tue:17    2026 Tue:35
+    BANKNIFTY  2017-2023 Thu    2024 Wed:37           2026 Tue:11
+
+**A "weekly expiry is Thursday" rule would have mislabelled most of
+2024-2026 and essentially all of BANKNIFTY 2024**, and because the error
+is contiguous in time rather than scattered it would have moved the
+estimate rather than blurring it. v59.93 refused that shortcut on
+principle; this is the evidence the principle was right.
+
+It also confirms NIFTY weeklies did not exist before 2019 (12-13
+expiries/year in 2017-18 against 46+ from 2019), so SEAS-3 is scoped
+from 2019 rather than from the start of the candle history.
+
+### SEAS-3 — tested, null
+
+Shape, not level: each day's 25-block profile is normalised by that
+day's own mean first, or a plain "expiry days are more volatile"
+difference would dominate and answer a different question. L1 distance
+between mean normalised profiles, permutation test on the expiry labels.
+
+    BANKNIFTY  193/1012  p=0.099  q=0.244   control 0.075 (borderline)
+    FINNIFTY   192/1013  p=0.163  q=0.244   control 0.342
+    NIFTY      388/1489  p=0.282  q=0.282   control 0.779
+
+Nothing survives. BANKNIFTY's control at 0.075 is closer to the line
+than a control should be, so its p=0.099 deserves less credit, not more.
+Level is +5.5%/+6.4%/-1.0% — inconsistent in sign across indices.
+
+SENSEX is absent and stated as such: it is a BSE index and the fetcher
+reads NSE bhavcopies.
+
+### SEAS-1c — the arithmetic that closes SEAS-1b
+
+Pre-registered, train 2017-2021 / test 2022-2026: does the 15:00 block's
+SIGN predict the 15:15 block's? Train 47.2%, test 47.3% — strikingly
+stable, a mild REVERSAL tendency, neither half significant alone.
+
+    tradeable move  = 15:15 block, median 6.0 bps (NOT the 15:00
+                      block's 10.2 — that has already happened)
+    edge            = 2 x 0.527 - 1 = 5.4% of |move|
+    E[gross] 1 lot  = Rs 25.7      round-trip cost = Rs 129
+    E[net]          = -Rs 103 per trade
+    break-even hit rate 63.6%  vs  measured 52.7%
+
+The edge is ~5x too small to pay costs, and lots do not help because
+cost scales with them.
+
+**Correction to the first cost check in this same session**, which said
+it cleared comfortably. That was wrong twice: it used the 15:00 block's
+10.2 bps as the gross (a move that has already happened and cannot be
+traded) and assumed direction was known rather than a 52.7% call. Both
+errors pointed the same way — the way that makes a strategy look
+viable — which is the pattern worth remembering, not just the mistake.
+
+### Category A status: CLOSED
+
+    SEAS-1   rejected, and reversed
+    SEAS-1b  real volatility effect at 15:00-15:14
+    SEAS-1c  direction does not pay - closes SEAS-1b
+    SEAS-2   null
+    SEAS-3   null
+    SEAS-4   null
+
+Five hypotheses, ~2,300 NIFTY sessions, free data, no paid source,
+nothing tradeable. Category B remains blocked on historical
+option-chain data: the archive holds 17 days and Dhan serves a live
+snapshot only.
+
 ## v59.93 — SEAS-4 null, SEAS-3 blocked, and a correction to v59.92 (2026-08-15)
 
 Adds `tools/seasonality_dow.py` and `docs/seasonality-seas3-seas4.md`;
