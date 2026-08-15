@@ -4,6 +4,149 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.90 — test-anchor triage, and a stale plan (2026-08-15)
+
+**Stacked on v59.89 (`chore/lwc-v5`), which must merge first.** It was
+originally cut from v59.88; both branches would then have bumped VERSION,
+`APP_VERSION` and the dashboard badge off the same v59.88 line, which is
+a guaranteed three-way conflict in the one place CLAUDE.md requires to
+agree. Rebasing onto `chore/lwc-v5` removes the conflict rather than
+leaving it to be resolved by hand under time pressure.
+
+Two jobs, both prompted by noticing that the suite reported 8 failures
+and the PENDING WORK list was 87 releases stale. Neither is a hot-path
+change: no strategy, threshold, gate or risk parameter is touched.
+
+### The suite could not see its own invariants
+
+The previous session characterised the 8 failures as "clock-dependent".
+That was an assumption carried forward without checking, and it was
+**wrong for 6 of the 8**. Each was diagnosed individually:
+
+Three tests asserted on the SHAPE of the code rather than its meaning,
+and failed against code that was correct — in two cases *more* correct
+than when the test was written:
+
+  * `test_order_id_unique` required exactly 2 matches of
+    `order_id = paper_order_id()`. The futures site is
+    `pos["order_id"] = paper_order_id()` — a dict assignment the
+    pattern cannot match. Both paths were using the helper.
+  * `test_session_boundaries` required `elif not market_open():`.
+    v59.69 had deliberately moved that branch to the TOP of the exit
+    chain as a plain `if`, because as an `elif` at the bottom the
+    stop/target/ratchet chain stayed live after hours and positions
+    "hit profit target" at 23:52 on 2026-07-30. The test was pinning
+    the exact shape the fix had to remove.
+  * `test_rupee_profit_floor` searched only the first 2000 CHARACTERS
+    of `_monitor_spreads`. The call sits at ~2926, pushed out of the
+    window by comments added above it. A byte offset is not a property
+    of the code.
+
+All three now assert the invariant. The property worth recording:
+**every one of them failed OPEN in the dangerous direction** — each
+would equally have passed if the invariant had genuinely broken while
+the anchor survived. A test that pins a spelling reports the spelling.
+
+Rewriting the `elif` check reproduced the same bug twice in the fix
+itself: first anchoring on a method name (`_monitor_positions`) that
+does not exist — it is `_monitor_one` — and then searching for
+"target" and matching the fix's OWN COMMENT ("stop/target/ratchet
+chain") rather than any code, which reported the chain as running
+first. The assertion now strips comment lines before searching. That is
+the third and fourth prose-matching slip recorded in this codebase; the
+pattern is reliable enough to treat as a rule: **scope to real code,
+never to prose, and never to a byte offset.**
+
+### The remaining five are not test bugs and are left failing
+
+  * `test_futures_defense_zone` and `test_strategy7` contain ZERO
+    references to `market_open` — unlike the other two behavioural
+    tests, which stub it — so they hit the real v59.69 closed-market
+    branch and cannot run outside market hours. They are unrunnable,
+    not broken, and reporting that as failure trains the operator to
+    ignore red. See PENDING B2.
+  * `test_futures_trading` is blocked by config, not code:
+    `futures_risk_per_trade_rupees` ₹2,500 at a NIFTY lot of 65 permits
+    a **38-point maximum stop**. See PENDING O4.
+  * `test_profit_floor_as_stop` is the valuable one. See below.
+  * `test_spread_capital_cap` section 6 stops producing entries;
+    checks 1-5 pass so the capital logic is verified. Root cause NOT
+    established. See PENDING B3.
+
+### The finding worth keeping: the profit floor is gross, the booking is net
+
+`test_profit_floor_as_stop` fails with gross ₹1,000, fees ₹3,332,
+slippage ₹2,942, **net −₹5,274**. The floor mechanism is correct — it
+exits at the floor, on the stop, not on a P&L guess. The defect is
+dimensional: a floor denominated in GROSS rupees can lock in less than
+the round trip costs, and the exit then reports success while booking a
+loss. Against the live config (`rupee_profit_floor_min_rupees_option`
+₹250), 1 lot NIFTY costs ₹129 (ok) and 2 lots costs ₹266 — **above the
+floor**.
+
+Marginal rather than catastrophic, but it is the same CLASS of error as
+the v59.88 reachability gap and the v59.86 dimensional bug: a control
+that reports success while the trade loses money.
+
+**The test is deliberately left FAILING.** Weakening its assertion
+would delete the finding, and the fix is a risk-parameter change, which
+is the operator's call (CLAUDE.md rule 3).
+
+### The plan itself had decayed
+
+PENDING WORK was headed "current as of v59.2 (verified 2026-08-03)" —
+87 releases and 12 days stale — while its own opening paragraph warned
+that a list showing finished work as pending "sends the next session to
+build things twice". It had gone stale in exactly the way it warned
+about, for the second time. Rewritten against code, config and a test
+run, with a new section 0 for the four OPERATOR DECISIONS that
+`sizing.risk_coherence()` and this triage surface, all four verified
+against the live config today.
+
+### The suite's pass count depends on the time of day it is run
+
+This entry originally recorded "155/163, 5 failures" — a number written
+from a prediction rather than a measurement, and wrong. The measured
+run came back **151/163, 10 failures**, and chasing the difference
+produced the more useful finding.
+
+The three fixes above did work (all three are absent from the failing
+set). But four tests that passed at 00:30 and 12:50 FAILED at 15:48:
+`test_manual_deploy`, `test_dynamic_spread_targets`,
+`test_futures_phase2`, `test_futures_risk_cap`. The cause is exact:
+
+    entry runway: -27m to square-off (need 30m)
+
+They construct an eligible signal and expect a deployment, and a real
+gate correctly refuses because the wall clock is past the session. The
+boundary is **14:52 IST** — the 15:22 square-off minus the 30-minute
+entry runway. Run the suite after that and these four fail; run it
+before and they pass. Nothing is wrong with them or with the gate.
+
+So the arithmetic reconciles as:
+
+    5  documented, genuine   (futures_defense_zone, futures_trading,
+                              profit_floor_as_stop, spread_capital_cap,
+                              strategy7)
+    4  entry-runway          (only when run after 14:52 IST)
+    1  rollback              (asserts a clean tree; passes once committed)
+    -- 
+    10 observed at 15:48
+
+**Operationally: run the full suite before 14:52 IST, or expect four
+spurious failures.** This is now six tests whose result depends on when
+they run (these four, plus the two in PENDING B2), which is enough that
+the honest expected count has to be stated with a time attached. A
+suite whose red/green depends on the clock trains the operator to
+discount red — the same reason B2 is filed as a defect rather than a
+quirk.
+
+**Verification:** no hot-path file modified (`agents.py`, `analyzer.py`,
+`backtester.py`, `strategies.py`, `app.py` all untouched — `git diff
+--stat` covers three test files and ROADMAP). Golden replay unaffected.
+Suite 151/163 at 15:48 IST, reconciled above; 5 genuine failures, down
+from 8.
+
 ## v59.89 — lightweight-charts 4.1.3 → 5.2.1 (2026-08-15)
 
 Asked whether the dashboard could move to TradingView **Advanced Charts**
@@ -9900,225 +10043,303 @@ entry under "Explicitly deferred (not built...)".
   realised P&L with one trade's hypothetical worst case and ignores
   open risk on existing positions.
 
-## PENDING WORK — current as of v59.2 (verified 2026-08-03)
+## PENDING WORK — current as of v59.90 (verified 2026-08-15)
 
-Rewritten because the previous list was headed "current as of v58.47"
-and had gone stale in a way that actively misled: ALL SEVEN of its
-"can be picked now" items had already shipped in v58.48-v58.51, and
-three of its remaining claims were factually wrong (see the corrections
-below). A source of truth that lists finished work as pending is worse
-than no list — it sends the next session to build things twice.
+Rewritten because the previous list was headed "current as of v59.2
+(verified 2026-08-03)" — **87 releases and 12 days stale**. Its own
+opening paragraph warned about exactly this ("A source of truth that
+lists finished work as pending is worse than no list — it sends the
+next session to build things twice"), and it then went stale in the
+same way for the second time. That is a process finding, not just an
+editing chore: the list decays because updating it is a separate step
+from shipping. Treat "which PENDING item does this close?" as part of
+every release, not as cleanup afterwards.
 
-Every status below was checked against code, the SQLite archive or the
-journals tonight, not copied forward. Where something is asserted, the
-evidence is named.
+Everything below was checked against code, config, the SQLite archive
+or a test run on 2026-08-15, not copied forward. Where a claim is made,
+the evidence is named. Items that were DONE/ANSWERED/WITHDRAWN inline
+in the old list have been removed rather than carried as noise; the
+"CLOSED" roll-up at the end names them.
 
 ---
 
 ### THE FRAME THIS LIST SITS IN
 
-v59.0 concluded, by four independent methods, that no strategy here has
-an edge that survives costs: the promotion gate passes 0 of 11, the
-median trade reaches 1.1% of its target, the best first-touch grid cell
-is +0.03R, and entries are statistically indistinguishable from random
-at the shipped geometry. Stop scaling, target geometry, entry filters
-and the entry signal were each tested; none is the binding constraint.
+Unchanged since v59.0 and re-confirmed by everything since: **no
+strategy here has a demonstrated edge that survives costs.** The
+promotion gate passes 0 of 11, the median trade reaches 1.1% of its
+target, and entries are statistically indistinguishable from random at
+the shipped geometry.
+
+The one positive finding in ~1,600 signals: signals needing a **<20%
+move to T1 hit 47%** (n=215) against 22.9% at 20-40%, breakeven 33.3%.
+It survived three falsification attempts and is what v59.86's
+reachability gate acts on.
 
 **So items that ADD strategy surface are near-worthless until that is
 addressed, and items that improve MEASUREMENT are worth more than they
-look.** This list is ordered on that basis, not on effort.
+look.** This list is ordered on that basis, not on effort. The v59.88
+replay-parity work and the v59.89 test-integrity work are both in the
+second category and both found real defects — that is the pattern to
+keep following.
 
 ---
 
-### A. BLOCKED ON LIVE DATA — can only be observed, not built
+### 0. OPERATOR DECISIONS — config, not code. Only the operator changes these.
 
-**A1. S9 threshold calibration.** DIAGNOSED 2026-08-03, see v59.4:
-one cause confirmed (the 23-bar minimum on session-only candles blinds
-S9 until ~11:05 daily), one still open pending the new skip log.
-Original note follows. `ta_calibration` holds **9 rows, all from 2026-08-03**.
-The design (v58.32) is one row per symbol per 5m candle with logging
-BEFORE any tradeability gate — which across 4 symbols and a 375-minute
-session should be roughly 300 rows/day, not 9. So this is not simply
-"needs more sessions": either the agent is not cycling as designed or
-the log call is being skipped. Diagnose the row rate FIRST; percentiles
-off 9 rows would be noise dressed as calibration.
-ACTION: check why the rate is ~3% of design, then `export_calibration.py`.
+These are not bugs and must not be "fixed" by an agent (CLAUDE.md rule
+3). They are contradictions the system can see in its own settings and
+is reporting honestly. All four were verified against the LIVE config
+on 2026-08-15.
 
-**A2. Futures entry quality.** Unblocked as of v59.2 but with no data
-yet: `future_oi_snapshots` held exactly one day (31 July) because the
-REST fallback depended on the websocket (see v59.2). The fix landed
-tonight and has never run through a live session.
-ACTION: confirm 2026-08-04 gains rows, THEN assess.
+**O1. The option daily budget blocks after 0.2 trades.**
+`budget_option_daily_loss` ₹2,000 against a ₹10,000 per-trade cap: one
+permitted option trade exceeds the entire day's option allowance.
+Reported by `sizing.risk_coherence()`. This is the one most likely to
+bite during paper validation, because it silently ends option testing
+for the day after a single ordinary loser.
 
-**A3. S8 first observation.** ANSWERED 2026-08-03 (v59.5): across 389
-attributed records `ew_reversal` appears 0 times and `ta_elliott` 0
-times. Neither has ever generated a candidate signal, let alone traded.
-No live session was needed — only reading the journal correctly.
+**O2. Per-class budgets can never let the global ceiling fire.** They
+sum to ₹7,500 against a ₹10,000 `daily_loss_limit`, so the classes are
+always the binding constraint. `class_budget_blocked()` is written
+expecting them to sum ABOVE it.
 
-**A4. Verify shipped fixes live.** RESOLVED 2026-08-03, see v59.3.
-`profit floor:` works (28 occurrences). `LLM signal repaired` was a
-LOGGING DEFECT — the sink was never passed, fixed in v59.3.
-`MACD histogram turned` is correctly silent — momentum_confluence has
-never opened a position, so the exit has never been reachable.
-The lesson worth keeping: zero occurrences meant three different things
-across three markers, and only inspection told them apart.
+**O3. The portfolio cap permits 1.5 concurrent trades.**
+`portfolio_max_drawdown` ₹15,000 against the ₹10,000 per-trade cap. A
+portfolio limit that cannot survive two positions is a per-trade limit
+wearing a different name.
 
-**A5. The two changes shipped 2026-08-03.** The split session boundary
-(trade to 15:22, data to 15:40) and the futures archive fix have both
-been tested but neither has met a live session.
-ACTION: on 2026-08-04 confirm positions close at 15:22, candles keep
-arriving to 15:40, and `future_oi_snapshots` gains rows.
+**O4. The futures per-trade cap makes futures untradeable.**
+`futures_risk_per_trade_rupees` ₹2,500 at a NIFTY lot of 65 permits a
+maximum stop of **38 points**. Found via `test_futures_trading`, which
+fails its entry step with "1 lot would risk ₹6,188 against a ₹2,500
+cap" — an ~82-point stop, which is ordinary. Currently latent because
+`futures_enabled` is unset, so this blocks nothing today; it would
+block everything the moment futures are switched on. NOT reported by
+`risk_coherence()` — adding that check is D3 below.
 
 ---
 
-### B. CAN BE PICKED NOW
+### A. MEASUREMENT INTEGRITY — highest value, per the frame above
 
-**B1. WITHDRAWN 2026-08-03 — the premise was wrong (see v59.5).**
-The journal HAS carried `source` since 27 July; 389 records are
-attributed. The claim below came from sampling the oldest record in an
-append-only log. A3 is answered and C4 is unblocked as a result.
-Superseded text:
-863 records, and the schema is `id, ts, symbol, signal, strike, entry,
-stoploss, target1/2, confidence, verdict, checks, failed_checks,
-resolution` — no strategy/name field anywhere. This single omission
-blocks A3 and C4 outright (C4 is literally "deferred pending Shadow
-Journal evidence"), and it means 863 resolved signals cannot be
-attributed to the strategy that produced them. Highest-value item on
-this list: it is small, it is offline work, and it unblocks two others.
+**A1. The profit floor is defined GROSS and booked NET.** Found
+2026-08-15 via `test_profit_floor_as_stop`, which fails with: gross
+₹1,000, fees ₹3,332, slippage ₹2,942, **net −₹5,274**. The floor
+mechanism itself is correct — it exits at the floor, on the stop, not
+on a P&L guess. The defect is dimensional: a floor denominated in gross
+rupees can lock in less than the round trip costs, and the exit then
+reports success while booking a loss.
 
-**B2. ANSWERED 2026-08-03 (v59.6).** First-touch replay of 178 rejected
-signals against the 60s archive: 29.3% win, -0.120R per signal before
-costs — the gates were right. The live record's 43% figure below came
-from a censored sample; the signals it timed out on won only 27.6%.
-`shadow_replay.py` does the replay. Superseded text:
-Already on disk: 795 REJECTED vs 68 APPROVED (7.9% approval), and of
-the rejected signals that resolved, 147 would have hit target1 against
-192 that would have hit stoploss. The gates are therefore rejecting
-roughly 43% eventual winners — that number has never been costed
-against what the approved 68 actually earned. Pure analysis, no live
-data needed, and it speaks directly to the v59.0 finding.
-Top rejection reasons are concentrated: timeframe confluence
-(219 PE + 206 CE) and regime (167 rangebound + 120 choppy).
+Measured against the live config (`rupee_profit_floor_min_rupees_option`
+= ₹250):
 
-**B6. WITHDRAWN 2026-08-03 (v59.10) — the premise was wrong.** All three
-are gated downstream (`enter_future()` and `RiskAgent.evaluate` both
-check `market_open()`); the claim came from grepping endpoint bodies
-rather than the call graph. No change needed. Superseded text:
-`/api/futures/enter`, `/api/futures/manual_deploy`,
-`/api/strategies/manual_fire`. Found while fixing B5 and deliberately
-NOT changed with it — widening an approved gating change past its
-approval is what the standing rule prevents. Same one-line shape as B5,
-and it needs the same explicit yes.
+    NIFTY 120 prem, 1 lot -> round trip ₹129   floor ₹250   ok
+    NIFTY 120 prem, 2 lots -> round trip ₹266  floor ₹250   FLOOR BELOW COST
 
-**B5. DONE 2026-08-03 (v59.9) — the manual deploy endpoint now gates on
-market hours.** Superseded text: A spread
-was opened at 23:13 on 2026-08-03 through `POST /api/strategies/deploy`;
-the endpoint's guard tests `if not regime`, and out of hours the regime
-engine rebuilds a present-looking regime from persisted bars, so it
-passes. `_auto_spreads` IS gated; only the manual door is open. 4 of 173
-spread opens ever were out of hours. Fix is one line
-(`if not market_open(): return {"error": ...}`) plus a test, but it is a
-LIVE GATING CHANGE and needs explicit approval. The deeper gap —
-`_auto_spreads` calling `enter_spread` directly so spreads skip
-`RiskAgent.evaluate` entirely, against CLAUDE.md's "every order passes
-the risk agent" — is a much larger change and should be scoped
-separately.
+So it is marginal rather than catastrophic at option sizes, and sits
+near breakeven at 2 lots on NIFTY. It is the same CLASS of error as the
+v59.88 reachability gap and the v59.86 dimensional bug: a control that
+reports success while the trade loses money.
 
-**B7. Extract a shared account-level pre-order gate.** Scoped 2026-08-04
-(v59.11). Spreads lack `daily_loss_limit`, `max_trades_per_day`, the news
-block and `class_budget_blocked`; the last of these currently guards
-FUTURES ONLY, so the documented per-class budget invariant applies to one
-of three classes. The naive "route spreads through RiskAgent.evaluate()"
-would reject every spread (its 1.95 R:R floor is unreachable for short
-premium — 0.58 on a real spread — and its strike policy rejects the OTM
-strikes that ARE the trade). Needs explicit approval and its own review.
+The test is deliberately left FAILING. Weakening its assertion would
+delete the finding, and the fix (net-aware floors, or floors that
+subtract a cost estimate before arming) is a risk-parameter change,
+which is the operator's call.
 
-**B8. DONE 2026-08-04 (v59.14).** Superseded text: Found live 2026-08-04
-(v59.13). `enforce_signal_invariants` validates `0 < sl < entry` and the
-RR floor but never the stop WIDTH, so a generator can clear RR >= 2 by
-widening the stop rather than moving the target — observed at 93% of
-premium against a 60% documented bound. The rupee caps bound the amount,
-not the fraction, so a cheap option with the same stop passes. One line
-(clamp `sl` through the same `STOP_BOUNDS` every other stop path uses).
-RISK-LAYER CHANGE — needs explicit approval.
+**A2. S9 calibration is logging at ~3% of design rate.** `ta_calibration`
+held 9 rows, all from 2026-08-03, against a design of ~300/day (one per
+symbol per 5m candle, logged BEFORE any tradeability gate). One cause
+confirmed in v59.4: the 23-bar minimum on session-only candles blinds
+S9 until ~11:05 daily. That does not explain a 97% shortfall on its
+own. Diagnose the row rate FIRST — percentiles off 9 rows would be
+noise dressed as calibration.
+ACTION: re-count rows since 2026-08-03, then `export_calibration.py`.
 
-**B9. DONE 2026-08-04 (v59.19)** — futures 1m candles archived daily
-beside the option legs; the freeze is now proven (index 23/25 flat vs
-futures 0/26 in the same window). Superseded text: Exposed 2026-08-04
-(v59.17): the index freezes at 15:15 under the new CAS rules, futures
-trade on to 15:40, so futures are the only instrument with real prices in
-that window — and we store no candles for them (0 bars for 58072). Also
-blocks confirming that futures are genuinely unfrozen, which the v59.17
-filter's scoping assumes.
+**A3. Shadow signals carry no R-multiple or timing fields.** Every
+counterfactual resolution is currently a binary hit/miss with no
+magnitude and no time-to-outcome, so a rejected signal that would have
+made 0.1R and one that would have made 3R are indistinguishable in the
+record. This is the single largest gap between what the shadow journal
+stores and what the frame above needs to be re-tested.
 
-**B10. Why did SENSEX miss the numeric index series on 2026-08-04?**
-'51' had 0 rows while the other three had 384-385 and the broker held
-385. Affects BACKTEST/REPLAY coverage only — SENSEX_SPOT_1m, which live
-decisions use, was complete. Backfilled by hand; the daily archive path
-needs watching on the next cycle.
+**A4. Rejection reasons are free text, not structured codes.** They are
+matched by substring in at least two places (the StrategyAgent backoff
+matcher, and analysis scripts). v59.87 had to introduce
+`DAILY_BUDGET_LABEL` as a shared constant precisely because a rename
+would have silently stopped the backoff arming. That fix covers one
+label; the general problem stands.
 
-**B3. Deck setup 7 — the correction after Wave 5.** The only unbuilt
-feature item. v58.48 absorbed setups 4, 5 and 6 into S3 on the grounds
-that they are one trade in three costumes; 7 was held back because it
-is COUNTER-trend and genuinely different. Given the frame above, this
-should stay unbuilt until an edge exists to add it to.
+**A5. The `total_ai_advice` mis-join** flagged in the 14-Aug critique is
+unverified and unfixed.
 
-**B4. DONE 2026-08-03 (v59.7).** All three latches (two success, one
-failure) now route through `should_log_throttled`; success announces are
-per DAY so a missing line means it did not run. A fourth instance was
-found in the test suite. Superseded text:
-"futures OI archive active" fires only on the FIRST success after a
-restart, so its absence looks identical to its success across every
-later restart — that is precisely why a dead archive went unnoticed for
-a session. Any once-per-process success announce has this failure mode;
-this codebase has several.
+**A6. Re-run the 14-Aug replay** once that day enters the chain archive,
+now that v59.88 makes the replay's admission bar match live. The
+pre-parity numbers are not comparable.
 
 ---
 
-### C. OPEN DESIGN QUESTIONS — decisions, not tickets
+### B. TEST-SUITE INTEGRITY — a suite that cannot see its own invariants
 
-**C1. Timeframe.** S8 on 1m, S9 on 5m with a 65-minute Tide; the source
-deck's examples are daily/weekly. Signal or noise on an index?
+**Current state (2026-08-15, `run_tests.py`): 5 genuine failures, plus
+up to 5 environmental ones depending on when you run it. Measured
+151/163 at 15:48 IST; 2 skips (broker-credential tests, expected).**
 
-**C2. Multi-day candles.** Both strategies see today's session only,
-which is why the Tide horizon was shortened. A genuine higher-degree
-Tide needs multi-day 15m in `pa_candles`.
+**Run the full suite before 14:52 IST.** After that, four tests
+(`test_manual_deploy`, `test_dynamic_spread_targets`,
+`test_futures_phase2`, `test_futures_risk_cap`) fail on
+`entry runway: -Nm to square-off (need 30m)` — the 15:22 square-off
+minus the 30-minute runway. The gate is right and the tests are right;
+they simply cannot both hold after 14:52. `test_rollback` additionally
+asserts a clean working tree, so it fails whenever changes are
+uncommitted.
 
-**C3. Index volume.** The deck leans on volume; index spot has none.
-Futures volume or chain volume are the substitutes.
+Every genuine failure below has been individually characterised. The
+previous session's blanket claim that all of them were "clock-dependent"
+was an assumption rather than a measurement, and it was wrong for 6 of
+the 8 it described — while, ironically, being right about a different
+four it had not looked at.
 
-**C4. S4 vs S7 collapse.** ANSWERED 2026-08-03 (v59.8): they DO fire on
-the same bars — z=+3.20 at a 5-minute window against a 400-draw random
-baseline, decaying correctly with window, and every nearest pair agrees
-on symbol, direction AND strike (5/5). n=7, so this shows overlap, not
-its long-run rate. `strategy_overlap.py` reproduces it. Whether to
-collapse S4 into S7 remains YOUR call — the analysis cannot make it.
+**B1. RESOLVED 2026-08-15 (v59.90) — three tests were asserting on code
+SHAPE rather than meaning and failed against code that was correct, in
+two cases *more* correct than when the test was written.**
 
-**C5. Strategy-class objectives.** CORRECTED: the previous entry said
-"`max_concurrent_spreads` 10 vs `max_concurrent_positions` 1, a 10:1
-structural bias toward spreads". The live config is **20 and 10** — a
-2:1 ratio. The question of whether classes should have separate
-concurrency limits and capital pools stands; the 10:1 figure that made
-it urgent does not.
+  * `test_order_id_unique` counted `order_id = paper_order_id()` and
+    required exactly 2. The futures site is `pos["order_id"] =
+    paper_order_id()`, a dict assignment the pattern cannot match.
+  * `test_session_boundaries` required `elif not market_open():`.
+    v59.69 deliberately moved that branch to the TOP of the exit chain
+    as a plain `if`, because as an `elif` at the bottom the
+    stop/target/ratchet chain stayed live after hours and positions
+    "hit profit target" at 23:52 on 2026-07-30. The test was pinning
+    the exact shape the fix had to remove.
+  * `test_rupee_profit_floor` searched only the first 2000 CHARACTERS
+    of `_monitor_spreads`. The call sits at char ~2926, pushed past the
+    window by comments added above it.
 
-**C6. Strike selection.** v58.42 made the policy explicit and v58.44
-stopped the generator violating it, but which policy is RIGHT (ATM/ITM
-for delta, or OTM for leverage) is a judgment call. The log now names
-the policy on every rejection.
+Each now asserts the invariant instead of the spelling. Worth keeping:
+**all three failed OPEN in the dangerous direction** — they would also
+have passed if the invariant had genuinely broken in a way that
+happened to preserve the anchor.
+
+**B2. Two tests cannot run outside market hours, and do not say so.**
+`test_futures_defense_zone` and `test_strategy7` contain **zero**
+references to `market_open` — unlike `test_futures_trading` and
+`test_spread_capital_cap`, which stub it. So they hit the real v59.69
+closed-market branch, which squares off and evaluates nothing;
+`test_strategy7` fails with the square-off reason in place of the
+expected structure-break exit. They are not broken, they are
+unrunnable, and they report that as failure.
+ACTION: stub `market_open` as the other two do, or skip explicitly with
+a stated reason. A test that fails for environmental reasons trains the
+operator to ignore red.
+
+**B3. `test_spread_capital_cap` section 6 no longer produces entries.**
+Checks 1-5 pass, so the capital-concentration logic itself is verified.
+Section 6 — the intra-cycle check that a spread entered earlier in the
+same cycle is visible to the next symbol's check — expects NIFTY and
+BANKNIFTY to enter and gets `set()`. It stubs `market_open`, so this is
+not the B2 cause. Most likely a gate added in v59.82-v59.88 now blocks
+the constructed scenario. **Root cause NOT established.**
+
+**B4. `test_golden_replay` silently SKIPS with no archived frames.** It
+prints "This is a SKIP, not a pass" and exits 0. Correct behaviour, but
+it means the primary hot-path gate can report success having verified
+nothing. Observed live this session. Consider a non-zero exit or a
+louder marker when the archive is empty.
+
+**B5. `test_prev_close_429` fails on `fix/quote-pacing` and is
+unexplained.** Confirmed caused by that branch, not reproducible in
+isolation. This is what blocks the branch from merging.
 
 ---
 
-### CLOSED SINCE THE PREVIOUS LIST (v58.48-v59.2)
+### C. BLOCKED ON LIVE DATA — can only be observed, not built
 
-B1 futures chart markers · B2 test hygiene · B3 S8/S9 settings +
-calibration panel · B4 Pine parity oracles · B5 deck setups 4-6 ·
-B6 shared rate limiter · B7 news impact validation · S3 absorption ·
-Pine bar-0 crash · retail mood · migration/provenance · backoff
-recovery · out-of-hours regressions · v59.0 futures research (Phases
-0/A/D, items 9-44) · promotion gate · chain retention · macro provider
-chain · session-expiry UX · stop geometry consolidation · atr_pct
-wiring · NSE session boundary split · futures REST fallback
+**C1. Futures entry quality.** `future_oi_snapshots` was fixed in v59.2
+but the assessment has never been run against an accumulated archive.
+Also gated by O4 above — with a 38-point maximum stop, no futures entry
+is possible to observe.
 
+**C2. Verify v59.82-v59.89 live.** The NO_TRADE allowlists, signal
+dedup, capped-lot daily-loss gate, reachability gate, journal-review
+fixes and replay parity have all shipped and been tested, but the
+market has been closed since v59.85. Monday 2026-08-17 is the first
+session that exercises them together.
+ACTION: confirm the reachability gate's live block rate is near the 73%
+measured offline, and that dedup suppresses repeats without suppressing
+genuine re-entries.
+
+**C3. Wall predictiveness — INSUFFICIENT EVIDENCE (tested 2026-08-15).**
+The frozen specification is `scratch/wall_predictiveness.py` with
+results in its docstring. The point estimate ran in the WRONG direction
+and a placebo control scored better than the real signal. This is
+recorded as a NEGATIVE result rather than dropped: re-testing it on new
+data without knowing that is how a spurious positive gets adopted.
+
+---
+
+### D. CAN BE PICKED NOW — offline, no live data needed
+
+**D1. Extract a shared account-level pre-order gate.** Scoped 2026-08-04,
+unbuilt. Every order already passes `RiskAgent.evaluate()`; this is
+about the account-level checks that sit outside it.
+
+**D2. Why did SENSEX miss the numeric index series on 2026-08-04?**
+Unanswered.
+
+**D3. Add a futures-cap coherence check** to `sizing.risk_coherence()`
+covering O4 — cap ÷ lot size = maximum permissible stop in points, warn
+when that is below a plausible ATR-based stop. The three existing
+warnings are the precedent and the house pattern; this is a warning
+only, never a change (CLAUDE.md rule 8).
+
+**D4. Deck setup 7 — the correction after Wave 5.** The only unbuilt
+setup from the source deck.
+
+**D5. Delete merged branches.** Six of eight local branches have zero
+commits not on main: `feat/signal-dedup`, `feat/target-reachability`,
+`fix/daily-loss-uses-capped-lots`, `fix/journal-review-followups`,
+`fix/no-trade-allowlist`, `main-stable` (a deliberate baseline pointer —
+keep this one).
+
+---
+
+### E. OPEN DESIGN QUESTIONS — decisions, not tickets
+
+**E1. Timeframe.** S8 on 1m, S9 on 5m with a 65-minute Tide; the source
+deck's own timeframes differ.
+
+**E2. Multi-day candles.** Both strategies see today's session only.
+Wave counts that reset daily are not the deck's wave counts.
+
+**E3. Index volume.** The deck leans on volume; index spot has none.
+Currently substituted with futures/options volume — that substitution
+has never been validated.
+
+**E4. Strategy-class objectives.** Which classes are being optimised for
+what, given the frame above.
+
+**E5. Strike selection.** v58.42 made the policy explicit and v58.44
+extended it; whether the policy is RIGHT is still open.
+
+**E6. Advanced Charts — CLOSED 2026-08-15 (v59.89).** Asked and
+answered: TradingView's licence excludes personal/non-company use and
+prohibits the library in public repositories, and this repo is public.
+Recorded so it is not re-derived. Drawing tools remain the one real gap;
+tradingview.com plus `pine/*.pine` is the sanctioned path.
+
+---
+
+### CLOSED SINCE THE PREVIOUS LIST (v59.2 -> v59.90)
+
+Every old A1-A5 / B1-B10 / C1-C6 item not carried forward above was
+already marked DONE, ANSWERED or WITHDRAWN inline in the list itself and
+has been removed rather than carried as noise. In addition, shipped
+since: NO_TRADE allowlists (v59.82) · signal dedup wiring (v59.83) ·
+capped-lot daily-loss gate (v59.85) · target reachability (v59.86) ·
+14-Aug journal review fixes (v59.87) · replay/live gate parity (v59.88)
+· lightweight-charts v5 + the browser test that had stopped testing
+(v59.89) · test-anchor triage (v59.90).
 
 ## v58.32 — S9 calibration logging (2026-07-28)
 

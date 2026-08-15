@@ -88,10 +88,24 @@ import re as _re
 _assigns = _re.findall(r'order_id\s*=\s*f"PAPER-\{int\(time\.time\(\)\)\}"', AG)
 check("no remaining second-resolution id ASSIGNMENT", not _assigns,
       f"{_assigns} — one missed site reintroduces the collision there")
+# 2026-08-15 — this counted `order_id = paper_order_id()` and required
+# exactly 2. The futures site is `pos["order_id"] = paper_order_id()`,
+# a dict assignment the pattern cannot match, so the count was 1 and the
+# test failed while BOTH paths were in fact using the helper. The
+# invariant is "every paper mint goes through the helper", so assert
+# that directly: count the helper calls, and separately assert no site
+# builds an id any other way. Anchoring on one spelling of an assignment
+# pins the code's shape rather than its meaning.
+_helper_calls = _re.findall(r'paper_order_id\(\)', AG)
 check("both paper paths mint through the helper",
-      len(_re.findall(r'order_id\s*=\s*paper_order_id\(\)', AG)) == 2,
-      "options and futures — a helper only half-adopted is worse than "
-      "none, because the collision becomes intermittent")
+      len([c for c in _helper_calls]) == 3,   # 2 call sites + the def's own return
+      f"{len(_helper_calls)} — options and futures — a helper only half-"
+      f"adopted is worse than none, because the collision becomes "
+      f"intermittent")
+check("...and no site builds a paper id without it",
+      not _re.findall(r'=\s*f"PAPER-\{', AG.replace(
+          'return f"PAPER-{int(time.time())}-{uuid.uuid4().hex[:8]}"', '')),
+      "the helper's own return is excluded; anything else is a bypass")
 
 print("\n5) the identity a journal filter should use")
 # The real lesson is not just uniqueness: any dedup over historical
