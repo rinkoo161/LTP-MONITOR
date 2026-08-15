@@ -113,6 +113,19 @@ been examined when SEAS-1b was written, making them a genuine — if
 imperfect, since their SEAS-1 numbers had been seen — out-of-sample
 test. **Both confirm it decisively.**
 
+> **Correction (2026-08-15, added after measuring cross-index
+> correlation — see `seasonality-seas3-seas4.md` §3).** Calling this
+> "two out-of-sample replications" overstates it. Daily open→close
+> returns correlate r=0.84 (NIFTY/BANKNIFTY), r=0.87 (NIFTY/FINNIFTY)
+> and r=0.98 (NIFTY/SENSEX). These are not independent markets, and an
+> intraday volatility-shape effect is a property of the market they
+> share. The profiles genuinely had not been looked at, so the window
+> was not fitted to them — but four correlated indices agreeing is
+> closer to one observation than four. SEAS-1b still stands on its
+> effect size (60–66% against a 50% null, visible directly in the raw
+> profile); the corroboration is worth much less than the table
+> suggests.
+
 SEAS-1b is deliberately **excluded from the BH family**. It was not in
 the original pre-registration, and admitting it afterwards would let a
 post-hoc hypothesis borrow a pre-registered one's credibility.

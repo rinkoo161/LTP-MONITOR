@@ -4,6 +4,93 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.93 — SEAS-4 null, SEAS-3 blocked, and a correction to v59.92 (2026-08-15)
+
+Adds `tools/seasonality_dow.py` and `docs/seasonality-seas3-seas4.md`;
+annotates `docs/seasonality-retro-phase1.md` with a correction. No
+hot-path file touched beyond the three version strings.
+
+Both hypotheses are inside Phase 1's stated scope ("test SEAS-1 through
+SEAS-4 as pure statistical questions on price data"). Section 5 deferred
+them only because they needed data that did not exist locally; after
+v59.92's backfill, one of them does.
+
+### SEAS-3 — blocked, and deliberately not attempted
+
+Needs a historical weekly-expiry calendar back to 2017. The
+`instruments` table holds 2026-07-21 onward; Dhan's
+`/optionchain/expirylist` returns only FUTURE dates (verified: 18 NIFTY
+expiries, earliest 2026-08-18). No past expiry is obtainable.
+
+The shortcut — treating every Thursday as expiry — would be wrong,
+because NSE has changed index weekly-expiry weekdays more than once over
+this window. Mislabelled days in a volatility-shape comparison do not
+add noise, they move the estimate, and the mislabelling would be
+systematically clustered. That is the "reproduce the SHAPE rather than
+the MEANING" failure this codebase already records as having silently
+zeroed out entire strategies.
+
+So it is left untested rather than tested badly. **Unblocking it needs
+one small file**: a real expiry calendar, from NSE's F&O bhavcopy
+archive or supplied by the operator.
+
+### SEAS-4 — tested, clean null
+
+Omnibus PERMUTATION test (20,000 seeded shuffles) on the spread between
+the five weekday means — which is the memo's own prescription, "tested
+for significance vs. random day assignment". Chosen over a normal-theory
+ANOVA because daily index returns are fat-tailed and ANOVA would
+overstate significance on exactly this data. Validated before use: p=0.76
+on pure noise, p=0.0005 on a planted Monday effect.
+
+Family = {direction, volatility} x 4 indices. **Nothing survives;
+smallest q = 0.804.** Controls (scrambled labels) p = 0.63/0.56/0.74.
+
+The tempting non-finding: Monday is positive and Tue/Thu negative in all
+four indices (NIFTY +6.6 bps Monday, BANKNIFTY +9.9, FINNIFTY +9.0,
+SENSEX +6.7). The omnibus says p=0.16-0.73. Quoting the Monday cell alone
+is the multiple-comparison error the omnibus exists to prevent.
+
+### NSE trades on some weekends, and the crash was the good outcome
+
+First run died with IndexError on a weekday of 5. Real sessions: Union
+Budget Saturdays (2020-02-01, 2025-02-01), a Budget SUNDAY (2026-02-01),
+Muhurat (2021-11-13), and a disaster-recovery live session (2024-01-20).
+Excluded and listed, since a Budget-day session samples Budget day, not
+"what Saturdays are like". Had the weekday table simply carried seven
+entries these five would have formed two junk cells silently.
+
+### Correction to v59.92: the indices are not independent
+
+Measured daily open->close correlation: NIFTY/SENSEX **r=0.978**,
+BANKNIFTY/FINNIFTY 0.952, NIFTY/FINNIFTY 0.867, NIFTY/BANKNIFTY 0.837.
+
+v59.92 presented SEAS-1b as confirmed "out-of-sample" on BANKNIFTY and
+FINNIFTY. The profiles genuinely had not been examined, so the window was
+not fitted to them — but **calling it two independent replications
+overstated it**. An intraday volatility-shape effect is a property of the
+market these indices share. Four correlated indices agreeing is closer to
+one observation than four, and the same caveat applies to every
+"confirmed on all four indices" statement in this work.
+
+SEAS-1b is not overturned: 60-66% against a 50% null, p<1e-6, with the
+peak visible directly in the raw profile. Only the corroboration was
+oversold. `docs/seasonality-retro-phase1.md` now carries the correction
+inline rather than being quietly edited.
+
+### Category A status
+
+    SEAS-1   answered - REJECTED and reversed
+    SEAS-1b  post-hoc, large, pre-close event at 15:00-15:14
+    SEAS-2   answered - null
+    SEAS-3   BLOCKED - no historical expiry calendar
+    SEAS-4   answered - null
+
+Category A is complete but for SEAS-3, and SEAS-3 is blocked on a data
+file rather than on analysis. Nothing in Category A has produced a
+tradeable claim; SEAS-1b is about volatility, not direction, with no
+costs modelled anywhere.
+
 ## v59.92 — the backfill reversed SEAS-1, and found the real window (2026-08-15)
 
 Adds `tools/backfill_index_history.py`; rewrites
