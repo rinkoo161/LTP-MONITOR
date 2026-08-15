@@ -4,6 +4,176 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.94 — Category A closed: SEAS-3 null, SEAS-1b dies on costs (2026-08-15)
+
+Adds `tools/fetch_expiry_calendar.py`, `tools/seasonality_expiry.py`,
+`docs/seasonality-category-a-final.md`. No hot-path file touched beyond
+the three version strings.
+
+### The expiry calendar, and the shortcut that would have lied
+
+Reconstructed from NSE's own bhavcopies — 150 sampled files, both
+formats (legacy + UDiFF), ~4 minutes, no dependency, no payment. NIFTY
+441 expiries from 2017-01-25; BANKNIFTY 450; FINNIFTY 228;
+MIDCPNIFTY 172.
+
+The weekday it actually landed on:
+
+    NIFTY      2017-2024 Thu    2025 Thu:34/Tue:17    2026 Tue:35
+    BANKNIFTY  2017-2023 Thu    2024 Wed:37           2026 Tue:11
+
+**A "weekly expiry is Thursday" rule would have mislabelled most of
+2024-2026 and essentially all of BANKNIFTY 2024**, and because the error
+is contiguous in time rather than scattered it would have moved the
+estimate rather than blurring it. v59.93 refused that shortcut on
+principle; this is the evidence the principle was right.
+
+It also confirms NIFTY weeklies did not exist before 2019 (12-13
+expiries/year in 2017-18 against 46+ from 2019), so SEAS-3 is scoped
+from 2019 rather than from the start of the candle history.
+
+### SEAS-3 — tested, null
+
+Shape, not level: each day's 25-block profile is normalised by that
+day's own mean first, or a plain "expiry days are more volatile"
+difference would dominate and answer a different question. L1 distance
+between mean normalised profiles, permutation test on the expiry labels.
+
+    BANKNIFTY  193/1012  p=0.099  q=0.244   control 0.075 (borderline)
+    FINNIFTY   192/1013  p=0.163  q=0.244   control 0.342
+    NIFTY      388/1489  p=0.282  q=0.282   control 0.779
+
+Nothing survives. BANKNIFTY's control at 0.075 is closer to the line
+than a control should be, so its p=0.099 deserves less credit, not more.
+Level is +5.5%/+6.4%/-1.0% — inconsistent in sign across indices.
+
+SENSEX is absent and stated as such: it is a BSE index and the fetcher
+reads NSE bhavcopies.
+
+### SEAS-1c — the arithmetic that closes SEAS-1b
+
+Pre-registered, train 2017-2021 / test 2022-2026: does the 15:00 block's
+SIGN predict the 15:15 block's? Train 47.2%, test 47.3% — strikingly
+stable, a mild REVERSAL tendency, neither half significant alone.
+
+    tradeable move  = 15:15 block, median 6.0 bps (NOT the 15:00
+                      block's 10.2 — that has already happened)
+    edge            = 2 x 0.527 - 1 = 5.4% of |move|
+    E[gross] 1 lot  = Rs 25.7      round-trip cost = Rs 129
+    E[net]          = -Rs 103 per trade
+    break-even hit rate 63.6%  vs  measured 52.7%
+
+The edge is ~5x too small to pay costs, and lots do not help because
+cost scales with them.
+
+**Correction to the first cost check in this same session**, which said
+it cleared comfortably. That was wrong twice: it used the 15:00 block's
+10.2 bps as the gross (a move that has already happened and cannot be
+traded) and assumed direction was known rather than a 52.7% call. Both
+errors pointed the same way — the way that makes a strategy look
+viable — which is the pattern worth remembering, not just the mistake.
+
+### Category A status: CLOSED
+
+    SEAS-1   rejected, and reversed
+    SEAS-1b  real volatility effect at 15:00-15:14
+    SEAS-1c  direction does not pay - closes SEAS-1b
+    SEAS-2   null
+    SEAS-3   null
+    SEAS-4   null
+
+Five hypotheses, ~2,300 NIFTY sessions, free data, no paid source,
+nothing tradeable. Category B remains blocked on historical
+option-chain data: the archive holds 17 days and Dhan serves a live
+snapshot only.
+
+## v59.93 — SEAS-4 null, SEAS-3 blocked, and a correction to v59.92 (2026-08-15)
+
+Adds `tools/seasonality_dow.py` and `docs/seasonality-seas3-seas4.md`;
+annotates `docs/seasonality-retro-phase1.md` with a correction. No
+hot-path file touched beyond the three version strings.
+
+Both hypotheses are inside Phase 1's stated scope ("test SEAS-1 through
+SEAS-4 as pure statistical questions on price data"). Section 5 deferred
+them only because they needed data that did not exist locally; after
+v59.92's backfill, one of them does.
+
+### SEAS-3 — blocked, and deliberately not attempted
+
+Needs a historical weekly-expiry calendar back to 2017. The
+`instruments` table holds 2026-07-21 onward; Dhan's
+`/optionchain/expirylist` returns only FUTURE dates (verified: 18 NIFTY
+expiries, earliest 2026-08-18). No past expiry is obtainable.
+
+The shortcut — treating every Thursday as expiry — would be wrong,
+because NSE has changed index weekly-expiry weekdays more than once over
+this window. Mislabelled days in a volatility-shape comparison do not
+add noise, they move the estimate, and the mislabelling would be
+systematically clustered. That is the "reproduce the SHAPE rather than
+the MEANING" failure this codebase already records as having silently
+zeroed out entire strategies.
+
+So it is left untested rather than tested badly. **Unblocking it needs
+one small file**: a real expiry calendar, from NSE's F&O bhavcopy
+archive or supplied by the operator.
+
+### SEAS-4 — tested, clean null
+
+Omnibus PERMUTATION test (20,000 seeded shuffles) on the spread between
+the five weekday means — which is the memo's own prescription, "tested
+for significance vs. random day assignment". Chosen over a normal-theory
+ANOVA because daily index returns are fat-tailed and ANOVA would
+overstate significance on exactly this data. Validated before use: p=0.76
+on pure noise, p=0.0005 on a planted Monday effect.
+
+Family = {direction, volatility} x 4 indices. **Nothing survives;
+smallest q = 0.804.** Controls (scrambled labels) p = 0.63/0.56/0.74.
+
+The tempting non-finding: Monday is positive and Tue/Thu negative in all
+four indices (NIFTY +6.6 bps Monday, BANKNIFTY +9.9, FINNIFTY +9.0,
+SENSEX +6.7). The omnibus says p=0.16-0.73. Quoting the Monday cell alone
+is the multiple-comparison error the omnibus exists to prevent.
+
+### NSE trades on some weekends, and the crash was the good outcome
+
+First run died with IndexError on a weekday of 5. Real sessions: Union
+Budget Saturdays (2020-02-01, 2025-02-01), a Budget SUNDAY (2026-02-01),
+Muhurat (2021-11-13), and a disaster-recovery live session (2024-01-20).
+Excluded and listed, since a Budget-day session samples Budget day, not
+"what Saturdays are like". Had the weekday table simply carried seven
+entries these five would have formed two junk cells silently.
+
+### Correction to v59.92: the indices are not independent
+
+Measured daily open->close correlation: NIFTY/SENSEX **r=0.978**,
+BANKNIFTY/FINNIFTY 0.952, NIFTY/FINNIFTY 0.867, NIFTY/BANKNIFTY 0.837.
+
+v59.92 presented SEAS-1b as confirmed "out-of-sample" on BANKNIFTY and
+FINNIFTY. The profiles genuinely had not been examined, so the window was
+not fitted to them — but **calling it two independent replications
+overstated it**. An intraday volatility-shape effect is a property of the
+market these indices share. Four correlated indices agreeing is closer to
+one observation than four, and the same caveat applies to every
+"confirmed on all four indices" statement in this work.
+
+SEAS-1b is not overturned: 60-66% against a 50% null, p<1e-6, with the
+peak visible directly in the raw profile. Only the corroboration was
+oversold. `docs/seasonality-retro-phase1.md` now carries the correction
+inline rather than being quietly edited.
+
+### Category A status
+
+    SEAS-1   answered - REJECTED and reversed
+    SEAS-1b  post-hoc, large, pre-close event at 15:00-15:14
+    SEAS-2   answered - null
+    SEAS-3   BLOCKED - no historical expiry calendar
+    SEAS-4   answered - null
+
+Category A is complete but for SEAS-3, and SEAS-3 is blocked on a data
+file rather than on analysis. Nothing in Category A has produced a
+tradeable claim; SEAS-1b is about volatility, not direction, with no
+costs modelled anywhere.
+
 ## v59.92 — the backfill reversed SEAS-1, and found the real window (2026-08-15)
 
 Adds `tools/backfill_index_history.py`; rewrites
