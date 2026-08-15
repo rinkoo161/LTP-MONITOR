@@ -4,6 +4,85 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.95 — the chart showed one day; two separate limits caused it (2026-08-16)
+
+Live report: "only 1 day candles, backdated candles are missing, not
+allowing to scroll back". Attributed to the v59.89 lightweight-charts v5
+upgrade. **It was not the upgrade** — `git log v59.88..HEAD --
+broker_adapter.py` is empty, and both limits below predate the repo
+import.
+
+Diagnosed before changing anything, because "indicators are also not
+effective" could genuinely have been a v5 regression: drove the real
+dashboard in a headless browser against the real 5.2.1 build and fed
+data through the same path the websocket uses. All 11 overlay series,
+the volume histogram and all 4 oscillator panes accepted and held 400
+points each, zero page errors. The rendering is intact; the indicator
+toggles simply ship OFF by default (deliberate since v58) and overlay
+data only flows while agents have candles.
+
+### Two independent limits, on the two tiers the chart reads
+
+    DB tier   (websocket, PREFERRED)  chart_history_days_1m = 5
+    REST tier (fallback)              a hard [-350:] truncation
+
+At the dashboard's default 1-MINUTE interval, 350 candles is exactly one
+session (375 bars/day) — so there was never anything to the left of the
+first bar. Measured: 1m returned 350 candles / 1 day, while 5m returned
+3 days and 15m returned 3 days from the same call. Switching interval
+was already a workaround nobody knew they had.
+
+Dhan itself serves 90 days of 1-minute data in one request (proved by
+v59.92's backfill), so both limits were entirely self-imposed.
+
+### The actual risk was not the widening
+
+`intraday()` has FIVE consumers and three feed live analysis:
+
+    agents.py:2687  _fetch_candles  -> Technical + Regime agents
+    agents.py:3307  _indicators     -> MACD + Stochastic
+    app.py:1638     prev_close_for  -> previous-close reconstruction
+    app.py:1485     the chart REST endpoint
+    app.py:4195     the chart websocket fallback
+
+EMA/MACD/RSI warmup, the regime classification and S9's 23-bar session
+minimum are all computed off that window. **Widening the shared function
+would have been a live behaviour change disguised as a display fix**
+(CLAUDE.md rule 3), and nothing in the diff would have said so.
+
+So `intraday()` gained `days`/`cap` parameters DEFAULTING to the old
+values (`ANALYSIS_DAYS = 4`, `ANALYSIS_CAP = 350`, now named constants
+rather than a bare literal). Only the two chart call sites opt in, via
+`app.CHART_HISTORY_DAYS = 30` / `CHART_MAX_CANDLES = 9000`.
+
+**The subtle part is the cache key.** It was
+`f"candles:{symbol}:{interval}"` on a 55s TTL — so the chart's 30-day
+fetch and the agents' 4-day fetch would have collided in that dict and
+whichever ran first would silently have fed the other. Thirty days of
+candles would have reached the regime classifier with nothing to explain
+it. The key now includes days and cap, and `test_chart_history_window.py`
+pins that specifically.
+
+### Measured result
+
+    analysis path (defaults)     350 candles   1 session   unchanged
+    chart path (30d/9000)      7,902 candles  21 sessions  2026-07-17..08-14
+    cache isolation             distinct, no collision
+
+Payload measured before choosing 30: 4d=0.10 MB, 15d=0.35 MB,
+30d=0.73 MB, 90d=2.18 MB. v5's data conflation is what makes a window
+this size practical to render.
+
+`chart_history_days_1m` raised 5 -> 30 in DEFAULTS. It is an UPPER BOUND,
+not a promise — the `*_SPOT_1m` series holds ~15 days today, so the DB
+tier yields 15 and grows as the builder accumulates; the REST tier
+supplies 21 sessions. 5m (20d) and 15m (60d) are deliberately untouched:
+they were never the complaint.
+
+**Operator note:** the live `config.json` carries an explicit
+`chart_history_days_1m: 5`, which wins over DEFAULTS. It must be changed
+in Settings (or the file) for the DB tier to widen on this install.
+
 ## v59.94 — Category A closed: SEAS-3 null, SEAS-1b dies on costs (2026-08-15)
 
 Adds `tools/fetch_expiry_calendar.py`, `tools/seasonality_expiry.py`,

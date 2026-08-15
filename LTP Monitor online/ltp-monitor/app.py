@@ -27,7 +27,7 @@ from agents import Orchestrator, compute_momentum
 import agents
 
 BASE = os.path.dirname(os.path.abspath(__file__))
-APP_VERSION = "v59.94"   # maintained per explicit request; last delivered was v49
+APP_VERSION = "v59.95"   # maintained per explicit request; last delivered was v49
 
 app = FastAPI(title="LTP Option Chain Monitor")
 
@@ -1475,6 +1475,29 @@ def api_chain_snapshots(symbol: str, hours: float = 6,
                     for r in rows]}
 
 
+# v59.95 — the CHART's history window, deliberately separate from
+# broker_adapter's ANALYSIS_DAYS/ANALYSIS_CAP.
+#
+# Reported live 2026-08-16: the chart showed one day and would not
+# scroll back. The cap was the cause — 350 candles at the dashboard's
+# default 1-minute interval is exactly one session, so there was never
+# anything to the left of the first bar.
+#
+# These values are used ONLY by the two chart paths below. The agents
+# keep the analysis defaults, because _fetch_candles() and
+# _indicators() compute EMA/MACD/RSI warmup, the regime classification
+# and S9's session-bar minimum off that window; widening it for them
+# would be a live behaviour change dressed up as a display fix.
+#
+# Measured on NIFTY 1m before choosing 30: 4d=1,125 bars (0.10 MB),
+# 15d=3,777 (0.35 MB), 30d=7,902 (0.73 MB), 90d=23,663 (2.18 MB).
+# 30 days buys 21 sessions of scrollback for under a megabyte, and
+# lightweight-charts v5 (v59.89) conflates points when zoomed out,
+# which is what makes a window this size practical to render.
+CHART_HISTORY_DAYS = 30
+CHART_MAX_CANDLES = 9000     # 30d of 1m is ~7,900; headroom, still bounded
+
+
 @app.get("/api/candles/{symbol}")
 def api_candles(symbol: str, interval: str = "5"):
     d = dhan_client()
@@ -1482,7 +1505,8 @@ def api_candles(symbol: str, interval: str = "5"):
         return JSONResponse(status_code=502, content={
             "error": "Candles need the Dhan feed — add credentials in Settings."})
     try:
-        data = d.intraday(symbol, interval)
+        data = d.intraday(symbol, interval, days=CHART_HISTORY_DAYS,
+                          cap=CHART_MAX_CANDLES)
         # attach current levels so the chart can draw them
         try:
             a, _w = bus_analysis_or_warming(symbol.upper())
@@ -4192,7 +4216,9 @@ async def ws_candles(websocket: WebSocket, symbol: str, interval: str = "1"):
                 if d is None:
                     diag["rest_error"] = "no Dhan client (check broker credentials)"
                 else:
-                    data = d.intraday(symbol, interval)
+                    data = d.intraday(symbol, interval,
+                                      days=CHART_HISTORY_DAYS,
+                                      cap=CHART_MAX_CANDLES)
                     raw = data.get("candles", [])
                     diag["rest_candles_found"] = len(raw)
                     if data.get("error"):

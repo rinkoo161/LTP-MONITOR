@@ -1016,7 +1016,20 @@ DEFAULTS = {
     # ever prunes it). Scaled per interval so payload size stays
     # comparable across intervals — a 1-minute candle count over N days
     # is ~15x a 15-minute count over the same N days.
-    "chart_history_days_1m": 5,
+    #
+    # v59.95 (2026-08-16) — 1m raised 5 -> 30 on an operator request,
+    # after a live report of "only 1 day, cannot scroll back". Two
+    # separate limits produced that; this is the one on the DB tier,
+    # which the websocket prefers. The other was the REST tier's
+    # 350-candle cap (see broker_adapter.ANALYSIS_CAP / app.CHART_*),
+    # which at 1m is exactly one session.
+    #
+    # Note this is an UPPER BOUND, not a promise: the *_SPOT_1m series
+    # currently holds ~15 days, so 30 yields 15 today and grows as the
+    # builder accumulates. 5m/15m are left alone — at 20 and 60 days
+    # they were never the complaint, and widening them would change
+    # payload sizes nobody asked about.
+    "chart_history_days_1m": 30,
     "chart_history_days_5m": 20,
     "chart_history_days_15m": 60,
 }
