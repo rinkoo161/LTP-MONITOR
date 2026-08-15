@@ -110,6 +110,58 @@ What this script cannot answer
     out-of-sample beyond the crude first-half/second-half split
     reported, and whether it holds before 2024. It is a distribution
     report on a ~2-year window, which is the whole of what exists.
+
+
+AMENDMENT 1 (2026-08-15, after the backfill) — SEAS-1b
+======================================================
+The original block above is left EXACTLY as frozen. This is an
+amendment, appended, so the sequence of what was known when stays
+readable. Editing the frozen text to match a later finding is how a
+post-hoc result becomes indistinguishable from a prediction.
+
+`tools/backfill_index_history.py` took NIFTY from 530 days to 2,312
+(2017-04 onward). On that sample SEAS-1 became significant and pointed
+the WRONG WAY: 45.8% (p=0.0001), i.e. the last 15 minutes are QUIETER
+than the typical block, not louder.
+
+Plotting the median |return| by block explained it. There is a large
+pre-close volatility event, and it is one block earlier than SEAS-1
+looks:
+
+    09:15   16.1 bps   <- the open, by far the largest
+    12:15    5.1 bps   <- midday trough
+    15:00   10.2 bps   <- a clear second peak
+    15:15    5.9 bps   <- the block SEAS-1 actually tests
+
+So the memo's MECHANISM (pre-close flow, MIS unwind, closing-auction
+adjacency) looks real, while its WINDOW was wrong. A plausible
+structural reason, stated as a candidate and not as established fact:
+NSE derives the closing price from a VWAP over the final half hour, so
+15:00 begins a regime with different incentives — but this script does
+not test that, and the correlation would be identical if the cause were
+something else entirely.
+
+SEAS-1b, pre-registered before it was run:
+    Block 23 (15:00-15:14) |return| exceeds the median of the other 24
+    blocks at a rate ABOVE 50%.
+
+Provenance matters here and is reported per index. The hypothesis was
+generated from the NIFTY and SENSEX profiles, so those two are
+CONTAMINATED for it. The BANKNIFTY and FINNIFTY profiles had not been
+examined when SEAS-1b was written, which makes them a genuine — if
+imperfect, since their SEAS-1 numbers had been seen — out-of-sample
+test. Both confirmed it at p<1e-6.
+
+SEAS-1b is deliberately kept OUT of the Benjamini-Hochberg family. It
+was not in the original pre-registration, and admitting it after the
+fact would let a post-hoc hypothesis borrow the credibility of a
+pre-registered one. It is reported next to its controls and its
+provenance instead.
+
+Still true of SEAS-1b, and worth repeating because a large p-value
+invites over-reading: it is a statement about VOLATILITY, not about
+direction, not about profit, and costs are not modelled anywhere in
+this file.
 """
 import argparse
 import collections
@@ -134,22 +186,40 @@ SYMBOLS = {"13": "NIFTY", "25": "BANKNIFTY", "27": "FINNIFTY", "51": "SENSEX"}
 
 # ----------------------------------------------------------------- stats
 
+def _log_binom_pmf(i, n, p):
+    """log P(X=i) via lgamma — never materialises a huge binomial coefficient."""
+    if p <= 0.0:
+        return 0.0 if i == 0 else float("-inf")
+    if p >= 1.0:
+        return 0.0 if i == n else float("-inf")
+    return (math.lgamma(n + 1) - math.lgamma(i + 1) - math.lgamma(n - i + 1)
+            + i * math.log(p) + (n - i) * math.log1p(-p))
+
+
 def binom_two_sided(k, n, p=0.5):
     """Exact two-sided binomial p-value.
 
     Sums the probability of every outcome no more likely than the one
     observed. At p=0.5 this is symmetric, but it is written generally
     so a future caller cannot silently get a one-sided answer.
+
+    Computed in LOG space. The obvious formulation — math.comb(n,k) *
+    p**k * (1-p)**(n-k) — raises OverflowError somewhere above n≈1700,
+    because comb() returns an exact Python int far larger than a float
+    can hold while the probability factors underflow to zero. It ran
+    fine on the 530-day archive and blew up the moment the backfill
+    took NIFTY to 2,312 days, which is the useful kind of failure: it
+    stopped rather than quietly returning a wrong p-value.
     """
     if n <= 0:
         return 1.0
-    obs = math.comb(n, k) * (p ** k) * ((1 - p) ** (n - k))
-    tol = obs * (1 + 1e-9)
+    log_obs = _log_binom_pmf(k, n, p)
+    tol = log_obs + 1e-9
     total = 0.0
     for i in range(n + 1):
-        pr = math.comb(n, i) * (p ** i) * ((1 - p) ** (n - i))
-        if pr <= tol:
-            total += pr
+        lp = _log_binom_pmf(i, n, p)
+        if lp <= tol:
+            total += math.exp(lp)
     return min(1.0, total)
 
 
@@ -282,6 +352,11 @@ def analyse_symbol(days, min_days):
         others = absr[:-1]
         seas1_hit = absr[-1] > statistics.median(others)
 
+        # SEAS-1b (amendment 1) — same comparison one block earlier.
+        # Block 23 is 15:00-15:14, the peak the profile actually shows.
+        b23_others = [a for i, a in enumerate(absr) if i != 23]
+        seas1b_hit = absr[23] > statistics.median(b23_others)
+
         # C1 — same comparison, but a random NON-FINAL block stands in
         # for the last one. Its own value is excluded from the median
         # too, so the null stays exactly 0.5.
@@ -305,6 +380,7 @@ def analyse_symbol(days, min_days):
         obs.append({
             "date": date,
             "seas1": seas1_hit,
+            "seas1b": seas1b_hit,
             "c1": c1_hit,
             "orb": orb,
             "rest": rest,
@@ -356,6 +432,9 @@ def main():
                     help="below this, a cell reports 'insufficient sample'")
     ap.add_argument("--fdr", type=float, default=0.10)
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--profile", action="store_true",
+                    help="median |15-min return| by block — this is what "
+                         "revealed SEAS-1 was testing the wrong window")
     args = ap.parse_args()
 
     if not os.path.exists(args.db):
@@ -377,6 +456,26 @@ def main():
             print(f"\n{sym}: no candles in the archive")
             continue
         obs, drops = analyse_symbol(days, args.min_days)
+
+        if args.profile and obs:
+            prof = [[] for _ in range(N_BLOCKS)]
+            for date in sorted(days):
+                blocks, _r = day_blocks(days[date])
+                if blocks is None:
+                    continue
+                for i, blk in enumerate(blocks):
+                    prof[i].append(abs(block_return(blk)) * 1e4)
+            flat = [v for col in prof for v in col]
+            base = statistics.median(flat) or 1.0
+            print(f"\n  {sym} — median |15-min return| in bps by block "
+                  f"({len(obs)} days)")
+            for i in range(N_BLOCKS):
+                m = statistics.median(prof[i])
+                clock = SESSION_START + i * BLOCK_MINUTES
+                tag = ("  <- SEAS-1 tests THIS" if i == N_BLOCKS - 1
+                       else "  <- SEAS-1b" if i == 23 else "")
+                print(f"    {clock//60:02d}:{clock%60:02d} {m:6.1f}  "
+                      f"{'#' * int(m / base * 20)}{tag}")
         if not obs:
             print(f"\n{sym}: no admissible days "
                   f"({sum(drops.values())} dropped: {dict(drops)})")
@@ -401,8 +500,20 @@ def main():
         c2 = cell(kc2, nc2, args.min_days,
                   "  control C2 random sign -> rest-of-day")
 
-        for c in (s1, c1, s2a, s2b, c2):
+        # Amendment 1. Provenance travels WITH the number, because the
+        # p-value alone cannot tell you the hypothesis came from NIFTY
+        # and SENSEX in the first place.
+        CONTAMINATED = {"NIFTY", "SENSEX"}
+        s1b = cell(sum(o["seas1b"] for o in obs), len(obs), args.min_days,
+                   "SEAS-1b block 23 (15:00) |ret| > median of other 24")
+        s1b["provenance"] = ("hypothesis generated HERE — contaminated"
+                             if sym in CONTAMINATED else "out-of-sample")
+
+        for c in (s1, s1b, c1, s2a, s2b, c2):
             print(f"  {c['label']:<52} {fmt(c)}")
+            if c is s1b:
+                print(f"  {'':<52}   [post-hoc, outside BH family; "
+                      f"{s1b['provenance']}]")
         if z2:
             print(f"  {'':<52} ({z2} day(s) excluded for a zero return)")
 
