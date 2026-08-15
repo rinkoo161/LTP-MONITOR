@@ -103,7 +103,19 @@ _code = [l for l in AG.split("\n") if not l.strip().startswith("#")]
 # invariant is unchanged: both branches must be driven by the TRADING
 # gate market_open(), never by fno_session_open(). Assert that at the
 # branch AND at the call site that feeds it.
-_sq = [l for l in _code if "elif not market_open():" in l]
+# 2026-08-15 — this required exactly one `elif not market_open():`.
+# v59.69 moved the closed-market branch from the BOTTOM of the exit
+# chain to the TOP and made it a plain `if` — deliberately, because as
+# an `elif` the stop/target/ratchet chain stayed live after hours and
+# spreads "hit profit target" at 23:52 on 2026-07-30. So the test was
+# pinning the exact shape the fix had to remove, and failed on code
+# that is strictly more correct than when the test was written.
+#
+# Assert the INVARIANT instead: the single-leg square-off is driven by
+# the TRADING gate market_open(), never by the later data gate
+# fno_session_open(). Which keyword introduces the branch is not the
+# property worth protecting.
+_sq = [l for l in _code if "not market_open():" in l]
 _shared = AG.split("def spread_exit_reason(")[1]
 _shared = _shared[:_shared.index("\ndef ")]
 check("the shared spread exit squares off on the gate, not the data feed",
@@ -123,8 +135,30 @@ check("the replay passes its own frame-based gate, not market_open()",
       "market_is_open=" in _bt and "market_open()" not in _bt,
       "a replay calling the live clock would square off every historical "
       "spread the moment the test runs after 15:23")
-check("the single-leg square-off branch still uses the trading gate", len(_sq) == 1,
+check("the single-leg square-off branch still uses the trading gate",
+      len(_sq) >= 1,
       f"{len(_sq)} found — spreads and single-leg positions")
+# The half of the invariant that actually protects anything: the
+# options monitor's closed-market branch must come BEFORE the stop /
+# target / ratchet chain, so an after-hours remnant quote cannot drive
+# an exit. This is what v59.69 fixed and what the `elif` count was
+# standing in for; assert it by position, against the real function.
+_mon_opt = AG.split("    def _monitor_one(self, p):")[1]
+_mon_opt = _mon_opt[:_mon_opt.index("\n    def ")]
+# Comments must be stripped BEFORE searching: the fix's own comment
+# contains the phrase "stop/target/ratchet chain", so a bare search for
+# "target" matches the explanation rather than the code and reports the
+# chain as running FIRST. Same prose-matching trap the order-id test
+# recorded, hit again here.
+_mon_code = "\n".join(l for l in _mon_opt.split("\n")
+                      if not l.strip().startswith("#"))
+_i_closed = _mon_code.find("if not market_open():")
+_i_target = _mon_code.find('"target1"')
+check("...and it is evaluated BEFORE the stop/target chain, not after",
+      _i_closed != -1 and _i_target != -1 and _i_closed < _i_target,
+      f"closed-branch at {_i_closed}, first target1 use at {_i_target} — "
+      f"as an elif at the BOTTOM, positions 'hit profit target' at 23:52 "
+      f"on 2026-07-30")
 check("data path uses the session gate", "fno_session_open()" in AG)
 
 print("\n6) no second definition of the boundary survives")

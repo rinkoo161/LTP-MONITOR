@@ -192,8 +192,16 @@ i_sp = _sx.index("_rpf_spread:")
 i_ts = _sx.index('f"time stop (')
 check("spread floor is checked BEFORE the time stop", i_sp < i_ts,
       "the time stop closed a ₹3,705-peak spread for ₹830")
+# 2026-08-15 — this searched only the FIRST 2000 CHARACTERS of
+# _monitor_spreads. The call sits at char ~2926 and had simply been
+# pushed past the window by comments added above it, so the test failed
+# while the live monitor was calling the shared function exactly as
+# required. A byte offset is not a property of the code; scope the
+# search to the whole function instead.
+_ms = src.split("def _monitor_spreads(self")[1]
+_ms = _ms[:_ms.index("\n    def ")]
 check("and the shared function is what LIVE uses",
-      "spread_exit_reason(" in src.split("def _monitor_spreads(self")[1][:2000],
+      "spread_exit_reason(" in _ms,
       "if the live monitor stops calling it, replay silently diverges again")
 import os as _os
 _bt = open(_os.path.join(_os.path.dirname(_os.path.abspath(__file__)),
