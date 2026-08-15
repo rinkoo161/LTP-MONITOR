@@ -4,6 +4,97 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.91 — seasonality Phase 1: both hypotheses answered NEGATIVE (2026-08-15)
+
+Stacked on v59.90. Adds `tools/seasonality_retro.py` and
+`docs/seasonality-retro-phase1.md`. **No existing file is modified
+except the three version strings** — no strategy, gate, threshold or
+agent is touched, and nothing here is wired into the running system.
+
+Scoped strictly by `research-memo-addendum-seasonality-flow.md` section
+5, which authorises SEAS-1 and SEAS-2 against existing archived candles
+and nothing else. No FLOW-*, no SEAS-3/4, no filter, no Phase 3
+attachment — that stays gated behind `derivatives-third-eye`.
+
+### Phase 0 is now half-answered, and the answer is a constraint
+
+The archive runs **2024-06-20 → 2026-08-14**, 531 trading days of
+1-minute bars across all four indices. **It does not reach 2015.** Every
+hypothesis the memo scopes "since 2015" is unanswerable from local data,
+so the paid-source question in Phase 0 step 2 is live rather than
+hypothetical.
+
+Also worth knowing before someone writes the next analysis script: that
+history lives ONLY in the numeric security-id rows (13/25/27/51). The
+`*_SPOT_1m` series begin 2026-07-24 and `daily_ohlc` holds 18 days, so a
+script that reads those for history silently gets three weeks and will
+look like it worked.
+
+### Result: nothing, on eight pre-registered tests
+
+Family = {SEAS-1, SEAS-2a} × 4 indices, Benjamini-Hochberg at q=0.10.
+**Not one survives. The smallest q in the family is 0.51.** The smallest
+raw p (0.074, SENSEX SEAS-1) points *below* 50% — the last 15 minutes
+being less volatile than the session median, the opposite of the
+hypothesis.
+
+Unit of observation is one DAY, not one bar, so the day-clustering that
+would otherwise inflate every statistic is handled by construction.
+
+### Two measurement decisions that changed the answer
+
+**SEAS-1 excludes the tested block from its own reference median.**
+Comparing a block against a median containing it gives a null of
+12/25 = 0.48, not 0.50 — and at n=531 that 2-point bias alone
+manufactures significance from nothing.
+
+**SEAS-2 is reported twice.** The memo's literal wording ("ORB direction
+vs the day's close-to-close direction") specifies OVERLAPPING windows —
+the ORB is a subset of the full day. Measured that way it reads
+**65–68% at p<0.0001 on all four indices**, which looks like a strong
+cross-index-replicated discovery and is pure arithmetic: two windows
+sharing their first 15 minutes correlate under a random walk. The
+disjoint version (ORB → rest-of-day), which is the only tradeable one,
+reads 51.4–53.4% and is indistinguishable from noise.
+
+That is the finding most worth carrying forward. Implementing the memo
+exactly as written would have produced a false positive with a
+four-index replication story attached to it.
+
+### The controls beat the hypotheses
+
+C1 (random non-final block) reached p=0.019 on BANKNIFTY and FINNIFTY
+against the real SEAS-1's p=0.192 and p=0.602; C2 (random sign) reached
+p=0.012 on BANKNIFTY against SEAS-2a's p=0.543. Per the memo's own
+instruction — if a control scores like the real thing, the real thing is
+the control.
+
+That also revealed a flaw in the pre-registered null: C1 can only land
+further from 50% than SEAS-1 if 15-minute blocks are not exchangeable
+within a day, which they are not, because intraday volatility is
+U-shaped. The comparison that does not depend on that assumption is
+last-block vs random-block on the SAME day (paired, so McNemar): p =
+0.86 / 0.52 / 0.24 / 0.15. Also nothing.
+
+**That test was added after seeing the control's behaviour and is
+labelled post-hoc in the tool and kept outside the BH family.**
+Promoting it silently is exactly what pre-registration prevents. It is
+reported because it is the MORE sensitive test and also finds nothing,
+which strengthens the negative rather than rescuing a positive.
+
+### Recorded as a negative, not dropped
+
+Same reason `scratch/wall_predictiveness.py` keeps the C3 result:
+re-testing a hypothesis on new data without knowing it already failed is
+how a spurious positive eventually gets adopted.
+
+**Recommended next:** the Phase 0 sourcing decision, which now has a
+number attached (local history starts 2024-06-20) and is an operator
+call with a cost. **Not recommended:** widening the hypothesis set
+against this same 2.2-year window — eight tests already returned nothing
+at a best q of 0.51, and adding SEAS-3/SEAS-4 to the same data mostly
+buys more chances at a false positive.
+
 ## v59.90 — test-anchor triage, and a stale plan (2026-08-15)
 
 **Stacked on v59.89 (`chore/lwc-v5`), which must merge first.** It was
