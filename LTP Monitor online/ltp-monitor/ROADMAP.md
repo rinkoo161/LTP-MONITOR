@@ -4,6 +4,106 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.92 — the backfill reversed SEAS-1, and found the real window (2026-08-15)
+
+Adds `tools/backfill_index_history.py`; rewrites
+`docs/seasonality-retro-phase1.md`. No hot-path file touched beyond the
+three version strings. Nothing wired into the running system.
+
+### Phase 0 is answered, and v59.91 answered it wrong
+
+v59.91 reported "the archive reaches 2024, not 2015" and concluded the
+paid-source question was live. That answered Phase 0 **by reading the
+local database and never asking the broker**. Probing Dhan directly:
+
+    NIFTY      2017-04-03 onward   ->  2,312 trading days
+    BANKNIFTY  2021-08-04 onward   ->  1,209
+    FINNIFTY   2021-08-04 onward   ->  1,209
+    SENSEX     2021-08-04 onward   ->  1,215
+
+2015/2016 return nothing, so "since 2015" is genuinely unreachable — but
+**~9.4 years of NIFTY was free the whole time**, 4.4x the sample the
+v59.91 conclusion rested on. The lesson is the one CLAUDE.md already
+records in a different form: answering a question about a data SOURCE by
+inspecting a local CACHE of it is not the same question.
+
+Backfill writes to `~/.ltp-monitor/research_history.db`, deliberately NOT
+`history.db` — nine years under the same security_ids would silently
+change every replay path and `backtest_s10.py`, which is a decision about
+the production measurement substrate and the operator's to make. Paced at
+1.5s over 90-day windows (180 returns HTTP 400); the 2026-08-14 429 storm
+is why. Cross-check against production on the overlap: **100.000% exact
+close agreement over ~199k shared bars per index, max diff 0.0000**.
+
+### SEAS-1 is now significant — and points the wrong way
+
+| | n | rate | q | control C1 |
+|---|---|---|---|---|
+| NIFTY | 2312 | **45.8%** | 0.0006 | 50.7% clean |
+| SENSEX | 1215 | **45.7%** | 0.0113 | 49.8% clean |
+
+Two survive BH, **both BELOW 50%**: the last 15 minutes are QUIETER than
+the typical block, the reverse of the hypothesis. At 530 days this read
+50.8% (p=0.76) — invisible for want of sample.
+
+BANKNIFTY and FINNIFTY are excluded from interpretation because their C1
+control is itself significant (p=0.002, 0.007). A failing placebo means
+the instrument is untrustworthy, not the hypothesis confirmed.
+
+### The mechanism was right; the window was wrong by one block
+
+Median |15-min return|, NIFTY: open 16.1 bps, midday trough 5.1,
+**15:00 block 10.2**, last block 5.9. The pre-close event is real and
+sits in 15:00-15:14. SEAS-1 samples 15:15-15:29 and misses it.
+
+Verified before believing it: every block including the last holds a
+median of 15 bars, so this is not a truncated-final-block artefact.
+
+**SEAS-1b** (block 23 vs median of the other 24), pre-registered before
+running: BANKNIFTY 60.5% and FINNIFTY 62.6%, both p<1e-6, and those two
+are genuinely **out-of-sample** — their profiles had not been examined
+when the hypothesis was written. NIFTY 66.3% and SENSEX 61.7% are marked
+CONTAMINATED in the output, since the hypothesis came from them.
+
+SEAS-1b is kept OUT of the BH family and its provenance is printed
+beside every number. It was not pre-registered originally, and admitting
+it afterwards would let a post-hoc hypothesis borrow a pre-registered
+one's credibility. The frozen pre-registration block was NOT edited to
+match the finding — an AMENDMENT is appended below it, so the order in
+which things became known stays readable.
+
+### SEAS-2 still null, and its artefact reconfirms on 4x the data
+
+SEAS-2a 48.9-51.7%, nothing survives. SEAS-2b — the memo's literal
+wording, where the ORB is a subset of its own outcome window — again
+reads 63-65% at p<0.0001 on all four indices. Stable enough across nine
+years to look exactly like a discovery. Implementing the memo as written
+would ship a confident false positive with a four-index replication
+story attached.
+
+### A bug the bigger sample exposed
+
+`binom_two_sided` raised OverflowError at n=2312: `math.comb` returns an
+exact int far larger than a float while the probability factors underflow.
+Rewritten in log space via `lgamma`, verified to reproduce every previous
+value exactly. It ran fine on 530 days and broke on 2,312 — the useful
+failure mode, since it stopped rather than returning a wrong p-value.
+
+### What this does NOT license
+
+SEAS-1b is about **volatility, not direction**, and **no costs are
+modelled anywhere in this work**. It is not a strategy, a filter or a
+config change, and Phase 3 attachment stays gated behind
+`derivatives-third-eye`. NIFTY's per-year series (52.4% in 2024, 51.6%
+in 2026 against 38-46% in 2019-2023) also suggests the SEAS-1 effect may
+be decaying; the per-year cells are underpowered and that is a caution,
+not a finding.
+
+**Next:** SEAS-3 (expiry-day shape) is now worth doing — 2,312 NIFTY
+days gives real power and its mechanism is the most specific of the
+four. Category B remains blocked on option-chain history, which no free
+endpoint solves.
+
 ## v59.91 — seasonality Phase 1: both hypotheses answered NEGATIVE (2026-08-15)
 
 Stacked on v59.90. Adds `tools/seasonality_retro.py` and
