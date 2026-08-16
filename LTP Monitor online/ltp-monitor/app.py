@@ -27,7 +27,7 @@ from agents import Orchestrator, compute_momentum
 import agents
 
 BASE = os.path.dirname(os.path.abspath(__file__))
-APP_VERSION = "v59.95"   # maintained per explicit request; last delivered was v49
+APP_VERSION = "v59.96"   # maintained per explicit request; last delivered was v49
 
 app = FastAPI(title="LTP Option Chain Monitor")
 
@@ -5240,6 +5240,30 @@ class KotakLoginIn(BaseModel):
     ucc: str | None = None
     totp: str
     mpin: str
+
+
+@app.post("/api/kotak/quotes_probe")
+def api_kotak_quotes_probe():
+    """One-shot check that the stored Consumer Key reaches Kotak's quotes
+    endpoint, for the Settings page's "Test quotes now" button.
+
+    Read-only and deliberately narrow: one LTP request for the NIFTY
+    index. It changes no config, opens no session, places no order and
+    touches no trading path. Its whole job is to make a bad credential
+    fail WHERE IT IS PASTED — otherwise the first symptom is an empty
+    option chain much later, and Kotak's own message ("Consumer key is
+    invalid") does not hint at the usual cause, which is the UCC pasted
+    into the consumer-key field.
+
+    Goes through kotak_quotes, so it shares the process-wide cooldown
+    registry rather than being able to hammer the broker from a button.
+    """
+    import kotak_quotes
+    try:
+        return kotak_quotes.probe()
+    except Exception as e:            # probe() is already total; belt and braces
+        return {"ok": False, "error": f"{type(e).__name__}: {e}",
+                "latency_ms": None, "sample": None}
 
 
 @app.post("/api/kotak/login")

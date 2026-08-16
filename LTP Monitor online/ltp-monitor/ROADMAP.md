@@ -4,6 +4,83 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.96 — Kotak fast quotes, re-implemented not vendored (2026-08-17)
+
+Adds `kotak_quotes.py`, `POST /api/kotak/quotes_probe`, a
+Consumer Key + Base URL pair on the Settings page with a "Test quotes
+now" button, and `test_kotak_quotes.py`. **Not wired into any trading
+path** — no agent, analyzer or strategy imports it, and `broker` stays
+on whatever Settings says.
+
+### The operator was right and my first answer was wrong
+
+I initially argued the new Kotak SDK could not help because the rate
+limit, not the SDK, bounds reaction time. Right about compute, wrong in
+conclusion:
+
+    Dhan option chain (current)   3,000 ms   1 request / 3 s, hard limit
+    Kotak quotes() REST             289 ms   documented, batched, NO TOTP
+    Kotak SFeed websocket           push     no polling at all
+
+`quotes()` genuinely needs no 2FA session — "only `consumer_key` is
+required" — so it is ~10x fresher than the current chain before any
+websocket work. The dependency objection was also overstated: numpy,
+pandas, httpx, websockets and pydantic are already installed; only six
+small packages would have been new.
+
+### Why the SDK is still not installed
+
+`kotakneoapi` pins **`pandas<3`** and this environment runs pandas
+3.0.5, so `pip install` DOWNGRADES pandas underneath `dhanhq` (the live
+market-data websocket) and `yfinance` (the primary macro provider,
+deliberately pinned because a silent break there matters). Two live data
+paths for one dependency is a bad trade.
+
+The REST contract is fully published, so this re-implements it against
+`requests` — already a dependency — which is rule 4's "adopt techniques,
+re-implement" rather than vendoring. ~40 lines against ten packages and
+a pandas downgrade.
+
+The SDK's real remaining advantage is the STREAMING feed, and that is
+deliberately not attempted here. The existing `kotak_ws.py` protocol is
+reverse-engineered from Kotak's JS library and its own docstring records
+that it has **never been confirmed against a live connection** — and it
+is dead code, imported by nothing but its own test. If streaming is
+wanted, the right shape is the official SDK in a SEPARATE PROCESS with
+its own virtualenv, publishing into the bus, which is the pattern
+already used to keep Kite out of this process.
+
+### Why the credential never worked
+
+Probing the documented endpoint routed correctly and returned:
+
+    424  {"error":true,"message":"Consumer key 'W1DZT' is invalid."}
+
+`W1DZT` is a UCC, not a consumer key — and it is also the literal
+placeholder text in the UCC field on the Settings page. **There was no
+Consumer Key field at all**: the key existed in `config.DEFAULTS`,
+`SECRET_KEYS` and `SettingsIn`, but had no input on the page, so it
+could only ever have been set by hand. Same for `kotak_base_url`. Both
+now have fields, and `kotak_quotes` rejects a short value before making
+a network call, naming the likely cause, because the API's own message
+does not.
+
+`test_kotak_quotes.py` pins the four-layer registration (DEFAULTS /
+SettingsIn / save collector / load path) for both keys — three of four
+is the failure mode that is hardest to see, because the UI looks right.
+
+### Deliberate limits
+
+The probe is read-only: no config write, no session, no order, one LTP
+request for the NIFTY index, routed through `rate_limit.py` under the
+shared `kotak_quote` resource so a button cannot hammer the broker. The
+button saves before probing, since `probe()` reads the STORED key and
+testing an unsaved value would report on the previous one.
+
+**Blocked on a real Consumer Key from the Kotak Neo API portal.** Until
+one is pasted, nothing here can be validated against the live API, and
+nothing should be wired into the chain path on trust.
+
 ## v59.95 — the chart showed one day; two separate limits caused it (2026-08-16)
 
 Live report: "only 1 day candles, backdated candles are missing, not
