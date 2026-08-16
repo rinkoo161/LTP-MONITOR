@@ -125,6 +125,45 @@ check("empty token list short-circuits without a call",
       kotak_quotes.quotes([], cfg={"kotak_base_url": "x",
                                    "kotak_consumer_key": "y" * 20}) == [])
 
+print("\n5b) a `fault` payload is a FAILURE, not a success")
+# Found live 2026-08-17 on the first real call. Kotak answers an invalid
+# instrument token with HTTP 200 and a `fault` object rather than the
+# `error` key the code originally looked for, so probe() reported
+# ok=True on a rejected request. A checker that reports success while
+# the request failed is worse than no checker.
+check("the fault key is handled, not just error", '"fault"' in SRC or "'fault'" in SRC)
+
+
+class _FaultResp:
+    status_code = 200
+    text = '{"fault": {"code": "400", "description": "Invalid neosymbol values"}}'
+
+    @staticmethod
+    def json():
+        return {"fault": {"code": "400",
+                          "description": "Please pass valid neosymbol values"}}
+
+
+_real_get = kotak_quotes.requests.get
+kotak_quotes.requests.get = lambda *a, **k: _FaultResp()
+try:
+    kotak_quotes.quotes([("nse_cm", "1")],
+                        cfg={"kotak_base_url": "https://x",
+                             "kotak_consumer_key": "k" * 20})
+    check("a fault response raises", False, "returned normally")
+except kotak_quotes.KotakQuotesError as e:
+    check("a fault response raises, quoting the description",
+          "neosymbol" in str(e), str(e)[:90])
+except Exception as e:
+    check("a fault response raises KotakQuotesError", False, repr(e))
+finally:
+    kotak_quotes.requests.get = _real_get
+
+check("probe() uses a documented, verified instrument token",
+      '"1333"' in SRC,
+      "the first version guessed an index token that does not resolve, so "
+      "a WORKING key reported as broken")
+
 print("\n6) 'oi' is available — the chain needs it, not just price")
 check("oi is a supported quote type", "oi" in kotak_quotes.QUOTE_TYPES,
       "analyzer.classify_leg() is driven by per-strike OI and its change")

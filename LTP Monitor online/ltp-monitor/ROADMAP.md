@@ -4,6 +4,60 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.97 — the credential works; and the checker was lying (2026-08-17)
+
+A real Consumer Key was pasted, and the first live call against it found
+a bug in v59.96's own checker.
+
+### Validated against the live API
+
+    HDFCBANK  nse_cm|1333   277 ms   ltp 727        (Kotak's documented example)
+    batch of two            177 ms   both returned
+    5-call sample           min 193 / median 294 / max 1145 ms
+
+Median **294 ms** against Dhan's option-chain floor of 3,000 ms — about
+**10x fresher** if the chain path is moved onto it. That matches Kotak's
+documented ~289 ms almost exactly, so the figure is trustworthy.
+
+Batching works, which is the part that matters: a whole chain in one
+call rather than a loop.
+
+### The bug: `probe()` reported ok=True on a rejected request
+
+Kotak signals a bad instrument token with **HTTP 200 and a `fault`
+object**, not the `error` key v59.96 looked for:
+
+    {"fault": {"code": "400",
+               "description": "Please pass valid neosymbol values"}}
+
+So the very first live probe returned `ok: True` while the request had
+failed. That is the exact "reports success while failing" pattern this
+project keeps finding elsewhere — the profit floor booking a loss, the
+replay measuring a different strategy — and it is least acceptable in
+the one component whose entire job is checking. Now raises, quoting the
+description, with a regression test that mocks a fault payload.
+
+### And the probe was asking for an instrument that does not exist
+
+It used `nse_cm|26000` for NIFTY, assuming Kotak indexes the same way
+other brokers do. It does not. So a WORKING credential would have
+reported as broken, and the natural response is to re-paste a perfectly
+good key. The probe now uses Kotak's own documented example token
+(`nse_cm|1333`, verified live) — its job is answering "is this
+credential good?", which needs an instrument certain to resolve. Index
+and F&O token resolution belongs with the scrip master, not in a
+credential check.
+
+Both mistakes pointed the same way: toward the tool saying everything
+was fine.
+
+### Still not wired into any trading path
+
+`broker` remains on Dhan, no agent imports `kotak_quotes`, and F&O token
+resolution (the actual prerequisite for moving the chain over) is not
+built. What exists is a validated credential and a measured 294 ms
+baseline to justify the next step.
+
 ## v59.96 — Kotak fast quotes, re-implemented not vendored (2026-08-17)
 
 Adds `kotak_quotes.py`, `POST /api/kotak/quotes_probe`, a

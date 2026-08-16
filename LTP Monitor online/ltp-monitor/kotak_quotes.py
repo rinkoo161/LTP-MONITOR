@@ -143,8 +143,27 @@ def quotes(tokens, quote_type="all", cfg=None, timeout=DEFAULT_TIMEOUT):
     except Exception as e:
         raise KotakQuotesError(
             f"kotak quotes returned non-JSON: {r.text[:200]}") from e
-    if isinstance(data, dict) and data.get("error"):
-        raise KotakQuotesError(f"kotak quotes error: {data.get('message')}")
+    # Kotak signals a bad request TWO ways, and only one of them is the
+    # obvious `error` key. An invalid instrument token comes back as
+    # HTTP 200 with a `fault` object:
+    #
+    #   {"fault": {"code": "400", "description": "Please pass valid
+    #              neosymbol values for getQuote", ...}}
+    #
+    # Found 2026-08-17 on the very first live call: probe() reported
+    # ok=True on exactly that payload, because it only looked for
+    # `error` and a 200 status. A checker that reports success while the
+    # request failed is the failure mode this project keeps finding
+    # elsewhere; it is not acceptable in the thing whose only job is
+    # checking.
+    if isinstance(data, dict):
+        fault = data.get("fault")
+        if fault:
+            desc = (fault.get("description") or fault.get("message")
+                    or str(fault))
+            raise KotakQuotesError(f"kotak quotes rejected the request: {desc}")
+        if data.get("error"):
+            raise KotakQuotesError(f"kotak quotes error: {data.get('message')}")
     return data
 
 
@@ -159,9 +178,20 @@ def probe(cfg=None):
     out = {"ok": False, "latency_ms": None, "error": None, "sample": None}
     t0 = time.time()
     try:
-        # NIFTY 50 index on the cash segment — a cheap, always-present
-        # instrument, and one that answers outside market hours too.
-        data = quotes([("nse_cm", "26000")], quote_type="ltp", cfg=cfg)
+        # HDFCBANK on the cash segment — the token from Kotak's own
+        # documented example, verified live 2026-08-17 (277 ms, ltp 727).
+        #
+        # Deliberately NOT an index. The first version probed
+        # nse_cm|26000 for NIFTY, guessing that Kotak uses the same index
+        # token as other brokers; it does not, and the call failed. The
+        # probe's job is to answer "is this credential good?", so it must
+        # use an instrument that is certain to resolve — otherwise a
+        # working key reads as broken and the operator re-pastes a
+        # perfectly good credential. Index and F&O token resolution
+        # belongs with the scrip master, not here.
+        data = quotes([("nse_cm", "1333")], quote_type="ltp", cfg=cfg)
+        if not data:
+            raise KotakQuotesError("empty response")
         out["ok"] = True
         out["sample"] = data[:1] if isinstance(data, list) else data
     except Exception as e:
