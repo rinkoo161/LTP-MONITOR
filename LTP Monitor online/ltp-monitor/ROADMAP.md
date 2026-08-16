@@ -4,6 +4,73 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.98 — the whole NIFTY chain in 198 ms (2026-08-17)
+
+The operator supplied the PUBLIC scrip-master path:
+
+    https://lapi.kotaksecurities.com/wso2-scripmaster/v1/prod/
+        {YYYY-MM-DD}/transformed/{nse_fo|bse_fo}.csv
+
+That is the piece that makes the Kotak quotes path viable end to end.
+`quotes()` needs no TOTP, but resolving strike -> instrument token did,
+via `masterscrip/file-paths` — which would have put the daily login back
+on the critical path. The public URL removes it.
+
+### Measured
+
+    scrip master        8,519 index option rows, 6.3 s, cached per day
+    chain tokens        42 (21 strikes x 2 legs) for the 2026-08-18 expiry
+    ONE batched quote   198 ms for the entire chain, 42 rows back
+    per-strike OI       18/18 populated, sane put/call skew
+
+**198 ms against Dhan's 3,000 ms option-chain floor — ~15x fresher.**
+`open_int` arrives per strike, which is the field `analyzer.classify_leg`
+runs on, so this is a chain feed and not merely a price ticker.
+
+### One parser, not two
+
+`_find` and `_parse_expiry` were nested inside
+`KotakNeoClient._load_master()`. They were lifted to module level,
+byte-identical, so the public loader shares them instead of carrying a
+second copy. They encode two things a fork gets quietly wrong: Kotak's
+column names carry inconsistent trailing whitespace and one is literally
+named `dStrikePrice;`, semicolon included; and `lExpiryDate` is
+epoch+315511200 for nse_fo but raw epoch for bse_fo — the older 10-year
+heuristic was off by six hours, close enough to look right.
+
+Verified behaviour-identical on 400 real NIFTY rows: 395 parse,
+`NIFTY26OCT29450CE` -> token 35140, strike 29450, expiry 2026-10-27 via
+`documented-offset`.
+
+**`py_compile` passed while the extraction was still wrong.** The first
+splice de-indented by 4 instead of 8, leaving the functions inside
+`class ZerodhaOrders` — syntactically valid, semantically nonsense. The
+compile gate cannot see scope, which is worth remembering the next time
+it is treated as sufficient.
+
+### Today's file may not exist yet
+
+At ~03:00 IST the current day's path returned 403 while the previous
+day's returned 200. The loader walks back up to 5 days and REPORTS which
+date it used; a resolver that silently served a stale calendar would be
+worse than one that failed.
+
+### Third self-inflicted detection bug of the session
+
+The first OI check reported `open-interest field present: False` while
+the field list plainly showed `open_int` — it grepped for "oi" and
+"interest", neither of which is a substring of `open_int`. Harmless
+because the raw fields were printed alongside, which is the only reason
+it was caught. The earlier two pointed toward "all fine"; this one
+pointed the other way, but the lesson is the same: assert on the actual
+value, never on a guessed name.
+
+### Still not wired in
+
+`broker` remains Dhan. Nothing in agents/analyzer/strategies imports
+either module. What exists is a measured 198 ms chain path with real OI,
+ready to be trialled against the 3,000 ms baseline.
+
 ## v59.97 — the credential works; and the checker was lying (2026-08-17)
 
 A real Consumer Key was pasted, and the first live call against it found
