@@ -59,12 +59,35 @@ def trading_day_before(base, n_trading_days):
     return d
 
 
-print("1) config keys registered with sensible, interval-scaled "
-     "defaults (1m gets a shorter window than 15m for comparable "
-     "total candle count)")
-check("chart_history_days_1m registered", config.DEFAULTS.get("chart_history_days_1m") == 5)
-check("chart_history_days_5m registered", config.DEFAULTS.get("chart_history_days_5m") == 20)
-check("chart_history_days_15m registered", config.DEFAULTS.get("chart_history_days_15m") == 60)
+print("1) config keys registered, and the window is bounded")
+# v59.95 — these asserted the exact literals 5 / 20 / 60, encoding the
+# original "interval-scaled for a comparable total candle count" rule
+# (5x375 ~= 20x75 ~= 60x25 ~= 1,500-1,900 candles each).
+#
+# 1m was deliberately raised to 30 on an operator request, after a live
+# report that the chart showed one session and would not scroll back.
+# That KNOWINGLY breaks the comparable-payload rule — 30x375 is ~11,000
+# candles, several times the other two — because scrollback was worth
+# more than payload symmetry here. Measured cost 0.73 MB, and
+# lightweight-charts v5 conflates points when zoomed out.
+#
+# So the literals are gone and what remains is the property that
+# actually matters: every key is REGISTERED (config.save() silently
+# drops anything not in DEFAULTS, so an unregistered key vanishes on
+# first save) and every window is positive and bounded. A test that
+# pins a value the operator is expected to tune reports the tuning as a
+# failure.
+for _iv, _cap in (("1", 60), ("5", 90), ("15", 120)):
+    _k = f"chart_history_days_{_iv}m"
+    _v = config.DEFAULTS.get(_k)
+    check(f"{_k} registered", _k in config.DEFAULTS)
+    check(f"{_k} is a sane bounded window", isinstance(_v, int) and 0 < _v <= _cap,
+          f"{_v} (must be 1..{_cap} days)")
+check("1m does not exceed the 15m window",
+      config.DEFAULTS["chart_history_days_1m"]
+      <= config.DEFAULTS["chart_history_days_15m"],
+      "1m is ~15x the candles per day; it should never span the longest "
+      "window as well")
 app_src = open("app.py").read()
 check("all three declared on SettingsIn",
       all(f"chart_history_days_{i}m: int" in app_src for i in ("1", "5", "15")))

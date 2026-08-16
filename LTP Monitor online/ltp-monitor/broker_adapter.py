@@ -186,16 +186,46 @@ class DhanClient:
         return out
 
     # ------------------------------------------------------------- candles
-    def intraday(self, symbol: str, interval: str = "5") -> dict:
-        """Index OHLC candles for today (Dhan /charts/intraday)."""
+    # v59.95 — the ANALYSIS defaults. Do not widen these to fix a chart
+    # complaint: _fetch_candles() (agents.py) and _indicators()
+    # (agents.py) both call intraday() with the defaults, so changing
+    # them changes what the Technical and Regime agents see — EMA/MACD/
+    # RSI warmup, the regime classification, and S9's 23-bar session
+    # minimum are all computed off this window. That would be a live
+    # behaviour change disguised as a display fix (CLAUDE.md rule 3).
+    # The chart passes its own values instead; see app.CHART_* below.
+    ANALYSIS_DAYS = 4        # covers weekends
+    ANALYSIS_CAP = 350       # ~1 session at 1m, ~4.7 at 5m
+
+    def intraday(self, symbol: str, interval: str = "5",
+                 days: int = ANALYSIS_DAYS, cap: int = ANALYSIS_CAP) -> dict:
+        """Index OHLC candles (Dhan /charts/intraday).
+
+        `days` is how far back to ASK for; `cap` truncates to the last N
+        candles. Both default to the analysis values above, so every
+        existing caller keeps its exact behaviour and only the callers
+        that opt in get a wider window.
+
+        2026-08-16, from a live report that the chart "shows only 1 day
+        and will not scroll back". Cause was `cap`: at the dashboard's
+        default 1-minute interval, 350 candles IS one session (375
+        bars/day), so there was never anything to the left. Dhan itself
+        serves 90 days of 1-minute data in a single call — the limit was
+        entirely self-imposed.
+        """
         symbol = symbol.upper()
-        key = f"candles:{symbol}:{interval}"
+        # days/cap MUST be part of the cache key. Without them the
+        # chart's 30-day fetch and the agents' 4-day fetch collide in
+        # this dict on a 55s TTL, and whichever ran first silently feeds
+        # the other — the analysis path would start seeing 30 days of
+        # candles with nothing in the diff to explain it.
+        key = f"candles:{symbol}:{interval}:{days}:{cap}"
         cached = self._cache.get(key)
         if cached and time.time() - cached[0] < 55:
             return cached[1]
         import datetime as _dt
         today = store.ist_today()   # v59.71 — exchange clock, not host
-        frm = (today - _dt.timedelta(days=4)).isoformat()  # covers weekends
+        frm = (today - _dt.timedelta(days=days)).isoformat()
         body = {
             "securityId": str(UNDERLYINGS[symbol]),
             "exchangeSegment": "IDX_I",
@@ -216,7 +246,7 @@ class DhanClient:
             for t, o, h, l, c in zip(d.get("timestamp", []), d.get("open", []),
                                      d.get("high", []), d.get("low", []),
                                      d.get("close", []))
-        ][-350:]
+        ][-cap:]
         out = {"symbol": symbol, "interval": interval, "candles": candles}
         self._cache[key] = (time.time(), out)
         return out
