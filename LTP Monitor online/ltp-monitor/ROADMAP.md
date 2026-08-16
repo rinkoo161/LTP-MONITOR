@@ -4,6 +4,204 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.98 — the whole NIFTY chain in 198 ms (2026-08-17)
+
+The operator supplied the PUBLIC scrip-master path:
+
+    https://lapi.kotaksecurities.com/wso2-scripmaster/v1/prod/
+        {YYYY-MM-DD}/transformed/{nse_fo|bse_fo}.csv
+
+That is the piece that makes the Kotak quotes path viable end to end.
+`quotes()` needs no TOTP, but resolving strike -> instrument token did,
+via `masterscrip/file-paths` — which would have put the daily login back
+on the critical path. The public URL removes it.
+
+### Measured
+
+    scrip master        8,519 index option rows, 6.3 s, cached per day
+    chain tokens        42 (21 strikes x 2 legs) for the 2026-08-18 expiry
+    ONE batched quote   198 ms for the entire chain, 42 rows back
+    per-strike OI       18/18 populated, sane put/call skew
+
+**198 ms against Dhan's 3,000 ms option-chain floor — ~15x fresher.**
+`open_int` arrives per strike, which is the field `analyzer.classify_leg`
+runs on, so this is a chain feed and not merely a price ticker.
+
+### One parser, not two
+
+`_find` and `_parse_expiry` were nested inside
+`KotakNeoClient._load_master()`. They were lifted to module level,
+byte-identical, so the public loader shares them instead of carrying a
+second copy. They encode two things a fork gets quietly wrong: Kotak's
+column names carry inconsistent trailing whitespace and one is literally
+named `dStrikePrice;`, semicolon included; and `lExpiryDate` is
+epoch+315511200 for nse_fo but raw epoch for bse_fo — the older 10-year
+heuristic was off by six hours, close enough to look right.
+
+Verified behaviour-identical on 400 real NIFTY rows: 395 parse,
+`NIFTY26OCT29450CE` -> token 35140, strike 29450, expiry 2026-10-27 via
+`documented-offset`.
+
+**`py_compile` passed while the extraction was still wrong.** The first
+splice de-indented by 4 instead of 8, leaving the functions inside
+`class ZerodhaOrders` — syntactically valid, semantically nonsense. The
+compile gate cannot see scope, which is worth remembering the next time
+it is treated as sufficient.
+
+### Today's file may not exist yet
+
+At ~03:00 IST the current day's path returned 403 while the previous
+day's returned 200. The loader walks back up to 5 days and REPORTS which
+date it used; a resolver that silently served a stale calendar would be
+worse than one that failed.
+
+### Third self-inflicted detection bug of the session
+
+The first OI check reported `open-interest field present: False` while
+the field list plainly showed `open_int` — it grepped for "oi" and
+"interest", neither of which is a substring of `open_int`. Harmless
+because the raw fields were printed alongside, which is the only reason
+it was caught. The earlier two pointed toward "all fine"; this one
+pointed the other way, but the lesson is the same: assert on the actual
+value, never on a guessed name.
+
+### Still not wired in
+
+`broker` remains Dhan. Nothing in agents/analyzer/strategies imports
+either module. What exists is a measured 198 ms chain path with real OI,
+ready to be trialled against the 3,000 ms baseline.
+
+## v59.97 — the credential works; and the checker was lying (2026-08-17)
+
+A real Consumer Key was pasted, and the first live call against it found
+a bug in v59.96's own checker.
+
+### Validated against the live API
+
+    HDFCBANK  nse_cm|1333   277 ms   ltp 727        (Kotak's documented example)
+    batch of two            177 ms   both returned
+    5-call sample           min 193 / median 294 / max 1145 ms
+
+Median **294 ms** against Dhan's option-chain floor of 3,000 ms — about
+**10x fresher** if the chain path is moved onto it. That matches Kotak's
+documented ~289 ms almost exactly, so the figure is trustworthy.
+
+Batching works, which is the part that matters: a whole chain in one
+call rather than a loop.
+
+### The bug: `probe()` reported ok=True on a rejected request
+
+Kotak signals a bad instrument token with **HTTP 200 and a `fault`
+object**, not the `error` key v59.96 looked for:
+
+    {"fault": {"code": "400",
+               "description": "Please pass valid neosymbol values"}}
+
+So the very first live probe returned `ok: True` while the request had
+failed. That is the exact "reports success while failing" pattern this
+project keeps finding elsewhere — the profit floor booking a loss, the
+replay measuring a different strategy — and it is least acceptable in
+the one component whose entire job is checking. Now raises, quoting the
+description, with a regression test that mocks a fault payload.
+
+### And the probe was asking for an instrument that does not exist
+
+It used `nse_cm|26000` for NIFTY, assuming Kotak indexes the same way
+other brokers do. It does not. So a WORKING credential would have
+reported as broken, and the natural response is to re-paste a perfectly
+good key. The probe now uses Kotak's own documented example token
+(`nse_cm|1333`, verified live) — its job is answering "is this
+credential good?", which needs an instrument certain to resolve. Index
+and F&O token resolution belongs with the scrip master, not in a
+credential check.
+
+Both mistakes pointed the same way: toward the tool saying everything
+was fine.
+
+### Still not wired into any trading path
+
+`broker` remains on Dhan, no agent imports `kotak_quotes`, and F&O token
+resolution (the actual prerequisite for moving the chain over) is not
+built. What exists is a validated credential and a measured 294 ms
+baseline to justify the next step.
+
+## v59.96 — Kotak fast quotes, re-implemented not vendored (2026-08-17)
+
+Adds `kotak_quotes.py`, `POST /api/kotak/quotes_probe`, a
+Consumer Key + Base URL pair on the Settings page with a "Test quotes
+now" button, and `test_kotak_quotes.py`. **Not wired into any trading
+path** — no agent, analyzer or strategy imports it, and `broker` stays
+on whatever Settings says.
+
+### The operator was right and my first answer was wrong
+
+I initially argued the new Kotak SDK could not help because the rate
+limit, not the SDK, bounds reaction time. Right about compute, wrong in
+conclusion:
+
+    Dhan option chain (current)   3,000 ms   1 request / 3 s, hard limit
+    Kotak quotes() REST             289 ms   documented, batched, NO TOTP
+    Kotak SFeed websocket           push     no polling at all
+
+`quotes()` genuinely needs no 2FA session — "only `consumer_key` is
+required" — so it is ~10x fresher than the current chain before any
+websocket work. The dependency objection was also overstated: numpy,
+pandas, httpx, websockets and pydantic are already installed; only six
+small packages would have been new.
+
+### Why the SDK is still not installed
+
+`kotakneoapi` pins **`pandas<3`** and this environment runs pandas
+3.0.5, so `pip install` DOWNGRADES pandas underneath `dhanhq` (the live
+market-data websocket) and `yfinance` (the primary macro provider,
+deliberately pinned because a silent break there matters). Two live data
+paths for one dependency is a bad trade.
+
+The REST contract is fully published, so this re-implements it against
+`requests` — already a dependency — which is rule 4's "adopt techniques,
+re-implement" rather than vendoring. ~40 lines against ten packages and
+a pandas downgrade.
+
+The SDK's real remaining advantage is the STREAMING feed, and that is
+deliberately not attempted here. The existing `kotak_ws.py` protocol is
+reverse-engineered from Kotak's JS library and its own docstring records
+that it has **never been confirmed against a live connection** — and it
+is dead code, imported by nothing but its own test. If streaming is
+wanted, the right shape is the official SDK in a SEPARATE PROCESS with
+its own virtualenv, publishing into the bus, which is the pattern
+already used to keep Kite out of this process.
+
+### Why the credential never worked
+
+Probing the documented endpoint routed correctly and returned:
+
+    424  {"error":true,"message":"Consumer key 'W1DZT' is invalid."}
+
+`W1DZT` is a UCC, not a consumer key — and it is also the literal
+placeholder text in the UCC field on the Settings page. **There was no
+Consumer Key field at all**: the key existed in `config.DEFAULTS`,
+`SECRET_KEYS` and `SettingsIn`, but had no input on the page, so it
+could only ever have been set by hand. Same for `kotak_base_url`. Both
+now have fields, and `kotak_quotes` rejects a short value before making
+a network call, naming the likely cause, because the API's own message
+does not.
+
+`test_kotak_quotes.py` pins the four-layer registration (DEFAULTS /
+SettingsIn / save collector / load path) for both keys — three of four
+is the failure mode that is hardest to see, because the UI looks right.
+
+### Deliberate limits
+
+The probe is read-only: no config write, no session, no order, one LTP
+request for the NIFTY index, routed through `rate_limit.py` under the
+shared `kotak_quote` resource so a button cannot hammer the broker. The
+button saves before probing, since `probe()` reads the STORED key and
+testing an unsaved value would report on the previous one.
+
+**Blocked on a real Consumer Key from the Kotak Neo API portal.** Until
+one is pasted, nothing here can be validated against the live API, and
+nothing should be wired into the chain path on trust.
+
 ## v59.95 — the chart showed one day; two separate limits caused it (2026-08-16)
 
 Live report: "only 1 day candles, backdated candles are missing, not

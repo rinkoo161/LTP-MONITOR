@@ -528,7 +528,7 @@ hr{border:none;border-top:1px solid var(--line);}
   <div class="dashgrid">
     <div class="dc8">
       <div class="panel" style="margin-bottom:8px">
-        <h2>&#128200; Live Chart (TradingView Lightweight Charts) <span class="badge" style="font-weight:400">v59.95</span> <span class="sub" id="lwChartStatus">connecting...</span>
+        <h2>&#128200; Live Chart (TradingView Lightweight Charts) <span class="badge" style="font-weight:400">v59.98</span> <span class="sub" id="lwChartStatus">connecting...</span>
           <select id="lwChartSymbol" style="margin-left:auto" onchange="switchLwChart(this.value)"></select></h2>
         <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;flex-wrap:wrap">
           <button class="lwIntervalBtn active" data-interval="1" onclick="switchLwInterval('1')">1m</button>
@@ -1238,9 +1238,14 @@ hr{border:none;border-top:1px solid var(--line);}
     <div class="reasons" style="margin-bottom:10px">Kite Connect needs an active API subscription. IV and greeks are not provided by Kite quotes - those columns will show "-".</div>
     </div>
     <div id="bf_kotak" style="display:none">
+    <div class="frow"><label>Consumer Key (from Kotak Neo API portal) <span id="s_kck_state" style="color:var(--dim)"></span></label><input type="password" id="s_kck" placeholder="long token — NOT the UCC"></div>
+    <div class="frow"><label>Base URL (from the same portal page)</label><input type="text" id="s_kbase" placeholder="e.g. https://e22.kotaksecurities.com"></div>
+    <div class="reasons" style="margin:6px 0">The Consumer Key alone drives the fast quotes endpoint — no TOTP, no MPIN, and quotes work outside market hours. Kotak documents ~289&nbsp;ms per batched call against Dhan's one-request-per-3&nbsp;s chain limit. <b>It is not the UCC</b>: a short value here is almost always the UCC pasted into the wrong box, and the API only answers "Consumer key is invalid".</div>
+    <div class="actrow"><button class="act" onclick="testKotakQuotes()">Test quotes now</button></div>
+    <div id="kotakQuotesStatus" class="reasons" style="margin:6px 0"></div>
     <div class="frow"><label>Access Token (from Kotak Neo API portal)</label><input type="password" id="s_ktok" placeholder="remembered after first login"></div>
     <div class="frow"><label>Mobile (+91...)</label><input type="text" id="s_kmobile" placeholder="remembered after first login"></div>
-    <div class="frow"><label>UCC / Client Code</label><input type="text" id="s_kucc" placeholder="e.g. W1DZT — remembered after first login"></div>
+    <div class="frow"><label>UCC / Client Code</label><input type="text" id="s_kucc" placeholder="your client code — remembered after first login"></div>
     <div class="reasons" style="margin:6px 0">Session (TOTP + MPIN) expires daily — log in each morning before trading. Neither TOTP nor MPIN are ever stored; only the resulting session token is saved, same as the terminal script.</div>
     <div class="frow"><label>TOTP (6-digit, from authenticator app)</label><input type="text" id="s_ktotp" maxlength="6" placeholder="123456"></div>
     <div class="frow"><label>MPIN</label><input type="password" id="s_kmpin" placeholder="6-digit trading PIN"></div>
@@ -1951,6 +1956,15 @@ function openSettings(){
   document.getElementById("s_ktok").value=settings.kotak_access_token_masked?"":"";
   document.getElementById("s_kmobile").value=settings.kotak_mobile||"";
   document.getElementById("s_kucc").value=settings.kotak_ucc||"";
+  // Consumer key is a SECRET, so public_view() masks it and the raw
+  // value never reaches the browser — same treatment as every other
+  // credential here. Show only whether one is set, and leave the input
+  // blank so an accidental re-save cannot overwrite a good key with a
+  // mask string.
+  document.getElementById("s_kck").value="";
+  document.getElementById("s_kck_state").textContent=
+    settings.kotak_consumer_key_set?("(current: "+settings.kotak_consumer_key_masked+")"):"(not set)";
+  document.getElementById("s_kbase").value=settings.kotak_base_url||"";
   showBrokerFields();
   document.getElementById("s_paper").checked=!!settings.paper_mode;
   document.getElementById("s_auto").checked=!!settings.auto_execute;
@@ -2075,6 +2089,28 @@ function openSettings(){
 document.getElementById("s_model").onchange=function(){
   document.getElementById("s_model_custom").style.display=this.value==="__custom__"?"block":"none";
 };
+async function testKotakQuotes(){
+  /* Validates the Consumer Key where it is pasted. Without this, a bad
+     key surfaces much later as an empty option chain with no obvious
+     cause — and the API's own message ("Consumer key is invalid") does
+     not tell you the usual reason, which is the UCC in the wrong box.
+     Save first: the probe reads the STORED key, so testing an unsaved
+     value would report on the old one and read as a phantom failure. */
+  const el=document.getElementById("kotakQuotesStatus");
+  el.textContent="Saving settings, then testing…";
+  try{
+    await saveSettings();
+    const d=await (await fetch("/api/kotak/quotes_probe",{method:"POST"})).json();
+    if(d.ok){
+      el.innerHTML='<span class="bull">OK — '+d.latency_ms+' ms round trip.</span> '
+        +'Dhan\'s chain is capped at one request per 3,000 ms, so this path '
+        +'is usable for a faster refresh once wired in.';
+    }else{
+      el.innerHTML='<span class="bear">'+(d.error||"failed")+'</span>'
+        +(d.latency_ms?(' <span style="color:var(--dim)">('+d.latency_ms+' ms)</span>'):'');
+    }
+  }catch(e){ el.innerHTML='<span class="bear">'+e+'</span>'; }
+}
 async function kotakLogin(){
   const btn=document.getElementById("kotakLoginStatus");
   btn.textContent="Logging in...";
@@ -2129,6 +2165,8 @@ async function saveSettings(){
     zerodha_api_key:document.getElementById("s_zkey").value.trim(),
     zerodha_access_token:document.getElementById("s_ztok").value.trim(),
     kotak_access_token:document.getElementById("s_ktok").value.trim(),
+    kotak_consumer_key:document.getElementById("s_kck").value.trim(),
+    kotak_base_url:document.getElementById("s_kbase").value.trim(),
     kotak_mobile:document.getElementById("s_kmobile").value.trim(),
     kotak_ucc:document.getElementById("s_kucc").value.trim(),
     dhan_client_id:document.getElementById("s_cid").value.trim(),

@@ -740,6 +740,65 @@ class ZerodhaOrders:
             return json.loads(r.read())["data"]["order_id"]
 
 
+
+# ---------------------------------------------------------------- scrip master
+# 2026-08-17 — these two were nested inside KotakNeoClient._load_master().
+# Lifted to module level, byte-identical, so the PUBLIC scrip-master loader
+# (kotak_scrip.py) can share them instead of carrying a second copy of the
+# column-name and expiry-offset quirks. CLAUDE.md records three separate
+# occasions where two near-identical implementations drifted at the margins;
+# the expiry offset in particular is a documented magic number that would be
+# silently wrong in a fork.
+#
+# Behaviour is unchanged: _load_master() calls these instead of defining them.
+def _find(row, *substrings):
+    """Column names in Kotak's CSV have inconsistent trailing
+    whitespace (e.g. 'lExpiryDate ' vs 'lExpiryDate') and this can
+    vary between exports — match by substring, case-insensitive,
+    instead of guessing exact key spellings."""
+    for k, v in row.items():
+        if k and all(s.lower() in k.lower() for s in substrings):
+            return v
+    return None
+
+def _parse_expiry(row, segment):
+    """CONFIRMED via Kotak's official Scrip Master documentation
+    (column-mapping notes): 'lExpiryDate' encodes expiry
+    differently by segment —
+      nse_fo / cde_fo : epoch + 315511200 seconds, then treat as IST
+      bse_fo / mcx_fo : epoch used directly, no correction
+    This replaces the earlier ~10-year heuristic (315532800 s),
+    which was off by exactly 6 hours from the documented value —
+    close enough to have looked plausible, but not the real spec."""
+    import time as _t
+    now = _t.time()
+    plausible = lambda ts: (now - 5 * 86400) < ts < (now + 500 * 86400)
+    try:
+        raw_num = int(_find(row, "expirydate") or 0)
+    except (ValueError, TypeError):
+        raw_num = 0
+    if not raw_num:
+        return 0, "unavailable"
+    OFFSET = 315511200
+    expiry = raw_num + OFFSET if segment in ("nse_fo", "cde_fo") else raw_num
+    if plausible(expiry):
+        return expiry, "documented-offset" if segment in ("nse_fo", "cde_fo") else "numeric"
+    # fall back to the string date column only if the documented
+    # formula somehow produces an implausible result (shouldn't
+    # normally happen, but keeps a safety net rather than a crash)
+    from datetime import datetime as _dt
+    raw_str = (row.get("pExpiryDate") or "").strip()
+    for fmt in ("%d-%b-%Y", "%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y",
+               "%d%b%Y", "%b %d, %Y", "%d-%b-%y"):
+        try:
+            ts = _dt.strptime(raw_str, fmt).timestamp()
+            if plausible(ts):
+                return int(ts), "string-fallback"
+        except (ValueError, TypeError):
+            continue
+    return 0, "unavailable"
+
+
 class KotakNeoClient:
     """Kotak Neo — validated spec. Run `python kotak_login.py` each morning
     to create the day's session (TOTP+MPIN); it stores session token, sid
@@ -822,52 +881,6 @@ class KotakNeoClient:
         if not text:
             raise RuntimeError("Kotak scrip master unavailable (nse_fo.csv not found)")
 
-        def _find(row, *substrings):
-            """Column names in Kotak's CSV have inconsistent trailing
-            whitespace (e.g. 'lExpiryDate ' vs 'lExpiryDate') and this can
-            vary between exports — match by substring, case-insensitive,
-            instead of guessing exact key spellings."""
-            for k, v in row.items():
-                if k and all(s.lower() in k.lower() for s in substrings):
-                    return v
-            return None
-
-        def _parse_expiry(row, segment):
-            """CONFIRMED via Kotak's official Scrip Master documentation
-            (column-mapping notes): 'lExpiryDate' encodes expiry
-            differently by segment —
-              nse_fo / cde_fo : epoch + 315511200 seconds, then treat as IST
-              bse_fo / mcx_fo : epoch used directly, no correction
-            This replaces the earlier ~10-year heuristic (315532800 s),
-            which was off by exactly 6 hours from the documented value —
-            close enough to have looked plausible, but not the real spec."""
-            import time as _t
-            now = _t.time()
-            plausible = lambda ts: (now - 5 * 86400) < ts < (now + 500 * 86400)
-            try:
-                raw_num = int(_find(row, "expirydate") or 0)
-            except (ValueError, TypeError):
-                raw_num = 0
-            if not raw_num:
-                return 0, "unavailable"
-            OFFSET = 315511200
-            expiry = raw_num + OFFSET if segment in ("nse_fo", "cde_fo") else raw_num
-            if plausible(expiry):
-                return expiry, "documented-offset" if segment in ("nse_fo", "cde_fo") else "numeric"
-            # fall back to the string date column only if the documented
-            # formula somehow produces an implausible result (shouldn't
-            # normally happen, but keeps a safety net rather than a crash)
-            from datetime import datetime as _dt
-            raw_str = (row.get("pExpiryDate") or "").strip()
-            for fmt in ("%d-%b-%Y", "%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y",
-                       "%d%b%Y", "%b %d, %Y", "%d-%b-%y"):
-                try:
-                    ts = _dt.strptime(raw_str, fmt).timestamp()
-                    if plausible(ts):
-                        return int(ts), "string-fallback"
-                except (ValueError, TypeError):
-                    continue
-            return 0, "unavailable"
 
         self._master = {}
         skipped_bad_expiry = {}
