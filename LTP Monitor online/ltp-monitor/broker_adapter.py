@@ -705,19 +705,25 @@ class ZerodhaClient:
                 "rows": [rows[k] for k in sorted(rows)],
                 "atm": atm}
 
-    def intraday(self, symbol: str, interval: str = "5") -> dict:
-        # Kite historical API needs instrument token of the index
+    def intraday(self, symbol: str, interval: str = "5",
+                 days: int = None, cap: int = None) -> dict:
+        # v59.99 — days/cap are part of the broker interface, not a Dhan
+        # extra: app.dhan_client() returns the ACTIVE broker despite its
+        # name, so the chart's call reaches whichever client is selected.
+        # Defaults preserve the previous behaviour exactly (1 day back,
+        # last 120 candles) for every caller that does not ask.
         tok = {"NIFTY": 256265, "BANKNIFTY": 260105,
                "FINNIFTY": 257801, "SENSEX": 265}.get(symbol)
         from datetime import datetime, timedelta
-        frm = (store.ist_now() - timedelta(days=1)).strftime("%Y-%m-%d")
+        back = 1 if days is None else max(1, int(days))
+        frm = (store.ist_now() - timedelta(days=back)).strftime("%Y-%m-%d")
         to = store.ist_now().strftime("%Y-%m-%d %H:%M:%S")   # v59.71 — IST
         iv = {"1": "minute", "5": "5minute", "15": "15minute"}[interval]
         data = self._req(f"/instruments/historical/{tok}/{iv}",
                          {"from": frm, "to": to})
         candles = [{"time": c[0], "open": c[1], "high": c[2],
                     "low": c[3], "close": c[4]} for c in data["candles"]]
-        return {"candles": candles[-120:]}
+        return {"candles": candles[-(120 if cap is None else max(1, int(cap))):]}
 
 
 class ZerodhaOrders:
@@ -1035,7 +1041,18 @@ class KotakNeoClient:
                 "rows": [rows[k] for k in sorted(rows)], "atm": atm,
                 "chg": idx_chg, "chg_pct": idx_pct}
 
-    def intraday(self, symbol: str, interval: str = "5") -> dict:
+    def intraday(self, symbol: str, interval: str = "5",
+                 days: int = None, cap: int = None) -> dict:
+        # days/cap are accepted and ignored: this raises regardless, but
+        # the SIGNATURE is part of the broker interface. v59.95 added
+        # those kwargs to DhanClient.intraday() and to the chart's two
+        # call sites, and missed the other two implementations — so with
+        # `broker` set to kotak the chart raised
+        # "unexpected keyword argument 'days'" on every refresh instead
+        # of the intended clean "no candle endpoint" message. Found live
+        # 2026-08-17 in the app log. app.dhan_client() returns the
+        # ACTIVE broker despite its name, so every client here must take
+        # the same arguments.
         raise RuntimeError("Kotak REST has no candle endpoint here — regime "
                            "agent needs Dhan; select Dhan or run without regime")
 

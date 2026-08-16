@@ -97,6 +97,31 @@ check("all three survive a config save round-trip",
            "chart_history_days_15m")),
       "config.save() silently drops anything not in DEFAULTS")
 
+print("\n5b) EVERY broker client accepts the same intraday() signature")
+# v59.99, found live. app.dhan_client() is named for Dhan but returns
+# the ACTIVE broker, so the chart's intraday(days=, cap=) call reaches
+# whichever client Settings selects. v59.95 added the kwargs to
+# DhanClient only; with `broker` set to kotak the chart raised
+#   TypeError: KotakNeoClient.intraday() got an unexpected keyword 'days'
+# on every refresh. The suite missed it because no test drove a
+# non-Dhan client through the chart path — so pin the INTERFACE, which
+# is cheap and does not need a live broker.
+import inspect as _insp
+for _cls in ("DhanClient", "ZerodhaClient", "KotakNeoClient"):
+    _c = getattr(broker_adapter, _cls, None)
+    check(f"{_cls} exists", _c is not None)
+    if not _c:
+        continue
+    _p = _insp.signature(_c.intraday).parameters
+    check(f"{_cls}.intraday accepts days and cap",
+          "days" in _p and "cap" in _p,
+          f"params={list(_p)} — app.dhan_client() returns the ACTIVE "
+          f"broker, so every client must take the chart's arguments")
+    check(f"{_cls}.intraday keeps days/cap OPTIONAL",
+          _p["days"].default is not _insp.Parameter.empty
+          and _p["cap"].default is not _insp.Parameter.empty,
+          "existing callers pass neither and must keep working")
+
 print("\n6) the signature still works positionally, as every old caller uses it")
 import inspect
 sig = inspect.signature(broker_adapter.DhanClient.intraday)

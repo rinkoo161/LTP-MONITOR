@@ -4,6 +4,43 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v59.99 — v59.95 broke the chart for non-Dhan brokers (2026-08-17)
+
+Found in the live log minutes after restarting on v59.98, while checking
+something else:
+
+    TypeError: KotakNeoClient.intraday() got an unexpected keyword
+               argument 'days'
+
+repeating on every chart refresh.
+
+**`app.dhan_client()` returns the ACTIVE broker despite its name.** Its
+own docstring says so — "Named dhan_client for backward-compat but
+returns the broker selected in Settings" — and v59.95 added `days`/`cap`
+to `DhanClient.intraday()` and to the chart's two call sites without
+adding them to the other two implementations. The live config had
+`broker: kotak`, so every chart request raised.
+
+Fixed by making the kwargs part of the INTERFACE rather than a Dhan
+extra: `ZerodhaClient.intraday()` now honours them (defaults preserve
+its previous 1-day / last-120 behaviour exactly) and
+`KotakNeoClient.intraday()` accepts and ignores them, so it raises its
+intended "no candle endpoint" message instead of a TypeError.
+
+### Why the suite missed it
+
+Nothing drove a non-Dhan client through the chart path, and
+`test_chart_history_window.py` asserted only on the Dhan signature. It
+now pins the interface across all three clients — that both `days` and
+`cap` exist AND remain optional, so existing callers passing neither
+keep working. Cheap, and needs no live broker.
+
+Worth noting what did NOT catch this: `py_compile`, the full 165-test
+suite, and the golden replay all passed on v59.98. A polymorphic call
+site with one updated implementation is invisible to every one of them.
+The live log caught it, which is an argument for reading the log after a
+restart rather than trusting the gates alone.
+
 ## v59.98 — the whole NIFTY chain in 198 ms (2026-08-17)
 
 The operator supplied the PUBLIC scrip-master path:
