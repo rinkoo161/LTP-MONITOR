@@ -54,6 +54,25 @@ either way). Fixing only defect 1 would have left the audit lying daily
 over cleaner inputs. One symptom, two defects — CLAUDE.md's "multiple
 errors operate at once", demonstrated on ourselves.
 
+### Strategy page validated against real data (post-fix)
+
+Driven in a real browser on the v60.00 tree over the live store:
+41 strategy rows (all families, per-symbol), 12 performance rows with
+real metrics, open-positions correctly empty after the 15:24 square-off,
+zero page errors, zero failed HTTP calls — and the new write gate fired
+during the run ("dropped 1 out-of-session candle(s)" per series), i.e.
+the v60.00 behaviour observed working, not assumed.
+
+Two loose ends closed/naming:
+* The review's "journal attribution '?'" item is RESOLVED — journal.json
+  is daily summaries; per-trade attribution lives inside trades_detail.
+  The earlier probe read the wrong level. Not a data gap.
+* MINOR, named for later: strategy_stats.performance() groups one
+  bucket under the literal label "rule-engine (AI unavailable: Ollama
+  error: timed out)" — an ERROR STRING leaked into a grouping key. As
+  error texts vary this multiplies phantom strategy rows. Fix is to
+  normalise the engine label before grouping, not to touch the journal.
+
 ### What the corrected audit actually says about 2026-08-17
 
 With data present and filtered: the live 12:34 BANKNIFTY spread MATCHES
