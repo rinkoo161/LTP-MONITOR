@@ -4,6 +4,38 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v60.01 — every strategy vs nine years of data (2026-08-18)
+
+Adds `tools/longrun_strategy_validation.py`,
+`docs/longrun-strategy-validation.md` and the raw results JSON. No
+behaviour change; the run happened in an isolated store built from the
+research backfill (production history.db never opened), using the LIVE
+replay functions with the LIVE tuned parameters.
+
+28 cells, 46,623 replay trades: 7 index-candle strategies x 4 symbols,
+NIFTY 2017-04+ and the rest 2021-08+. Spreads/momentum_buy/S10 excluded,
+not approximated — 17 days of chain archive cannot pretend to be nine
+years. Full caveats in the doc (spot proxy, chain gates fail open
+pre-2026-07, NIFTY/SENSEX r=0.98 so four columns are ~two observations).
+
+Headline findings:
+* momentum_confluence loses in 8/10 NIFTY years and on ALL four indices
+  in the shared window (-1.11M combined, 17,579 trades). Cross-regime,
+  cross-symbol, high-volume: the one actionable negative. PROPOSED (rule
+  8, not applied): disable or observe-only.
+* No strategy earns a positive verdict. vwap_pullback's best-in-class
+  6/10 years splits along the correlation pairs cross-symbol; orb's
+  9-year total is two years carrying eight; ew_reversal is least-bad on
+  a sample too thin to promote.
+* The tuned versions mostly LOSE on 2017-2023 — genuine out-of-sample
+  backwards for parameters fitted to recent weeks. Consistent with the
+  promotion gate's standing 0-of-11.
+
+The long history was also the point of the backfill: this closes the
+loop from "validate the strategies" through data sourcing to a
+year-by-year answer. Nothing here changes the standing conclusion; it
+sharpens it with 46,623 more observations.
+
 ## v60.00 — the archive lied twice, in different ways (2026-08-17)
 
 From the third third-eye review (verdict BLOCK, Tier 0). Two independent
