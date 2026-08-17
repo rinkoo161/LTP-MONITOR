@@ -59,8 +59,12 @@ conn.execute("DELETE FROM chain_snapshots WHERE symbol=?", (SYM,))
 conn.commit()
 old_ts = int(time.time()) - 10 * 86400   # 10 days old — outside the 5-day default
 recent_ts = int(time.time()) - 1 * 86400
-history.upsert_chain_snapshot(SYM, old_ts, [{"strike": 100, "ce": {"ltp": 1}, "pe": {"ltp": 1}}])
-history.upsert_chain_snapshot(SYM, recent_ts, [{"strike": 100, "ce": {"ltp": 1}, "pe": {"ltp": 1}}])
+# session_only=False: this file tests RETENTION tiers, which are a
+# function of timestamp age, not of session membership — and the seeds
+# are minted from now()-offsets, so a midnight run lands out of session.
+# Same documented escape-hatch pattern as test_audit_today's fixture.
+history.upsert_chain_snapshot(SYM, old_ts, [{"strike": 100, "ce": {"ltp": 1}, "pe": {"ltp": 1}}], session_only=False)
+history.upsert_chain_snapshot(SYM, recent_ts, [{"strike": 100, "ce": {"ltp": 1}, "pe": {"ltp": 1}}], session_only=False)
 before = conn.execute("SELECT COUNT(*) FROM chain_snapshots WHERE symbol=?", (SYM,)).fetchone()[0]
 check("fixture seeded 4 rows (1 strike x 2 legs x 2 timestamps)",
       before == 4, f"got {before}")
@@ -116,7 +120,11 @@ check("and the bus key still mirrors it, for anything introspecting",
       str(bus.get("chain_prune_done")))
 
 # second cycle same day must NOT re-run the prune (idempotent daily gate)
-history.upsert_chain_snapshot(SYM, old_ts, [{"strike": 100, "ce": {"ltp": 1}, "pe": {"ltp": 1}}])
+# session_only=False: this file tests RETENTION tiers, which are a
+# function of timestamp age, not of session membership — and the seeds
+# are minted from now()-offsets, so a midnight run lands out of session.
+# Same documented escape-hatch pattern as test_audit_today's fixture.
+history.upsert_chain_snapshot(SYM, old_ts, [{"strike": 100, "ce": {"ltp": 1}, "pe": {"ltp": 1}}], session_only=False)
 agents.market_open = lambda: False
 try:
     ag.cycle()
@@ -137,8 +145,8 @@ conn.commit()
 # bucket edge roughly one run in five and BOTH rows legitimately survive.
 # That would be a test failing on the wall clock, not on the code.
 t2a = ((int(time.time()) - 200 * 86400) // 300) * 300
-history.upsert_chain_snapshot(SYM, t2a, [{"strike": 100, "ce": {"ltp": 1}, "pe": {"ltp": 1}}])
-history.upsert_chain_snapshot(SYM, t2a + 60, [{"strike": 100, "ce": {"ltp": 2}, "pe": {"ltp": 2}}])
+history.upsert_chain_snapshot(SYM, t2a, [{"strike": 100, "ce": {"ltp": 1}, "pe": {"ltp": 1}}], session_only=False)
+history.upsert_chain_snapshot(SYM, t2a + 60, [{"strike": 100, "ce": {"ltp": 2}, "pe": {"ltp": 2}}], session_only=False)
 history.prune_chain_snapshots()
 kept = conn.execute("SELECT COUNT(*) FROM chain_snapshots WHERE symbol=?", (SYM,)).fetchone()[0]
 check("tier 2 thins a 60s cadence to the 5-min grid", kept == 2,

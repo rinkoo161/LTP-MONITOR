@@ -1494,6 +1494,54 @@ def audit_today(name, symbol, real_trades, log=lambda m: None,
                  (t.get("strategy") or t.get("source")) == name]
 
     params = get_params(name, symbol)
+
+    # 2026-08-17 — the audit runs from LearningAgent's EOD cycle
+    # (~15:35) but today's option candles are synced by BacktestAgent's
+    # LATER job (sync_day_chain, ~15:45+). So every daily audit replayed
+    # a day with no data, got zero replay trades, and reported every
+    # live trade as one "the rules wouldn't have made". Confirmed live
+    # 2026-08-17: at 15:48 the audit said 0 replay trades / 1 rogue live
+    # trade; after the sync the same code said 11 replay trades and the
+    # live 12:34 entry MATCHED a rule-valid 12:31 setup. The audit was
+    # manufacturing a divergence out of an empty table, daily.
+    #
+    # Zero-because-no-data must be distinguishable from zero-because-
+    # rules-rejected — and "the data" differs by strategy family. The
+    # first cut checked chain_days() unconditionally; test_audit_today
+    # immediately caught that this brands every PA/momentum audit
+    # insufficient, because those replays run on INDEX candles, which
+    # chain_days() (option candles) says nothing about. The existence
+    # check must mirror _replay_for's actual input per family.
+    import history as _h
+    import strategies as _st
+    if name in getattr(_st, "META", {}):
+        # spread replays reconstruct the option chain for the day
+        missing = today not in set(_h.chain_days(symbol))
+        what = "day chain"
+    else:
+        # PA/momentum replays run on the index candle series
+        _c = _h._conn()
+        n_idx = _c.execute(
+            """SELECT COUNT(*) FROM candles c JOIN instruments i
+               ON i.security_id=c.security_id
+               WHERE i.symbol=? AND i.kind='idx'
+               AND date(c.ts,'unixepoch','+5 hours','+30 minutes')=?""",
+            (symbol, today)).fetchone()[0]
+        _c.close()
+        missing = n_idx == 0
+        what = "index candles"
+    if missing:
+        gap_summary = (f"insufficient data — {symbol} {what} for {today} "
+                      f"not yet synced (audit ran before the 15:45 sync "
+                      f"job); re-run after sync for the real comparison")
+        log(f"[audit] {symbol} {name} {today}: {gap_summary}")
+        return {"day": today, "backtest_trades": [], "backtest_metrics": {},
+               "real_trades": [t for t in (real_trades or [])
+                               if t.get("closed_date") == today],
+               "real_net_pnl": 0, "matched": [], "missed_by_live": [],
+               "unexpected_in_live": [], "insufficient_data": True,
+               "gap_summary": gap_summary}
+
     bt_trades = _replay_for(name, symbol, params, days=[today])
     bt_metrics = metrics(bt_trades)
 

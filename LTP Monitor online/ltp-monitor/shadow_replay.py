@@ -76,7 +76,12 @@ def series(conn, symbol, strike, leg, t0, t1):
         "SELECT ts,ltp,bid FROM chain_snapshots WHERE symbol=? AND strike=? "
         "AND leg=? AND ts>=? AND ts<=? ORDER BY ts",
         (symbol, strike, leg, t0, t1)).fetchall()
-    return [(t, l, b) for t, l, b in rows if l]
+    # 2026-08-17 — in-session frames only. A first-touch replay that can
+    # "touch" a stop on a 20:00 quote resolves counterfactuals against
+    # prices no order could have filled at.
+    import agents
+    return [(t, l, b) for t, l, b in rows
+            if l and agents.in_market_session(int(t))]
 
 
 def first_touch(path, entry, stop, target):
