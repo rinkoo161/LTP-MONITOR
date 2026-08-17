@@ -4,6 +4,123 @@ Living list of pending work. Update this file as items are picked up,
 completed, or reprioritized — it's the source of truth across sessions,
 not the chat history.
 
+## v60.01 — every strategy vs nine years of data (2026-08-18)
+
+Adds `tools/longrun_strategy_validation.py`,
+`docs/longrun-strategy-validation.md` and the raw results JSON. No
+behaviour change; the run happened in an isolated store built from the
+research backfill (production history.db never opened), using the LIVE
+replay functions with the LIVE tuned parameters.
+
+28 cells, 46,623 replay trades: 7 index-candle strategies x 4 symbols,
+NIFTY 2017-04+ and the rest 2021-08+. Spreads/momentum_buy/S10 excluded,
+not approximated — 17 days of chain archive cannot pretend to be nine
+years. Full caveats in the doc (spot proxy, chain gates fail open
+pre-2026-07, NIFTY/SENSEX r=0.98 so four columns are ~two observations).
+
+Headline findings:
+* momentum_confluence loses in 8/10 NIFTY years and on ALL four indices
+  in the shared window (-1.11M combined, 17,579 trades). Cross-regime,
+  cross-symbol, high-volume: the one actionable negative. PROPOSED (rule
+  8, not applied): disable or observe-only.
+* No strategy earns a positive verdict. vwap_pullback's best-in-class
+  6/10 years splits along the correlation pairs cross-symbol; orb's
+  9-year total is two years carrying eight; ew_reversal is least-bad on
+  a sample too thin to promote.
+* The tuned versions mostly LOSE on 2017-2023 — genuine out-of-sample
+  backwards for parameters fitted to recent weeks. Consistent with the
+  promotion gate's standing 0-of-11.
+
+The long history was also the point of the backfill: this closes the
+loop from "validate the strategies" through data sourcing to a
+year-by-year answer. Nothing here changes the standing conclusion; it
+sharpens it with 46,623 more observations.
+
+## v60.00 — the archive lied twice, in different ways (2026-08-17)
+
+From the third third-eye review (verdict BLOCK, Tier 0). Two independent
+defects shared one symptom, and the first diagnosis was wrong — the
+falsification tests are what separated them.
+
+### Defect 1: chain_snapshots was 50.6% out-of-session
+
+The snapshot writers throttle by interval but never asked what time it
+was, so the display path's out-of-hours refresh was archived as market
+data — frames until 21:15 on a day the market closed at 15:30. Measured
+against the REAL session definition (09:15 to the 15:40 F&O close +5min
+auction tail): 670,824 of 1.3M rows out-of-session. (The review's first
+figure, 48%, used a hand-written 15:30 boundary — measuring with a
+second definition of the session while fixing exactly that class of bug.)
+
+Fix mirrors upsert_candles' 2026-07-31 gate at the single shared write
+boundary: upsert_chain_snapshot drops out-of-session frames, announces
+the first drop, counts the rest, and keeps session_only=False as an
+explicit escape hatch. Read side, for the 670k pre-gate rows already on
+disk: get_chain_snapshot_map and get_chain_session_open_map now take
+the latest/earliest IN-SESSION frame (bare MAX(ts) was handing back
+21:00 "snapshots"); chain_series, the greeks-history endpoint, the
+chain-days count, shadow_replay.series and proxy_error's
+nearest-snapshot lookups all filter through agents.in_market_session —
+the one shared definition, lazily imported, never a parallel SQL copy.
+The contaminated rows are deliberately NOT purged: they are the bug's
+timeline, and the filters make them inert.
+
+### Defect 2: the EOD audit fabricated a divergence every day
+
+audit_today runs from LearningAgent (~15:35); the day's option candles
+are synced by BacktestAgent (~15:45+). So the audit always replayed a
+day with NO data, got zero replay trades, and branded every live trade
+"one the rules wouldn't have made" — daily, mechanically.
+
+The fix distinguishes zero-because-no-data from zero-because-rules-
+rejected: audit_today now checks chain_days() (exactly the replay's
+input) and returns an explicit insufficient_data verdict naming the
+cause and the remedy, instead of a fabricated divergence.
+
+### The false lead, kept on record
+
+The audit flip was first blamed on the contamination. Falsification
+test 1 disproved it: the spread replay reads option CANDLES, not
+chain_snapshots, so filtering changed its answer not at all (11 trades
+either way). Fixing only defect 1 would have left the audit lying daily
+over cleaner inputs. One symptom, two defects — CLAUDE.md's "multiple
+errors operate at once", demonstrated on ourselves.
+
+### Strategy page validated against real data (post-fix)
+
+Driven in a real browser on the v60.00 tree over the live store:
+41 strategy rows (all families, per-symbol), 12 performance rows with
+real metrics, open-positions correctly empty after the 15:24 square-off,
+zero page errors, zero failed HTTP calls — and the new write gate fired
+during the run ("dropped 1 out-of-session candle(s)" per series), i.e.
+the v60.00 behaviour observed working, not assumed.
+
+Two loose ends closed/naming:
+* The review's "journal attribution '?'" item is RESOLVED — journal.json
+  is daily summaries; per-trade attribution lives inside trades_detail.
+  The earlier probe read the wrong level. Not a data gap.
+* MINOR, named for later: strategy_stats.performance() groups one
+  bucket under the literal label "rule-engine (AI unavailable: Ollama
+  error: timed out)" — an ERROR STRING leaked into a grouping key. As
+  error texts vary this multiplies phantom strategy rows. Fix is to
+  normalise the engine label before grouping, not to touch the journal.
+
+### What the corrected audit actually says about 2026-08-17
+
+With data present and filtered: the live 12:34 BANKNIFTY spread MATCHES
+a rule-valid 12:31 replay setup — yesterday's "1 live trade the rules
+wouldn't have made" was the empty-table artifact. The real divergence
+is the opposite: the replay finds 11 rule-valid entries (all losers,
+net -11,402 on the day) where live took 1 (-1,617), because
+replay_spreads applies the wall/credit params but none of live's risk
+gating. That is a REPLAY-side parity gap (replay more permissive than
+live — the mirror image of the v59.88 PA gap) and is left as named,
+open work rather than rushed: closing it changes what every spread
+backtest measures.
+
+Bumped to v60.00 — the two-defect Tier-0 fix is a bigger measurement
+change than any v59.9x patch.
+
 ## v59.99 — v59.95 broke the chart for non-Dhan brokers (2026-08-17)
 
 Found in the live log minutes after restarting on v59.98, while checking

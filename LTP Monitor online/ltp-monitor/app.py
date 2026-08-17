@@ -27,7 +27,7 @@ from agents import Orchestrator, compute_momentum
 import agents
 
 BASE = os.path.dirname(os.path.abspath(__file__))
-APP_VERSION = "v59.99"   # maintained per explicit request; last delivered was v49
+APP_VERSION = "v60.01"   # maintained per explicit request; last delivered was v49
 
 app = FastAPI(title="LTP Option Chain Monitor")
 
@@ -1088,10 +1088,15 @@ def api_instruments_watchlist():
                "chain_days": 0, "future_bars": 0}
         try:
             conn = _h._conn()
-            row["chain_days"] = conn.execute(
-                "SELECT COUNT(DISTINCT date(ts,'unixepoch','+5 hours',"
-                "'+30 minutes')) FROM chain_snapshots WHERE symbol=?",
-                (sym,)).fetchone()[0]
+            # 2026-08-17 — count only days with IN-SESSION frames. The
+            # pre-gate archive holds weekend/evening junk frames, so a
+            # bare DISTINCT(date) counted Saturdays as "chain days".
+            _pairs = conn.execute(
+                "SELECT DISTINCT date(ts,'unixepoch','+5 hours',"
+                "'+30 minutes'), ts FROM chain_snapshots WHERE symbol=?",
+                (sym,)).fetchall()
+            row["chain_days"] = len({d for d, t in _pairs
+                                     if agents.in_market_session(int(t))})
             row["future_bars"] = conn.execute(
                 "SELECT COUNT(*) FROM candles c JOIN instruments i "
                 "ON i.security_id=c.security_id WHERE i.symbol=? AND "
@@ -1467,6 +1472,10 @@ def api_chain_snapshots(symbol: str, hours: float = 6,
     q += " ORDER BY ts"
     rows = conn.execute(q, params).fetchall()
     conn.close()
+    # 2026-08-17 — drop out-of-session rows (ts is column index 2); the
+    # pre-gate archive is 48% evening/weekend frames and a greeks
+    # history that includes them draws flat after-hours tails.
+    rows = [r for r in rows if agents.in_market_session(int(r[2]))]
     return {"symbol": symbol.upper(), "hours": hours, "count": len(rows),
            "rows": [{"strike": r[0], "leg": r[1], "ts": r[2], "ltp": r[3],
                      "oi": r[4], "oi_chg": r[5], "volume": r[6], "iv": r[7],

@@ -625,14 +625,56 @@ def get_iv_history(symbol, strike, leg, since_ts):
     return [r[0] for r in rows]
 
 
-def upsert_chain_snapshot(symbol, ts, strikes_out):
+def _chain_session_ts(candidates):
+    """First in-session timestamp from an ordered candidate list, or None.
+
+    Uses agents.in_market_session — the single shared session
+    definition — via lazy import (agents imports history, so a
+    module-level import would be circular; upsert_candles below already
+    uses the same pattern for the same reason). Writing the boundary as
+    a SQL time-window here instead would create a SECOND definition of
+    the session, which is the exact drift failure this codebase has
+    been bitten by three times.
+    """
+    import agents
+    for ts in candidates:
+        if ts is not None and agents.in_market_session(int(ts)):
+            return ts
+    return None
+
+
+def upsert_chain_snapshot(symbol, ts, strikes_out, session_only=True):
     """Persists one option-chain snapshot (the analyzed focus window —
     ~10 strikes either side of ATM, matching analyzer.analyze()'s own
     `strikes` output) at timestamp `ts`. `strikes_out` is exactly
     analyze()'s `strikes` list: [{"strike": ..., "ce": {...}, "pe":
     {...}}, ...] with ltp/oi/oi_chg/volume/iv/delta/gamma/theta/vega/
     bid/ask already present per leg — no reshaping needed by callers.
-    Idempotent (REPLACE on symbol+strike+leg+ts)."""
+    Idempotent (REPLACE on symbol+strike+leg+ts).
+
+    2026-08-17 — session_only gate added after measuring that 48.0% of
+    chain_snapshots (633,024 of 1,318,876 rows) carried out-of-session
+    timestamps: the writers throttle by interval but never asked what
+    time it was, so the display path's out-of-hours refresh was
+    archived as if it were market data. Frames kept arriving until
+    21:15 on a day the market closed at 15:30 — which made the EOD
+    audit return DIFFERENT answers at 15:48 and 21:15 from identical
+    code. Same fix, same shape, same reasoning as upsert_candles
+    below: the gate belongs at the single write boundary every
+    producer shares, announced on first drop, with session_only=False
+    reserved for a caller that explicitly wants out-of-hours storage.
+    """
+    if session_only:
+        import agents
+        if not agents.in_market_session(int(ts)):
+            key = f"chain:{symbol}"
+            seen = DROPPED_OUT_OF_SESSION.get(key, 0)
+            DROPPED_OUT_OF_SESSION[key] = seen + 1
+            if not seen:
+                print(f"  [history] {key}: dropped out-of-session chain "
+                      f"snapshot at write — same keepalive contamination "
+                      f"as candles, not persisted")
+            return 0
     rows = []
     for s in strikes_out:
         strike = s["strike"]
@@ -665,10 +707,17 @@ def get_chain_snapshot_map(symbol, at_or_before_ts):
     per-strike nearest-match, so the comparison is always against one
     consistent point in time rather than a blend of different moments."""
     c = _conn()
-    row = c.execute(
-        "SELECT MAX(ts) FROM chain_snapshots WHERE symbol=? AND ts<=?",
-        (symbol, int(at_or_before_ts))).fetchone()
-    snap_ts = row[0] if row else None
+    # 2026-08-17 — was MAX(ts). 48% of the table is out-of-session rows
+    # written before the upsert gate existed, so the bare MAX could hand
+    # back a 21:00 "snapshot" as the comparison point (and did: the EOD
+    # audit's answer changed between 15:48 and 21:15). Walk the recent
+    # candidates and take the latest IN-SESSION one instead; 400 covers
+    # a full evening of 60s junk frames with margin.
+    cand = [r[0] for r in c.execute(
+        "SELECT DISTINCT ts FROM chain_snapshots WHERE symbol=? AND ts<=? "
+        "ORDER BY ts DESC LIMIT 400",
+        (symbol, int(at_or_before_ts)))]
+    snap_ts = _chain_session_ts(cand)
     if snap_ts is None:
         c.close()
         return {}
@@ -693,10 +742,14 @@ def get_chain_session_open_map(symbol, session_start_ts):
     previous snapshot". Returns {} if today's first snapshot hasn't
     landed yet."""
     c = _conn()
-    row = c.execute(
-        "SELECT MIN(ts) FROM chain_snapshots WHERE symbol=? AND ts>=?",
-        (symbol, int(session_start_ts))).fetchone()
-    snap_ts = row[0] if row else None
+    # 2026-08-17 — same session filter as get_chain_snapshot_map above,
+    # mirrored: earliest IN-SESSION frame, so a pre-open junk frame can
+    # never masquerade as "session open".
+    cand = [r[0] for r in c.execute(
+        "SELECT DISTINCT ts FROM chain_snapshots WHERE symbol=? AND ts>=? "
+        "ORDER BY ts ASC LIMIT 400",
+        (symbol, int(session_start_ts)))]
+    snap_ts = _chain_session_ts(cand)
     if snap_ts is None:
         c.close()
         return {}
@@ -858,6 +911,11 @@ def chain_series(symbol, day):
         "WHERE symbol=? AND date(ts,'unixepoch','+5 hours','+30 minutes')=? "
         "ORDER BY ts, strike", (symbol.upper(), day)).fetchall()
     c.close()
+    # 2026-08-17 — drop out-of-session frames (48% of the table predates
+    # the write gate). Without this, the S10 replay's day includes
+    # evening quotes and `chg` is derived across the close boundary.
+    import agents
+    rows = [r for r in rows if agents.in_market_session(int(r[0]))]
     by_ts = {}
     prev_ltp = {}
     for ts, strike, leg, ltp, oi, oi_chg, vol, delta in rows:

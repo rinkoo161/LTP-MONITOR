@@ -99,6 +99,12 @@ def _agent(broker):
 # when a suite tends to be run.
 _real_session = agents.fno_session_open
 agents.fno_session_open = lambda: True
+# v60.00 — the WRITE boundary (history.upsert_chain_snapshot) now also
+# checks in_market_session, after 50.6% of the real table turned out to
+# be after-hours junk. This test drives the archive mechanics with
+# now() timestamps, so simulate market hours the same way as above.
+_real_ims = agents.in_market_session
+agents.in_market_session = lambda ts: True
 
 cfg = config.load()
 cfg["watch_symbols"] = [WSYM]
@@ -197,6 +203,7 @@ try:
           "defined-but-never-called is how this feature failed the first time")
 finally:
     agents.fno_session_open = _real_session
+    agents.in_market_session = _real_ims
 
 print()
 if FAILED:

@@ -40,13 +40,18 @@ def chain_at(symbol, ts, strike, leg, tol=180):
     """Nearest snapshot within `tol` seconds — ltp, bid, ask and greeks."""
     c = history._conn()
     try:
-        r = c.execute(
+        # 2026-08-17 — LIMIT 1 could return an out-of-session frame as
+        # the "nearest" quote; take candidates and keep the nearest
+        # IN-SESSION one instead.
+        cands = c.execute(
             "SELECT ts, ltp, bid, ask, delta, theta, iv FROM chain_snapshots "
             "WHERE symbol=? AND strike=? AND leg=? AND ts BETWEEN ? AND ? "
-            "ORDER BY ABS(ts-?) LIMIT 1",
-            (symbol.upper(), strike, leg, ts - tol, ts + tol, ts)).fetchone()
+            "ORDER BY ABS(ts-?) LIMIT 20",
+            (symbol.upper(), strike, leg, ts - tol, ts + tol, ts)).fetchall()
     finally:
         c.close()
+    import agents
+    r = next((x for x in cands if agents.in_market_session(int(x[0]))), None)
     if not r:
         return None
     return {"ts": r[0], "ltp": r[1], "bid": r[2], "ask": r[3],
@@ -57,12 +62,15 @@ def atm_strike(symbol, ts, spot):
     """The strike actually present in the archive nearest to spot."""
     c = history._conn()
     try:
-        r = c.execute(
-            "SELECT strike FROM chain_snapshots WHERE symbol=? "
-            "AND ts BETWEEN ? AND ? ORDER BY ABS(strike-?) LIMIT 1",
-            (symbol.upper(), ts - 600, ts + 600, spot)).fetchone()
+        # 2026-08-17 — same in-session guard as snap() above.
+        cands = c.execute(
+            "SELECT strike, ts FROM chain_snapshots WHERE symbol=? "
+            "AND ts BETWEEN ? AND ? ORDER BY ABS(strike-?) LIMIT 40",
+            (symbol.upper(), ts - 600, ts + 600, spot)).fetchall()
     finally:
         c.close()
+    import agents
+    r = next((x for x in cands if agents.in_market_session(int(x[1]))), None)
     return r[0] if r else None
 
 
